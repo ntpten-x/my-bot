@@ -11,6 +11,8 @@
     "dev:web": "next dev -p 8001",
     "db:renormalize": "tsx scripts/renormalize-posts.ts",
     "db:backfill-embeddings": "tsx scripts/backfill-embeddings.ts",
+    "db:backfill-ai": "tsx scripts/backfill-ai.ts",
+    "db:clean-samples": "tsx scripts/clean-samples.ts",
     "dev:worker": "tsx src/worker/index.ts",
     "build": "prisma generate && next build",
     "start": "node scripts/start-all.mjs --prod",

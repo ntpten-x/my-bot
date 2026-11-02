@@ -4,7 +4,7 @@ import type { AiItem } from "../pipeline/classify-rules";
 import { embedText } from "./embed";
 import { preferenceScore } from "./preference";
 import { ruleSignals, scoreLead } from "./score";
-import { cosine, nearestDuplicate } from "./vector";
+import { cosine, findNearDuplicate } from "./vector";
 
 function readVector(value: string | null | undefined) {
   if (!value) return null;
@@ -36,21 +36,32 @@ export async function enrichPosts(postIds: string[], classified: AiItem[], setti
   const weights = await prisma.preferenceWeight.findMany();
   const centroids = await loadCentroids();
   const since = new Date(Date.now() - 7 * 24 * 3600 * 1000);
+  const sourceIds = [...new Set(posts.map((post) => post.sourceId))];
   const recent = await prisma.post.findMany({
-    where: { createdAt: { gte: since }, embeddingJson: { not: "" }, id: { notIn: postIds } },
-    select: { id: true, embeddingJson: true },
+    where: { createdAt: { gte: since }, id: { notIn: postIds }, sourceId: { in: sourceIds } },
+    select: { id: true, sourceId: true, normalizedText: true, embeddingJson: true, createdAt: true },
     orderBy: { createdAt: "desc" },
     take: 400,
   });
-  const neighbors = recent
-    .map((row) => ({ id: row.id, vector: readVector(row.embeddingJson) }))
-    .filter((row): row is { id: string; vector: number[] } => Array.isArray(row.vector));
+  const neighbors = recent.map((row) => ({
+    id: row.id,
+    sourceId: row.sourceId,
+    normalizedText: row.normalizedText,
+    vector: readVector(row.embeddingJson),
+    createdAt: row.createdAt.getTime(),
+  }));
 
   for (const post of posts) {
     const item = classified.find((row) => row.id === post.id);
     const embedded = await embedText(post.text, settings);
     const vector = embedded.vector;
-    const duplicate = vector ? nearestDuplicate(vector, neighbors) : null;
+    const duplicate = findNearDuplicate({
+      sourceId: post.sourceId,
+      normalizedText: post.normalizedText,
+      vector,
+      createdAt: post.createdAt.getTime(),
+      others: neighbors,
+    });
     const ageHours = Math.max(0, (Date.now() - post.createdAt.getTime()) / 3600000);
     let keywords: string[] = [];
     try {
@@ -89,7 +100,13 @@ export async function enrichPosts(postIds: string[], classified: AiItem[], setti
         duplicateOfId: duplicate?.id ?? null,
       },
     });
-    if (vector) neighbors.push({ id: post.id, vector });
+    neighbors.push({
+      id: post.id,
+      sourceId: post.sourceId,
+      normalizedText: post.normalizedText,
+      vector,
+      createdAt: post.createdAt.getTime(),
+    });
   }
 }
 

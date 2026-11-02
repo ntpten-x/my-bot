@@ -103,7 +103,7 @@ export default function SourcesPage() {
                 <p className="mt-2 text-sm text-muted">
                   {source.postCount} โพสต์ · ดึงล่าสุด {timeAgo(source.lastFetchedAt)} · ส่วนขยาย {timeAgo(source.lastExtensionAt)} · ทุก {source.intervalMinutes} นาที
                 </p>
-                {source.lastError ? <p className="mt-1 text-sm text-red-700">{source.lastError}</p> : null}
+                {source.lastError ? <p className="mt-1 text-sm text-red-700">สาเหตุที่ดึงไม่สำเร็จ: {source.lastError}</p> : null}
               </div>
               <div className="flex flex-wrap gap-2">
                 <Button
@@ -141,7 +141,9 @@ export default function SourcesPage() {
             {source.logs.length ? (
               <ul className="mt-3 space-y-1 text-xs text-muted">
                 {source.logs.map((log) => (
-                  <li key={log.id}>{timeAgo(log.createdAt)} · {log.status} · {log.message}</li>
+                  <li key={log.id} className={log.status === "error" ? "text-red-700" : undefined}>
+                    {timeAgo(log.createdAt)} · {log.status === "error" ? "ผิดพลาด" : log.status} · {log.message || "ไม่ทราบสาเหตุ"}
+                  </li>
                 ))}
               </ul>
             ) : null}

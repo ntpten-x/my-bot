@@ -105,6 +105,13 @@ if ($gemini) { Set-EnvKey ".env" "GEMINI_API_KEY" $gemini }
 $discord = Read-OptionalSecret "DISCORD_WEBHOOK_URL"
 if ($discord) { Set-EnvKey ".env" "DISCORD_WEBHOOK_URL" $discord }
 
+$env:OLLAMA_MAX_LOADED_MODELS = "2"
+$env:OLLAMA_KEEP_ALIVE = "30m"
+setx OLLAMA_MAX_LOADED_MODELS "2" | Out-Null
+setx OLLAMA_KEEP_ALIVE "30m" | Out-Null
+Write-Host "OLLAMA_MAX_LOADED_MODELS=2"
+Write-Host "OLLAMA_KEEP_ALIVE=30m"
+
 Write-Host "Database migrate and seed"
 npx prisma migrate deploy
 if ($LASTEXITCODE -ne 0) { throw "prisma migrate deploy failed. Close MY-BOT if the database file is locked." }
@@ -138,6 +145,8 @@ if (-not (Have-Command "ollama")) {
     Write-Host "Starting ollama serve"
     Start-Process -FilePath "ollama" -ArgumentList "serve" -WindowStyle Hidden
     Start-Sleep -Seconds 2
+  } else {
+    Write-Host "Ollama is already running. Quit it and start ollama serve again so OLLAMA_MAX_LOADED_MODELS=2 applies."
   }
   Write-Host "Chat model:"
   Write-Host "  1) qwen2.5:7b   default, about 5 GB, OK for RTX 3060 or 32 GB RAM"
@@ -166,10 +175,10 @@ if ($auto -eq "y" -or $auto -eq "Y") {
   $repoVbs = $Repo.Replace("\", "\\")
   $vbs = @"
 Set shell = CreateObject("Wscript.Shell")
-shell.Run "cmd /c set OLLAMA_HOST=127.0.0.1:$ollamaPort&& ollama serve", 0, False
+shell.Run "cmd /c set OLLAMA_HOST=127.0.0.1:$ollamaPort&& set OLLAMA_MAX_LOADED_MODELS=2&& set OLLAMA_KEEP_ALIVE=30m&& ollama serve", 0, False
 WScript.Sleep 1500
 shell.CurrentDirectory = "$repoVbs"
-shell.Run "cmd /c set OLLAMA_HOST=127.0.0.1:$ollamaPort&& set OLLAMA_BASE_URL=$baseUrl&& ""$node"" scripts\start-all.mjs --prod", 0, False
+shell.Run "cmd /c set OLLAMA_HOST=127.0.0.1:$ollamaPort&& set OLLAMA_MAX_LOADED_MODELS=2&& set OLLAMA_KEEP_ALIVE=30m&& set OLLAMA_BASE_URL=$baseUrl&& ""$node"" scripts\start-all.mjs --prod", 0, False
 "@
   Set-Content -LiteralPath (Join-Path $startup "MY-BOT.vbs") -Value $vbs -Encoding ASCII
   Write-Host "Wrote Startup\MY-BOT.vbs"

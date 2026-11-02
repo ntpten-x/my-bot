@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  serverExternalPackages: ["@prisma/client", "bcryptjs", "rss-parser", "cheerio", "nodemailer"],
+  serverExternalPackages: ["@prisma/client", "bcryptjs", "rss-parser", "cheerio", "nodemailer", "tesseract.js"],
   webpack: (config, { dev }) => {
     if (dev) {
       config.watchOptions = {

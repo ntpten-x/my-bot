@@ -40,6 +40,7 @@ yarn-error.log*
 /data/*.db
 /data/*.db-journal
 /data/backups/
+/data/mybot.log
 /prisma/*.db
 /prisma/*.db-journal
 
@@ -53,8 +54,6 @@ agent-tools/
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-
-# MY-BOT runtime data (added)
 /data/*.log
 /data/*.db-wal
 /data/*.db-shm

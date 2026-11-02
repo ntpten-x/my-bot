@@ -23,7 +23,7 @@ export async function GET() {
         void (async () => {
           try {
             const posts = await prisma.post.findMany({
-              where: { createdAt: { gt: last } },
+              where: { createdAt: { gt: last }, duplicateOfId: null, dismissed: false },
               orderBy: { createdAt: "asc" },
               take: 20,
               include: postInclude,

@@ -38,11 +38,17 @@ export function extractWebBoardPosts(html: string, pageUrl: string): IncomingPos
 }
 
 export async function fetchWebBoardPosts(url: string): Promise<IncomingPost[]> {
-  const response = await fetch(url, {
-    headers: { "user-agent": "MY-BOT/1.0 (+local lead radar)" },
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!response.ok) throw new Error(`เว็บตอบ ${response.status}`);
-  const html = await response.text();
-  return extractWebBoardPosts(html, url);
+  try {
+    const response = await fetch(url, {
+      headers: { "user-agent": "MY-BOT/1.0 (+local lead radar)" },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText} จาก ${url}`);
+    const html = await response.text();
+    return extractWebBoardPosts(html, url);
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("HTTP ")) throw error;
+    const reason = error instanceof Error ? error.message : "เชื่อมต่อไม่ได้";
+    throw new Error(`${reason} (${url})`);
+  }
 }

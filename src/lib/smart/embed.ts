@@ -1,5 +1,5 @@
 import type { AppSettings } from "../settings";
-import { resolveOllamaBaseUrl } from "../ai/ollama-url";
+import { OLLAMA_KEEP_ALIVE, resolveOllamaBaseUrl } from "../ai/ollama-url";
 import { upsertSettings } from "../settings";
 
 type EmbedSettings = Pick<AppSettings, "ollamaBaseUrl" | "geminiApiKey" | "embedModel" | "geminiEmbedModel">;
@@ -67,8 +67,8 @@ async function installedModels(base: string): Promise<string[]> {
 
 async function requestVector(base: string, model: string, text: string): Promise<number[] | null> {
   const attempts = [
-    { path: "/api/embed", body: { model, input: text } },
-    { path: "/api/embeddings", body: { model, prompt: text } },
+    { path: "/api/embed", body: { model, input: text, keep_alive: OLLAMA_KEEP_ALIVE } },
+    { path: "/api/embeddings", body: { model, prompt: text, keep_alive: OLLAMA_KEEP_ALIVE } },
   ];
   let last = "";
   for (const attempt of attempts) {

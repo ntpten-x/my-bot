@@ -1,6 +1,6 @@
 import { prisma } from "./prisma";
 import { getSettings } from "./settings";
-import { enqueueAiJobs, processAiQueue } from "./ai/queue";
+import { enqueueAiJobs } from "./ai/queue";
 import { aiCacheKey } from "./pipeline/classify";
 import { prepareLead } from "./pipeline/prepare";
 import { canonicalSourceUrl, normalizeUrl } from "./pipeline/normalize";
@@ -130,10 +130,7 @@ export async function ingestPosts(input: {
     },
   });
   if (input.actor === "extension") await touchExtension(source.id);
-  if (createdIds.length) {
-    await enrichPosts(createdIds, [], settings);
-    void processAiQueue();
-  }
+  if (createdIds.length) await enrichPosts(createdIds, [], settings);
   await prisma.fetchLog.create({
     data: {
       sourceId: source.id,

@@ -9,8 +9,19 @@ export type SummaryLead = {
   isAd: boolean;
 };
 
+export function clockMinutes(clock: string) {
+  const [hour, minute] = clock.split(":").map((part) => Number(part));
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return 0;
+  return hour * 60 + minute;
+}
+
+export function shouldCatchUp(nowTime: string, scheduled: string, lastDay: string | null, today: string) {
+  if (lastDay === today) return false;
+  return clockMinutes(nowTime) >= clockMinutes(scheduled);
+}
+
 export function shouldSendSummary(clockTime: string, configured: string, lastDay: string | null, today: string) {
-  return clockTime === configured && lastDay !== today;
+  return shouldCatchUp(clockTime, configured, lastDay, today);
 }
 
 export function bangkokClock(date = new Date()) {

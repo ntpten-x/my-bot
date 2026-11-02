@@ -1,4 +1,5 @@
 export const OLLAMA_PORT_CANDIDATES = ["http://127.0.0.1:11434", "http://127.0.0.1:41434"];
+export const OLLAMA_KEEP_ALIVE = "30m";
 
 export function ollamaBaseCandidates(configured?: string): string[] {
   const ordered: string[] = [];

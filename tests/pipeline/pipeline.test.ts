@@ -9,6 +9,7 @@ import type { AppSettings } from "../../src/lib/settings";
 import { dedupeBatch } from "../../src/lib/pipeline/dedupe";
 import { matchKeywords } from "../../src/lib/pipeline/keywords";
 import { classifyWithChain } from "../../src/lib/pipeline/classify";
+import { classifyByRules } from "../../src/lib/pipeline/classify-rules";
 import { scoreAd } from "../../src/lib/pipeline/ad-filter";
 import { extractProvince, PROVINCES } from "../../src/lib/pipeline/province";
 import { mapRssItems } from "../../src/lib/rss";
@@ -125,6 +126,16 @@ describe("intent", () => {
   it("treats a top-up offer as a seller", () => {
     expect(detectIntent("รับเติมเพชร ROV พร้อมส่ง")).toBe("seller");
     expect(detectIntent("ขายการ์ดจอมือสอง")).toBe("seller");
+    expect(detectIntent("พร้อมส่งไอโฟน")).toBe("seller");
+    expect(detectIntent("รับออกแบบโลโก้")).toBe("seller");
+    expect(detectIntent("รับทำเว็บไซต์ร้านค้า")).toBe("seller");
+  });
+
+  it("treats looking phrases as buyers", () => {
+    expect(detectIntent("หา iPad มือสอง")).toBe("buyer");
+    expect(detectIntent("อยากได้ข้าวมันไก่ส่งบ้าน")).toBe("buyer");
+    expect(detectIntent("พอรู้จักร้านซ่อมไอแพดมั้ย")).toBe("buyer");
+    expect(detectIntent("ตามหาแท็บเล็ตให้น้อง")).toBe("buyer");
   });
 });
 
@@ -174,6 +185,17 @@ describe("province and ads", () => {
   it("flags shop spam and leaves a normal buyer post alone", () => {
     expect(scoreAd("โปรโมชั่นสั่งซื้อเลย ลดราคา ส่งฟรีทั่วไทย").isAd).toBe(true);
     expect(scoreAd("ตามหาคนรับเติมเกม freefire ในเชียงใหม่ อยากได้").isAd).toBe(false);
+    expect(scoreAd("สั่งทาง Shopee https://shope.ee/abc").isAd).toBe(true);
+    expect(scoreAd("เมนู KFC ลดราคา").isAd).toBe(true);
+    expect(scoreAd("ลิงก์ GrabFood และ Lazada").isAd).toBe(true);
+  });
+
+  it("puts devices in IT and names food, services, and travel", () => {
+    expect(classifyByRules("ขาย iPad มือสอง", catalog).categorySlug).toBe("it");
+    expect(classifyByRules("อยากได้ไอโฟนเครื่องเล็ก", catalog).categorySlug).toBe("it");
+    expect(classifyByRules("อยากได้ข้าวมันไก่ส่งบ้าน", catalog).categorySlug).toBe("food");
+    expect(classifyByRules("หาช่างล้างแอร์ด่วน", catalog).categorySlug).toBe("services");
+    expect(classifyByRules("รับส่งสนามบินดอนเมือง", catalog).categorySlug).toBe("travel");
   });
 });
 

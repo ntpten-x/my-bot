@@ -7,6 +7,10 @@ const STRONG = [
   /ส่งฟรีทั่วไทย/,
   /ร้านค้าออนไลน์/,
   /เซลล์เพจ/,
+  /shopee|shope\.ee|lazada/i,
+  /affiliate/i,
+  /grab\.com|grabfood/i,
+  /\bkfc\b/i,
 ];
 
 const WEAK = [/โปรโมชั่น/, /ลดราคา/, /แอดไลน์/, /ทักไลน์/i, /ทักแชท/, /ทักอินบ็อก/, /inbox/i];

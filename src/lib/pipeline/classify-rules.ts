@@ -34,10 +34,15 @@ export type LooseAiItem = {
   specificity?: number;
 };
 
+const DEVICE = /ipad|iphone|ไอแพด|ไอโฟน|แท็บเล็ต|tablet|มือถือ|samsung|การ์ดจอ|โน้ตบุ๊ก|โน๊ตบุ๊ค/i;
+
 export function classifyByRules(text: string, catalog: CatNode[]): {
   categorySlug: string;
   subcategorySlug: string | null;
 } {
+  if (DEVICE.test(text) && catalog.some((node) => node.slug === "it" && !node.parentSlug)) {
+    return { categorySlug: "it", subcategorySlug: null };
+  }
   const normalized = normalizeText(text);
   let best: { slug: string; parentSlug: string | null; score: number } = {
     slug: "other",
@@ -95,10 +100,7 @@ export function sanitizeAiItem(item: LooseAiItem, post: ClassifyInput, catalog: 
     if (child) subcategorySlug = child.slug;
   }
   if (!subcategorySlug && fallback.categorySlug === categorySlug) subcategorySlug = fallback.subcategorySlug;
-  const intent: Intent =
-    item.intent === "buyer" || item.intent === "seller" || item.intent === "unknown"
-      ? item.intent
-      : fallback.intent;
+  const intent: Intent = item.intent === "buyer" || item.intent === "seller" ? item.intent : fallback.intent;
   const province = normalizeProvinceName(item.province) || fallback.province;
   const suggestedReply =
     typeof item.suggestedReply === "string" && item.suggestedReply.trim()

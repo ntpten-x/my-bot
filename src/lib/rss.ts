@@ -39,6 +39,11 @@ export function mapRssItems(
 }
 
 export async function fetchRssPosts(url: string): Promise<IncomingPost[]> {
-  const feed = await parser.parseURL(url);
-  return mapRssItems(feed.items ?? []);
+  try {
+    const feed = await parser.parseURL(url);
+    return mapRssItems(feed.items ?? []);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "อ่านฟีดไม่สำเร็จ";
+    throw new Error(`${reason} (${url})`);
+  }
 }

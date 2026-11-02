@@ -4,7 +4,7 @@ import type { AppSettings } from "../settings";
 import { probeProvider } from "./health";
 import { ProviderHttpError, backoffMs, takeToken } from "./bucket";
 import { effectiveGroqModel, pickGroqModel, rememberGroqChoice } from "./models";
-import { resolveOllamaBaseUrl } from "./ollama-url";
+import { OLLAMA_KEEP_ALIVE, resolveOllamaBaseUrl } from "./ollama-url";
 import { extractAiItems } from "./parse";
 import { AI_SYSTEM, userPrompt } from "./prompt";
 
@@ -60,6 +60,7 @@ export async function ollamaClassify(posts: ClassifyInput[], catalog: CatNode[],
       model: settings.ollamaModel,
       stream: false,
       format: "json",
+      keep_alive: OLLAMA_KEEP_ALIVE,
       messages: [
         { role: "system", content: AI_SYSTEM },
         { role: "user", content: userPrompt(posts, catalog) },

@@ -4,6 +4,7 @@ import { json } from "@/lib/http";
 import { ingestPosts } from "@/lib/ingest";
 import { fetchRssPosts } from "@/lib/rss";
 import { fetchWebBoardPosts } from "@/lib/web-board";
+import { fetchErrorReason } from "@/lib/fetch-error";
 
 export const dynamic = "force-dynamic";
 
@@ -30,7 +31,7 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
     const result = await ingestPosts({ sourceUrl: source.url, posts, actor: "worker" });
     return json({ queued: false, message: `ดึงแล้ว ใหม่ ${result.inserted} ซ้ำ ${result.duplicates}`, result });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "ดึงไม่สำเร็จ";
+    const message = fetchErrorReason(err, source.type === "rss" ? "RSS" : "เว็บบอร์ด");
     await prisma.source.update({ where: { id }, data: { lastError: message.slice(0, 500), lastFetchedAt: new Date() } });
     await prisma.fetchLog.create({
       data: { sourceId: id, status: "error", message: message.slice(0, 500), postsFound: 0 },

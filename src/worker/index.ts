@@ -6,9 +6,23 @@ import { fetchWebBoardPosts } from "../lib/web-board";
 import { ingestPosts } from "../lib/ingest";
 import { checkExtensionSilence } from "../lib/extension-status";
 import { maybeSendScheduledSummary } from "../lib/smart/daily";
-import { processAiQueue } from "../lib/ai/queue";
+import { enqueueUnclassifiedPosts, processAiQueue } from "../lib/ai/queue";
 import { maybeBackupDatabase } from "../lib/backup";
 import { backfillEmbeddings } from "../lib/smart/backfill";
+import { warmOllamaModels } from "../lib/ai/warm";
+import { fetchErrorReason } from "../lib/fetch-error";
+import { workerLog } from "../lib/log";
+
+process.env.MYBOT_PROCESS = "worker";
+
+process.on("uncaughtException", (error) => {
+  const message = error instanceof Error ? error.stack || error.message : String(error);
+  void workerLog({ level: "error", message: "uncaughtException", error: message.slice(0, 800) });
+});
+process.on("unhandledRejection", (error) => {
+  const message = error instanceof Error ? error.stack || error.message : String(error);
+  void workerLog({ level: "error", message: "unhandledRejection", error: message.slice(0, 800) });
+});
 
 let running = false;
 
@@ -30,14 +44,14 @@ async function tick() {
         const result = await ingestPosts({ sourceUrl: source.url, posts, actor: "worker" });
         console.log(`[worker] ${source.name}: ใหม่ ${result.inserted} ซ้ำ ${result.duplicates}`);
       } catch (error) {
-        const message = error instanceof Error ? error.message : "ดึงข้อมูลไม่สำเร็จ";
-        console.error(`[worker] ${source.name}: ${message}`);
+        const message = fetchErrorReason(error, source.type === "rss" ? "RSS" : "เว็บบอร์ด").slice(0, 500);
+        await workerLog({ level: "error", message: `${source.name} ดึงไม่สำเร็จ`, error: message });
         await prisma.source.update({
           where: { id: source.id },
-          data: { lastError: message.slice(0, 500), lastFetchedAt: new Date() },
+          data: { lastError: message, lastFetchedAt: new Date() },
         });
         await prisma.fetchLog.create({
-          data: { sourceId: source.id, status: "error", message: message.slice(0, 500), postsFound: 0 },
+          data: { sourceId: source.id, status: "error", message, postsFound: 0 },
         });
       }
     }
@@ -47,7 +61,8 @@ async function tick() {
     await processAiQueue();
     await backfillEmbeddings(5);
   } catch (error) {
-    console.error("[worker]", error instanceof Error ? error.message : error);
+    const message = error instanceof Error ? error.message : String(error);
+    await workerLog({ level: "error", message: "รอบ worker ล้มเหลว", error: message.slice(0, 500) });
   } finally {
     running = false;
   }
@@ -58,4 +73,13 @@ cron.schedule("* * * * *", () => {
 }, { timezone: "Asia/Bangkok" });
 
 console.log("[worker] MY-BOT worker เริ่มทำงาน — ตรวจ RSS และเว็บบอร์ดทุก 1 นาที");
-void tick();
+void (async () => {
+  const queued = await enqueueUnclassifiedPosts().catch((error) => {
+    const message = error instanceof Error ? error.message : "เข้าคิวไม่สำเร็จ";
+    return workerLog({ level: "error", message: "เข้าคิวโพสต์ที่ยังเป็นกฎไม่สำเร็จ", error: message }).then(() => 0);
+  });
+  await workerLog({ message: `เข้าคิวจัดหมวดโพสต์ที่ยังเป็นกฎ ${queued} รายการ` });
+  const settings = await getSettings();
+  await warmOllamaModels(settings);
+  await tick();
+})();

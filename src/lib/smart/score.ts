@@ -24,9 +24,10 @@ function clamp(value: number, min = 0, max = 1) {
 }
 
 export function ruleSignals(text: string): ScoreSignals {
-  const urgency = /ด่วน|วันนี้|ตอนนี้|รีบ|ภายในวันนี้/.test(text) ? 0.9 : /อยากได้|หาคน|รับซื้อ|ตามหา/.test(text) ? 0.55 : 0.2;
+  const urgency = /ด่วน|วันนี้|ตอนนี้|รีบ|ภายในวันนี้/.test(text) ? 0.95 : /อยากได้|หาคน|รับซื้อ|ตามหา|พอรู้จัก|มั้ย|มั๊ย/.test(text) ? 0.75 : 0.25;
   const hasBudget = /งบ|บาท|฿|\d{3,}/.test(text);
-  const specificity = Math.min(1, (text.trim().length > 40 ? 0.45 : 0.15) + (/\d/.test(text) ? 0.25 : 0) + (text.trim().split(/\s+/).length > 8 ? 0.2 : 0));
+  const product = /ipad|iphone|ไอแพด|ไอโฟน|มือถือ|แท็บเล็ต|tablet|การ์ดจอ|โน้ตบุ๊ก|โน๊ตบุ๊ค|มือสอง/i.test(text) ? 0.4 : 0;
+  const specificity = Math.min(1, (text.trim().length > 40 ? 0.35 : 0.1) + (/\d/.test(text) ? 0.2 : 0) + product);
   return { urgency, hasBudget, specificity };
 }
 
@@ -37,7 +38,7 @@ export function scoreLead(input: ScoreInput): { score: number; reason: string } 
   let score = 0;
   const bits: string[] = [];
   if (input.intent === "buyer") {
-    score += 28;
+    score += 46;
     bits.push("คนกำลังหา");
   } else if (input.intent === "seller") {
     score += 8;
@@ -59,7 +60,7 @@ export function scoreLead(input: ScoreInput): { score: number; reason: string } 
   score += keywordPoints;
   if (input.keywordHits > 0) bits.push("ตรงคำเฝ้าดู");
 
-  const recency = input.ageHours <= 6 ? 15 : input.ageHours <= 24 ? 10 : input.ageHours <= 72 ? 5 : 1;
+  const recency = input.ageHours <= 6 ? 18 : input.ageHours <= 24 ? 12 : input.ageHours <= 72 ? 6 : 1;
   score += recency;
   if (recency >= 10) bits.push("โพสต์ใหม่");
 

@@ -1,7 +1,12 @@
 import { createHash } from "crypto";
 import { prisma } from "./prisma";
 import type { AppSettings } from "./settings";
-import { resolveOllamaBaseUrl } from "./ai/ollama-url";
+import { OLLAMA_KEEP_ALIVE, resolveOllamaBaseUrl } from "./ai/ollama-url";
+import { workerLog } from "./log";
+
+export function ocrRunsInThisProcess() {
+  return process.env.MYBOT_PROCESS === "worker";
+}
 
 const MAX_BYTES = 2_000_000;
 const MAX_IMAGES = 3;
@@ -37,6 +42,7 @@ async function readWithVision(bytes: Buffer, settings: AppSettings): Promise<str
       body: JSON.stringify({
         model,
         stream: false,
+        keep_alive: OLLAMA_KEEP_ALIVE,
         messages: [
           {
             role: "user",
@@ -57,13 +63,20 @@ async function readWithVision(bytes: Buffer, settings: AppSettings): Promise<str
 }
 
 async function readWithTesseract(bytes: Buffer): Promise<string> {
-  const { createWorker } = await import("tesseract.js");
-  const worker = await createWorker("tha+eng");
+  if (!ocrRunsInThisProcess()) return "";
   try {
-    const result = await worker.recognize(bytes);
-    return String(result.data.text ?? "").replace(/\s+/g, " ").trim();
-  } finally {
-    await worker.terminate();
+    const { createWorker } = await import("tesseract.js");
+    const worker = await createWorker("tha+eng");
+    try {
+      const result = await worker.recognize(bytes);
+      return String(result.data.text ?? "").replace(/\s+/g, " ").trim();
+    } finally {
+      await worker.terminate();
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "tesseract ไม่พร้อม";
+    await workerLog({ level: "error", provider: "tesseract", message: "OCR ข้ามรูปนี้", error: message.slice(0, 500) });
+    return "";
   }
 }
 
@@ -87,7 +100,7 @@ export async function ocrImage(url: string, settings: AppSettings): Promise<stri
 }
 
 export async function ocrPostImages(imageUrls: string[], settings: AppSettings) {
-  if (!settings.ocrEnabled) return "";
+  if (!settings.ocrEnabled || !ocrRunsInThisProcess()) return "";
   const parts: string[] = [];
   for (const url of imageUrls.slice(0, MAX_IMAGES)) {
     const text = await ocrImage(url, settings).catch(() => "");

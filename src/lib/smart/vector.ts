@@ -1,4 +1,11 @@
-export const NEAR_DUPLICATE = 0.92;
+import { createHash } from "node:crypto";
+
+export const NEAR_DUPLICATE = 0.95;
+export const DUPLICATE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+export function normalizedTextHash(text: string) {
+  return createHash("sha256").update(text).digest("hex");
+}
 
 export function cosine(left: number[], right: number[]): number {
   const length = Math.min(left.length, right.length);
@@ -28,6 +35,35 @@ export function nearestDuplicate(vector: number[], others: { id: string; vector:
     }
   }
   if (bestId && best >= threshold) return { id: bestId, similarity: best };
+  return null;
+}
+
+export function findNearDuplicate(input: {
+  sourceId: string;
+  normalizedText: string;
+  vector: number[] | null;
+  createdAt: number;
+  others: { id: string; sourceId: string; normalizedText: string; vector: number[] | null; createdAt: number }[];
+  windowMs?: number;
+  threshold?: number;
+}) {
+  const windowMs = input.windowMs ?? DUPLICATE_WINDOW_MS;
+  const threshold = input.threshold ?? NEAR_DUPLICATE;
+  for (const other of input.others) {
+    if (other.id === undefined) continue;
+    if (other.sourceId !== input.sourceId) continue;
+    if (Math.abs(input.createdAt - other.createdAt) > windowMs) continue;
+    if (
+      input.normalizedText &&
+      other.normalizedText &&
+      normalizedTextHash(input.normalizedText) === normalizedTextHash(other.normalizedText)
+    ) {
+      return { id: other.id, reason: "text" as const };
+    }
+    if (input.vector && other.vector && cosine(input.vector, other.vector) > threshold) {
+      return { id: other.id, reason: "embedding" as const };
+    }
+  }
   return null;
 }
 

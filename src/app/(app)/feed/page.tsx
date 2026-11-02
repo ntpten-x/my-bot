@@ -128,7 +128,7 @@ export default function FeedPage() {
     stream.onmessage = (event) => {
       const data = JSON.parse(event.data) as { type: string; posts?: Lead[] };
       if (data.type !== "posts" || !data.posts?.length) return;
-      const interesting = data.posts.filter((post) => !post.isAd && !post.forbiddenHit);
+      const interesting = data.posts.filter((post) => !post.isAd && !post.forbiddenHit && !post.duplicateOfId);
       if (sound && interesting.length) beep();
       if (typeof Notification !== "undefined" && Notification.permission === "granted") {
         for (const post of interesting.slice(0, 2)) {

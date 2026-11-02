@@ -5,6 +5,7 @@ import { json } from "@/lib/http";
 import { postInclude, serializePost } from "@/lib/serialize";
 import { getSettings } from "@/lib/settings";
 import { semanticRank } from "@/lib/smart/enrich";
+import { rankHybrid, searchTokens } from "@/lib/smart/search";
 
 export const dynamic = "force-dynamic";
 
@@ -44,35 +45,50 @@ export async function GET(request: Request) {
   if (to) and.push({ createdAt: { lte: new Date(to) } });
   const q = params.get("q")?.trim() ?? "";
   const semantic = params.get("semantic") === "1" && Boolean(q);
-  if (q && !semantic) {
-    and.push({
-      OR: [
-        { text: { contains: q } },
-        { authorName: { contains: q } },
-        { province: { contains: q } },
-        { suggestedReply: { contains: q } },
-      ],
-    });
-  }
   if (and.length) where.AND = and;
 
-  if (semantic) {
-    const pool = await prisma.post.findMany({
-      where,
+  if (q) {
+    const tokens = searchTokens(q);
+    const needles = tokens.length ? tokens : [q];
+    const keywordWhere: Prisma.PostWhereInput = {
+      AND: [
+        ...(Array.isArray(where.AND) ? where.AND : []),
+        {
+          OR: needles.flatMap((token) => [
+            { text: { contains: token } },
+            { normalizedText: { contains: token.toLowerCase() } },
+            { authorName: { contains: token } },
+          ]),
+        },
+      ],
+    };
+    const keywordPosts = await prisma.post.findMany({
+      where: keywordWhere,
       include: postInclude,
       orderBy: { createdAt: "desc" },
-      take: 300,
+      take: 200,
     });
-    const ranked = await semanticRank(q, await getSettings(), pool);
-    if (!ranked.warning) {
-      const ordered = [...pool].sort((left, right) => (ranked.scores.get(right.id) ?? -1) - (ranked.scores.get(left.id) ?? -1));
-      const slice = ordered.slice((page - 1) * pageSize, page * pageSize);
-      return json({ posts: slice.map(serializePost), total: ordered.length, page, pageSize, semantic: true });
-    }
-    and.push({
-      OR: [{ text: { contains: q } }, { authorName: { contains: q } }, { province: { contains: q } }],
+    const semanticPosts = semantic
+      ? await prisma.post.findMany({
+          where: { AND: [...(Array.isArray(where.AND) ? where.AND : []), { embeddingJson: { not: "" } }] },
+          include: postInclude,
+          orderBy: { createdAt: "desc" },
+          take: 200,
+        })
+      : [];
+    const byId = new Map<string, (typeof keywordPosts)[number]>();
+    for (const post of [...keywordPosts, ...semanticPosts]) byId.set(post.id, post);
+    const pool = [...byId.values()];
+    const ranked = semantic ? await semanticRank(q, await getSettings(), pool) : { warning: "", scores: new Map<string, number>() };
+    const ordered = rankHybrid(q, pool, ranked.scores);
+    const slice = ordered.slice((page - 1) * pageSize, page * pageSize);
+    return json({
+      posts: slice.map(serializePost),
+      total: ordered.length,
+      page,
+      pageSize,
+      semantic: semantic && !ranked.warning,
     });
-    where.AND = and;
   }
   const sort = params.get("sort") === "score" ? [{ score: "desc" as const }, { createdAt: "desc" as const }] : [{ createdAt: "desc" as const }];
   const [total, posts] = await Promise.all([

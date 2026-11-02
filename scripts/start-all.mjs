@@ -28,10 +28,10 @@ const port = process.env.PORT || "8001";
 const node = process.execPath;
 const children = [];
 
-function run(args) {
+function run(args, extraEnv = {}) {
   const child = spawn(node, args, {
     stdio: "inherit",
-    env: process.env,
+    env: { ...process.env, ...extraEnv },
     shell: false,
     windowsHide: true,
   });
@@ -46,7 +46,7 @@ function run(args) {
 
 if (prod) run(["node_modules/next/dist/bin/next", "start", "-p", port]);
 else run(["node_modules/next/dist/bin/next", "dev", "-p", port]);
-run(["node_modules/tsx/dist/cli.mjs", "src/worker/index.ts"]);
+run(["node_modules/tsx/dist/cli.mjs", "src/worker/index.ts"], { MYBOT_PROCESS: "worker" });
 
 function shutdown() {
   for (const child of children) child.kill();

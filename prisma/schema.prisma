@@ -109,6 +109,7 @@ model AiJob {
   attempts      Int      @default(0)
   nextAttemptAt DateTime @default(now())
   lastError     String   @default("")
+  latencyMs     Int?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
