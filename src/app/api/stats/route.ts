@@ -4,6 +4,7 @@ import { json } from "@/lib/http";
 import { bangkokStart } from "@/lib/format";
 import { postInclude, serializePost } from "@/lib/serialize";
 import { heartbeatIsStale, sourceIsStale } from "@/lib/extension-health";
+import { aiQueueStats } from "@/lib/ai/stats";
 
 export const dynamic = "force-dynamic";
 
@@ -40,9 +41,10 @@ export async function GET() {
       count: row._count._all,
     }))
     .sort((a, b) => b.count - a.count);
-  const [seen, facebookSources] = await Promise.all([
+  const [seen, facebookSources, aiQueue] = await Promise.all([
     prisma.setting.findUnique({ where: { key: "extension_last_seen" } }),
     prisma.source.findMany({ where: { type: "facebook_group" }, orderBy: { name: "asc" } }),
+    aiQueueStats(),
   ]);
   const lastSeen = seen?.value ? new Date(seen.value) : null;
   const validSeen = lastSeen && !Number.isNaN(lastSeen.getTime()) ? lastSeen : null;
@@ -52,6 +54,7 @@ export async function GET() {
     aged && (heartbeatIsStale(validSeen) || enabledFacebook.some((source) => sourceIsStale(source)));
   return json({
     postsToday,
+    aiQueue,
     unread,
     buyers,
     pipeline,

@@ -1,0 +1,26 @@
+{
+  "description": "ตัวอย่างแต่งขึ้นเพื่อเริ่มทดสอบ เจ้าของยังไม่ได้ตรวจป้ายคำตอบ ไม่ใช่ตัวแทนความแม่นยำบนกลุ่มจริง",
+  "ownerReviewed": false,
+  "items": [
+    { "id": "buyer-device", "text": "ตามหา iPad มือสอง งบ 5000 บาท นัดรับขอนแก่น", "intent": "buyer" },
+    { "id": "buyer-service", "text": "หาช่างล้างแอร์ด่วน แถวเชียงใหม่", "intent": "buyer" },
+    { "id": "buyer-topup", "text": "ตามหาคนรับเติมเกม freefire ในเชียงใหม่", "intent": "buyer" },
+    { "id": "buyer-food", "text": "อยากได้ข้าวมันไก่ส่งบ้าน", "intent": "buyer" },
+    { "id": "buyer-web", "text": "รบกวนแนะนำร้านรับทำเว็บ", "intent": "buyer" },
+    { "id": "buyer-repair", "text": "พอรู้จักร้านซ่อมไอแพดมั้ย", "intent": "buyer" },
+    { "id": "buyer-card", "text": "รับซื้อการ์ดจอมือสอง", "intent": "buyer" },
+    { "id": "buyer-tablet", "text": "ตามหาแท็บเล็ตให้น้อง", "intent": "buyer" },
+    { "id": "seller-phone", "text": "พร้อมส่งไอโฟน", "intent": "seller" },
+    { "id": "seller-card", "text": "ขายการ์ดจอมือสอง", "intent": "seller" },
+    { "id": "seller-logo", "text": "รับออกแบบโลโก้สำหรับร้านค้า", "intent": "seller" },
+    { "id": "seller-web", "text": "รับทำเว็บไซต์ร้านค้า", "intent": "seller" },
+    { "id": "seller-topup", "text": "รับเติมเพชร ROV พร้อมส่ง", "intent": "seller" },
+    { "id": "seller-food", "text": "ยำลูกชิ้นกุ้ง ส่งด่วน พร้อมส่ง", "intent": "seller" },
+    { "id": "ad-discount", "text": "โปรโมชั่นสั่งซื้อเลย ลดราคา ส่งฟรีทั่วไทย", "intent": "ad" },
+    { "id": "ad-market", "text": "สั่งทาง Shopee https://shope.ee/example", "intent": "ad" },
+    { "id": "ad-chain", "text": "เมนู KFC ลดราคา", "intent": "ad" },
+    { "id": "ad-affiliate", "text": "ลิงก์ GrabFood และ Lazada ชวนซื้อ", "intent": "ad" },
+    { "id": "unknown-greeting", "text": "สวัสดีทุกคน วันนี้อากาศดี", "intent": "unknown" },
+    { "id": "unknown-thanks", "text": "ขอบคุณสำหรับคำแนะนำครับ", "intent": "unknown" }
+  ]
+}

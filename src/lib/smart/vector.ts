@@ -9,7 +9,8 @@ export function normalizedTextHash(text: string) {
 }
 
 export function cosine(left: number[], right: number[]): number {
-  const length = Math.min(left.length, right.length);
+  if (left.length !== right.length) return 0;
+  const length = left.length;
   if (!length) return 0;
   let dot = 0;
   let leftNorm = 0;

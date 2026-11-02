@@ -14,6 +14,7 @@ import { repairStoredOverrides } from "../lib/pipeline/repair";
 import { warmOllamaModels } from "../lib/ai/warm";
 import { fetchErrorReason } from "../lib/fetch-error";
 import { workerLog } from "../lib/log";
+import { processNotificationQueue } from "../lib/notification-queue";
 
 process.env.MYBOT_PROCESS = "worker";
 
@@ -27,6 +28,24 @@ process.on("unhandledRejection", (error) => {
 });
 
 let running = false;
+let consumerRunning = false;
+
+// One consumer shares the local model; fetch/backup never hold up its next batch.
+async function consume() {
+  if (consumerRunning) return;
+  consumerRunning = true;
+  try {
+    for (;;) {
+      const processed = await processAiQueue();
+      const embedded = await backfillEmbeddings(5);
+      const notified = await processNotificationQueue();
+      if (!processed && !embedded.tried && !notified) break;
+      if (!processed && !embedded.filled) break;
+    }
+  } catch (error) {
+    await workerLog({ level: "error", message: "consumer ล้มเหลว จะตรวจใหม่ในรอบถัดไป", error: error instanceof Error ? error.message : String(error) });
+  } finally { consumerRunning = false; }
+}
 
 async function tick() {
   if (running) return;
@@ -60,8 +79,7 @@ async function tick() {
     await checkExtensionSilence();
     await maybeSendScheduledSummary();
     await maybeBackupDatabase();
-    await processAiQueue();
-    await backfillEmbeddings(5);
+    await collapseTruncatedCaptures();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await workerLog({ level: "error", message: "รอบ worker ล้มเหลว", error: message.slice(0, 500) });
@@ -69,10 +87,6 @@ async function tick() {
     running = false;
   }
 }
-
-cron.schedule("* * * * *", () => {
-  void tick();
-}, { timezone: "Asia/Bangkok" });
 
 console.log("[worker] MY-BOT worker เริ่มทำงาน — ตรวจ RSS และเว็บบอร์ดทุก 1 นาที");
 void (async () => {
@@ -88,5 +102,8 @@ void (async () => {
   });
   const settings = await getSettings();
   await warmOllamaModels(settings);
-  await tick();
+  cron.schedule("* * * * *", () => { void tick(); }, { timezone: "Asia/Bangkok" });
+  setInterval(() => { void consume(); }, 2000);
+  void tick();
+  void consume();
 })();

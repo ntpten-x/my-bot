@@ -93,6 +93,7 @@ export default function FeedPage() {
   const [meta, setMeta] = useState<Meta | null>(null);
   const [posts, setPosts] = useState<Lead[]>([]);
   const [total, setTotal] = useState(0);
+  const [searchScope, setSearchScope] = useState("");
   const [page, setPage] = useState(1);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -102,9 +103,10 @@ export default function FeedPage() {
     setLoading(true);
     setError("");
     try {
-      const data = await api<{ posts: Lead[]; total: number }>(`/api/posts?${queryFrom(nextFilters, nextPage)}`);
+      const data = await api<{ posts: Lead[]; total: number; searchScope?: string }>(`/api/posts?${queryFrom(nextFilters, nextPage)}`);
       setPosts(data.posts);
       setTotal(data.total);
+      setSearchScope(data.searchScope ?? "");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "โหลดฟีดไม่สำเร็จ");
     } finally {
@@ -158,6 +160,7 @@ export default function FeedPage() {
         <div>
           <h1 className="text-2xl font-semibold">ฟีดลีด</h1>
           <p className="mt-1 text-sm text-muted">พบ {total} รายการตามตัวกรองนี้</p>
+          {searchScope ? <p className="mt-1 max-w-2xl text-sm text-muted" role="status">{searchScope}</p> : null}
         </div>
         <Button
           variant="outline"

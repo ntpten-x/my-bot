@@ -229,12 +229,12 @@ export default function SettingsPage() {
               setMessage("");
               setError("");
               try {
-                const data = await api<{ filled: number; remaining: number }>("/api/settings/backfill-embeddings", { method: "POST" });
-                setMessage(`เติม embedding แล้ว ${data.filled} เหลือ ${data.remaining}`);
+                const data = await api<{ queued: number }>("/api/settings/backfill-embeddings", { method: "POST" });
+                setMessage(`ส่งให้ worker สร้างเวกเตอร์ใหม่ ${data.queued} โพสต์แล้ว`);
               } catch (err) {
                 setError(err instanceof ApiError ? err.message : "เติม embedding ไม่สำเร็จ");
               }
-            }}>เติมโพสต์ที่ยังไม่มีเวกเตอร์</Button>
+            }}>สร้างเวกเตอร์ใหม่ในเบื้องหลัง</Button>
           </div>
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={settings.ocrEnabled} onChange={(event) => setSettings({ ...settings, ocrEnabled: event.target.checked })} />

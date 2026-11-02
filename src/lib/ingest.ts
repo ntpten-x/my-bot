@@ -5,9 +5,11 @@ import { aiCacheKey } from "./pipeline/classify";
 import { prepareLead } from "./pipeline/prepare";
 import { canonicalSourceUrl, normalizeUrl } from "./pipeline/normalize";
 import { touchExtension } from "./extension-status";
-import { collapseIdenticalTexts, collapseTruncatedCaptures, enrichPosts } from "./smart/enrich";
+import { collapseIdenticalTexts, enrichPosts } from "./smart/enrich";
 import { dispatchNotification, shouldNotify, shouldNotifyExternal } from "./notify";
 import { findSourceByUrl, loadCatalogFromDb, resolveCategoryIds } from "./sources";
+import { recordTiming } from "./metrics";
+import { queueExternalNotification } from "./notification-queue";
 
 export type IncomingPost = {
   url: string;
@@ -38,6 +40,8 @@ export async function ingestPosts(input: {
   posts: IncomingPost[];
   actor: "extension" | "worker";
 }) {
+  const started = performance.now();
+  try {
   const source = await findSourceByUrl(input.sourceUrl);
   if (!source) return { ok: false as const, error: "ไม่พบแหล่งข้อมูลนี้ในระบบ", inserted: 0, duplicates: 0 };
   if (!source.enabled) {
@@ -121,7 +125,6 @@ export async function ingestPosts(input: {
   const aiProvider = "rules";
   if (createdIds.length) {
     await collapseIdenticalTexts(fresh.map((item) => item.lead.normalizedText));
-    await collapseTruncatedCaptures(source.id);
   }
   const uniqueIds = createdIds.length
     ? (
@@ -143,7 +146,7 @@ export async function ingestPosts(input: {
     },
   });
   if (input.actor === "extension") await touchExtension(source.id);
-  if (uniqueIds.length) await enrichPosts(uniqueIds, [], settings);
+  if (uniqueIds.length) await enrichPosts(uniqueIds, [], settings, { embed: false });
   await prisma.fetchLog.create({
     data: {
       sourceId: source.id,
@@ -160,7 +163,9 @@ export async function ingestPosts(input: {
     });
     for (const post of ready) {
       if (!shouldNotify(post) || post.score < settings.notifyMinScore) continue;
-      await dispatchNotification(post, settings, post.score >= 80 ? "ลีดร้อน" : "ลีดใหม่", { external: shouldNotifyExternal(post) });
+      const title = post.score >= 80 ? "ลีดร้อน" : "ลีดใหม่";
+      await dispatchNotification(post, settings, title);
+      if (shouldNotifyExternal(post)) await queueExternalNotification(post.id, title);
     }
   }
 
@@ -170,6 +175,7 @@ export async function ingestPosts(input: {
     duplicates,
     source: canonicalSourceUrl(source.url),
   };
+  } finally { recordTiming("ingest", performance.now() - started); }
 }
 
 export { aiCacheKey };

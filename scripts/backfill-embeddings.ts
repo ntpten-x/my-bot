@@ -2,6 +2,7 @@ import { backfillEmbeddings } from "../src/lib/smart/backfill";
 import { prisma } from "../src/lib/prisma";
 
 async function main() {
+  process.env.MYBOT_PROCESS = "worker";
   let remaining = 1;
   let total = 0;
   while (remaining > 0) {

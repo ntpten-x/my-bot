@@ -5,211 +5,152 @@ import { classifyLeads } from "./run";
 import { ProviderHttpError, backoffMs } from "./bucket";
 import { ocrPostImages } from "../ocr";
 import { enrichPosts } from "../smart/enrich";
-import { dispatchNotification, shouldNotifyExternal } from "../notify";
+import { shouldNotifyExternal } from "../notify";
+import { queueExternalNotification } from "../notification-queue";
 import { workerLog } from "../log";
 
 export const STUCK_JOB_MS = 2 * 60 * 1000;
-
+export const MAX_AI_ATTEMPTS = 10;
 let running = false;
 
-export async function enqueueAiJobs(postIds: string[]) {
-  if (!postIds.length) return;
+// Startup preserves backoff and paused jobs. Only an explicit retry resets them.
+export async function enqueueAiJobs(postIds: string[], reset = false) {
   for (const postId of postIds) {
+    if (reset) await prisma.aiJob.updateMany({
+      where: { postId, status: { not: "running" } },
+      data: { status: "pending", attempts: 0, nextAttemptAt: new Date(), lastError: "", latencyMs: null, queueWaitMs: null, createdAt: new Date() },
+    });
     await prisma.aiJob.upsert({
       where: { postId },
-      update: { status: "pending", nextAttemptAt: new Date(), lastError: "" },
-      create: { postId, status: "pending", nextAttemptAt: new Date() },
+      update: {},
+      create: { postId, status: "pending" },
     });
   }
 }
 
-export async function enqueueUnclassifiedPosts() {
-  const posts = await prisma.post.findMany({
-    where: { OR: [{ aiProvider: null }, { aiProvider: "rules" }] },
-    select: { id: true },
-  });
-  const ids = posts.map((post) => post.id);
-  for (let index = 0; index < ids.length; index += 50) {
-    await enqueueAiJobs(ids.slice(index, index + 50));
+export async function enqueueUnclassifiedPosts(reset = false) {
+  let cursor: string | undefined;
+  let count = 0;
+  for (;;) {
+    const posts = await prisma.post.findMany({
+      where: { duplicateOfId: null, aiJobs: { none: { status: "running" } }, OR: [{ aiProvider: null }, { aiProvider: "rules" }] },
+      select: { id: true }, orderBy: { id: "asc" }, take: 100,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    });
+    if (!posts.length) break;
+    await enqueueAiJobs(posts.map(post => post.id), reset);
+    count += posts.length;
+    cursor = posts[posts.length - 1].id;
   }
-  return ids.length;
-}
-
-async function releaseJobs(ids: string[], error: unknown, attempts: number) {
-  if (!ids.length) return;
-  const retryAfter = error instanceof ProviderHttpError ? error.retryAfterMs : 0;
-  const delay = retryAfter || backoffMs(attempts + 1);
-  const message = error instanceof Error ? error.message : "จัดหมวดไม่สำเร็จ";
-  await prisma.aiJob.updateMany({
-    where: { id: { in: ids }, status: "running" },
-    data: {
-      status: "pending",
-      attempts: { increment: 1 },
-      nextAttemptAt: new Date(Date.now() + delay),
-      lastError: message.slice(0, 500),
-    },
-  });
-  await workerLog({
-    level: "error",
-    jobId: ids[0],
-    provider: "rules",
-    message: "คิวจัดหมวดคืนเป็น pending",
-    error: message.slice(0, 500),
-  });
+  return count;
 }
 
 export async function processAiQueue() {
-  if (process.env.MYBOT_PROCESS !== "worker") return;
-  if (running) return;
+  if (process.env.MYBOT_PROCESS !== "worker" || running) return 0;
   running = true;
-  const claimed: string[] = [];
+  let claimed: { id: string; postId: string; attempts: number }[] = [];
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  const retry = async (job: typeof claimed[number], message: string, delay = 0, latencyMs?: number) => {
+    const attempts = job.attempts + 1;
+    const status = attempts >= MAX_AI_ATTEMPTS ? "failed" : "pending";
+    await prisma.aiJob.updateMany({
+      where: { id: job.id, status: "running" },
+      data: { status, attempts, nextAttemptAt: new Date(Date.now() + Math.max(delay, backoffMs(job.attempts))), lastError: message.slice(0, 500), latencyMs },
+    });
+    await workerLog({ level: "error", jobId: job.id, postId: job.postId, message: status === "failed" ? "พักงาน AI หลังผิดซ้ำ กดลองใหม่ได้ที่แดชบอร์ด" : "คืนงาน AI เพื่อรอลองใหม่", error: message.slice(0, 500), latencyMs });
+  };
   try {
+    const settings = await getSettings();
     await prisma.aiJob.updateMany({
       where: { status: "running", updatedAt: { lt: new Date(Date.now() - STUCK_JOB_MS) } },
-      data: { status: "pending", lastError: "ค้างเกิน 2 นาที จึงคืนเข้าคิว" },
+      data: { status: "pending", nextAttemptAt: new Date(), lastError: "worker หยุดตอบเกิน 2 นาที จึงคืนเข้าคิว" },
     });
-    const jobs = await prisma.aiJob.findMany({
-      where: { status: "pending", nextAttemptAt: { lte: new Date() } },
-      orderBy: { nextAttemptAt: "asc" },
-      take: 10,
-      include: { post: true },
+    if (settings.aiProvider !== "rules") {
+      await prisma.aiJob.updateMany({ where: { status: "skipped" }, data: { status: "pending", nextAttemptAt: new Date() } });
+    }
+    const jobs = await prisma.$transaction(async tx => {
+      const rows = await tx.aiJob.findMany({
+        where: { status: "pending", nextAttemptAt: { lte: new Date() } },
+        orderBy: [{ nextAttemptAt: "asc" }, { id: "asc" }], take: 10, include: { post: true },
+      });
+      if (rows.length) await tx.aiJob.updateMany({ where: { id: { in: rows.map(row => row.id) }, status: "pending" }, data: { status: "running" } });
+      return rows;
     });
-    if (!jobs.length) return;
-    claimed.push(...jobs.map((job) => job.id));
-    await prisma.aiJob.updateMany({
-      where: { id: { in: claimed } },
-      data: { status: "running" },
-    });
-    const started = new Map(jobs.map((job) => [job.id, Date.now()]));
-    const settings = await getSettings();
+    if (!jobs.length) return 0;
+    claimed = jobs;
+    const started = Date.now();
+    for (const job of jobs) {
+      await prisma.aiJob.update({ where: { id: job.id }, data: { queueWaitMs: Math.min(2_147_483_647, Math.max(0, started - job.createdAt.getTime())) } });
+    }
+    heartbeat = setInterval(() => {
+      void prisma.aiJob.updateMany({ where: { id: { in: claimed.map(job => job.id) }, status: "running" }, data: { updatedAt: new Date() } }).catch(() => undefined);
+    }, 30_000);
+    heartbeat.unref();
+    if (settings.aiProvider === "rules") {
+      await prisma.aiJob.updateMany({ where: { id: { in: jobs.map(job => job.id) } }, data: { status: "skipped", lastError: "เจ้าของเลือกใช้กฎ ไม่เรียก AI" } });
+      claimed = [];
+      return jobs.length;
+    }
     const { rows, catalog } = await loadCatalogFromDb();
     const inputs = [];
     for (const job of jobs) {
-      let text = job.post.text;
       let ocrText = job.post.ocrText;
       if (settings.ocrEnabled && !ocrText) {
-        let images: string[] = [];
         try {
-          const parsed = JSON.parse(job.post.imagesJson);
-          if (Array.isArray(parsed)) images = parsed.map(String);
-        } catch {
-          images = [];
-        }
-        try {
-          ocrText = await ocrPostImages(images, settings);
+          const parsed: unknown = JSON.parse(job.post.imagesJson);
+          ocrText = await ocrPostImages(Array.isArray(parsed) ? parsed.map(String) : [], settings);
           if (ocrText) await prisma.post.update({ where: { id: job.postId }, data: { ocrText } });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : "อ่านข้อความในรูปไม่สำเร็จ";
-          await workerLog({
-            level: "error",
-            jobId: job.id,
-            postId: job.postId,
-            message: "OCR ล้มเหลว จะจัดหมวดต่อโดยไม่มีข้อความจากรูป",
-            error: message.slice(0, 500),
-          });
-          ocrText = "";
+        } catch {
+          await workerLog({ level: "error", jobId: job.id, postId: job.postId, message: "OCR ล้มเหลว จะจัดหมวดต่อโดยไม่มีข้อความจากรูป" });
         }
       }
-      if (ocrText) text = `${text}\n${ocrText}`;
-      inputs.push({
-        id: job.postId,
-        text,
-        contentHash: ocrText ? `${job.post.contentHash}:ocr` : job.post.contentHash,
-      });
+      inputs.push({ id: job.postId, text: ocrText ? `${job.post.text}\n${ocrText}` : job.post.text, contentHash: ocrText ? `${job.post.contentHash}:ocr` : job.post.contentHash });
     }
     const outcome = await classifyLeads(inputs, catalog, settings, {
       async get(key) {
         const row = await prisma.aiCache.findUnique({ where: { cacheKey: key } });
         if (!row || row.provider === "rules") return null;
-        return { provider: row.provider, item: JSON.parse(row.result) };
+        try { return { provider: row.provider, item: JSON.parse(row.result) }; } catch { return null; }
       },
       async set(key, hit) {
-        await prisma.aiCache.upsert({
-          where: { cacheKey: key },
-          update: { provider: hit.provider, result: JSON.stringify(hit.item) },
-          create: { cacheKey: key, provider: hit.provider, result: JSON.stringify(hit.item) },
-        });
+        await prisma.aiCache.upsert({ where: { cacheKey: key }, update: { provider: hit.provider, result: JSON.stringify(hit.item) }, create: { cacheKey: key, provider: hit.provider, result: JSON.stringify(hit.item) } });
       },
     });
-    const latencyOf = (id: string) => Date.now() - (started.get(id) ?? Date.now());
-    if (outcome.provider !== "rules") {
-      for (const item of outcome.results) {
-        const ids = resolveCategoryIds(rows, item.categorySlug, item.subcategorySlug);
-        await prisma.post.update({
-          where: { id: item.id },
-          data: {
-            categoryId: ids.categoryId,
-            subcategoryId: ids.subcategoryId,
-            intent: item.intent,
-            province: item.province,
-            isAd: item.isAd,
-            suggestedReply: item.suggestedReply,
-            aiProvider: outcome.provider,
-          },
-        });
-      }
-      await enrichPosts(jobs.map((job) => job.postId), outcome.results, settings);
-      for (const job of jobs) {
-        const latencyMs = latencyOf(job.id);
-        await prisma.aiJob.update({
-          where: { id: job.id },
-          data: { status: "done", lastError: "", latencyMs },
-        });
-        await workerLog({
-          jobId: job.id,
-          postId: job.postId,
-          provider: outcome.provider,
-          latencyMs,
-          message: "จัดหมวดแล้ว",
-        });
-      }
-      claimed.length = 0;
-      const ready = await prisma.post.findMany({
-        where: { id: { in: jobs.map((job) => job.postId) } },
-        include: { category: true, subcategory: true, source: true },
-      });
-      for (const post of ready) {
-        if (post.score < 80) continue;
-        const already = await prisma.notification.count({ where: { postId: post.id, channel: "discord" } });
-        if (already || !shouldNotifyExternal(post)) continue;
-        await dispatchNotification(post, settings, "ลีดร้อน", { external: true });
-      }
-    } else {
-      const retry = outcome.errors[0]?.message ?? "ยังไม่มี AI";
-      const delay = backoffMs(jobs[0]?.attempts ?? 0);
-      for (const job of jobs) {
-        const latencyMs = latencyOf(job.id);
-        await prisma.aiJob.update({
-          where: { id: job.id },
-          data: {
-            status: "pending",
-            attempts: { increment: 1 },
-            nextAttemptAt: new Date(Date.now() + delay),
-            lastError: retry.slice(0, 500),
-            latencyMs,
-          },
-        });
-        await workerLog({
-          level: "error",
-          jobId: job.id,
-          postId: job.postId,
-          provider: "rules",
-          latencyMs,
-          message: "ยังจัดด้วยกฎ จะลอง AI ใหม่",
-          error: retry.slice(0, 500),
-        });
-      }
-      claimed.length = 0;
+    const successful = outcome.results.filter(item => outcome.providersById[item.id] && outcome.providersById[item.id] !== "rules");
+    for (const item of successful) {
+      const ids = resolveCategoryIds(rows, item.categorySlug, item.subcategorySlug);
+      await prisma.post.update({ where: { id: item.id }, data: { categoryId: ids.categoryId, subcategoryId: ids.subcategoryId, intent: item.intent, province: item.province, isAd: item.isAd, suggestedReply: item.suggestedReply, aiProvider: outcome.providersById[item.id] } });
     }
+    // Scoring must not block completion on an embedding provider.
+    await enrichPosts(successful.map(item => item.id), successful, settings, { embed: false });
+    const successIds = new Set(successful.map(item => item.id));
+    const retryErrors = outcome.errors.filter(error => !error.message.startsWith("ข้าม "));
+    const errorText = retryErrors.map(error => `${error.name}: ${error.message}`).join("; ") || "AI ตอบไม่ครบ ยังไม่ได้ผลของโพสต์นี้";
+    const delay = Math.max(0, ...retryErrors.map(error => "retryAfterMs" in error ? Number(error.retryAfterMs) || 0 : 0));
+    for (const job of jobs) {
+      const latencyMs = Date.now() - started;
+      if (successIds.has(job.postId)) {
+        await prisma.aiJob.update({ where: { id: job.id }, data: { status: "done", lastError: "", latencyMs } });
+        await workerLog({ jobId: job.id, postId: job.postId, provider: outcome.providersById[job.postId], latencyMs, message: "จัดหมวดแล้ว" });
+      } else await retry(job, errorText, delay, latencyMs);
+    }
+    claimed = [];
+    const ready = await prisma.post.findMany({ where: { id: { in: [...successIds] }, duplicateOfId: null }, include: { category: true, subcategory: true, source: true } });
+    for (const post of ready) {
+      if (post.score < 80 || !shouldNotifyExternal(post)) continue;
+      const already = await prisma.notification.count({ where: { postId: post.id, channel: { in: ["discord", "line", "email"] } } });
+      if (!already) await queueExternalNotification(post.id, "ลีดร้อน");
+    }
+    return jobs.length;
   } catch (error) {
-    try {
-      await releaseJobs(claimed, error, 1);
-    } catch (releaseError) {
-      const message = releaseError instanceof Error ? releaseError.message : "คืนคิวไม่สำเร็จ";
-      await workerLog({ level: "error", message, error: message });
+    const message = error instanceof Error ? error.message : "จัดหมวดไม่สำเร็จ";
+    for (const job of claimed) {
+      await retry(job, message, error instanceof ProviderHttpError ? error.retryAfterMs : 0).catch(() => undefined);
     }
-    claimed.length = 0;
+    await workerLog({ level: "error", message: "รอบคิว AI ล้มเหลว", error: message.slice(0, 500) });
+    return 0;
   } finally {
+    if (heartbeat) clearInterval(heartbeat);
     running = false;
   }
 }

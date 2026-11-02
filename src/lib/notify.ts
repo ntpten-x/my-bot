@@ -93,6 +93,9 @@ async function pushEmail(settings: AppSettings, subject: string, text: string): 
       port: settings.smtpPort,
       secure: settings.smtpPort === 465,
       auth: settings.smtpUser ? { user: settings.smtpUser, pass: settings.smtpPass } : undefined,
+      connectionTimeout: 12_000,
+      greetingTimeout: 12_000,
+      socketTimeout: 12_000,
     });
     await transport.sendMail({
       from: settings.smtpUser || settings.notifyEmailTo,
@@ -110,19 +113,21 @@ export async function dispatchNotification(
   post: LeadNotice,
   settings: AppSettings,
   title = "ลีดใหม่",
-  options: { external?: boolean; forceExternal?: boolean; discordMode?: "auto" | "embed" | "text" } = {},
+  options: { external?: boolean; forceExternal?: boolean; discordMode?: "auto" | "embed" | "text"; skipInApp?: boolean; skipChannels?: string[] } = {},
 ) {
   const body = messageFor(post);
-  await prisma.notification.create({
+  if (!options.skipInApp) await prisma.notification.create({
     data: { postId: post.id, channel: "in_app", title, body },
   });
   const channels: Record<string, ChannelResult> = {};
   if (!options.external && !options.forceExternal) return { channels };
-  const jobs: Array<["line" | "discord" | "email", Promise<ChannelResult>]> = [
-    ["line", pushLine(settings, body)],
-    ["discord", pushDiscord(settings, body, post, title, options.discordMode ?? "auto")],
-    ["email", pushEmail(settings, `MY-BOT: ${title}`, body)],
+  const senders: Array<["line" | "discord" | "email", () => Promise<ChannelResult>]> = [
+    ["line", () => pushLine(settings, body)],
+    ["discord", () => pushDiscord(settings, body, post, title, options.discordMode ?? "auto")],
+    ["email", () => pushEmail(settings, `MY-BOT: ${title}`, body)],
   ];
+  const jobs = senders.filter(([name]) => !options.skipChannels?.includes(name))
+    .map(([name, send]) => [name, send().catch((): ChannelResult => ({ ok: false, message: "ส่งช่องทางนี้ไม่สำเร็จ" }))] as const);
   for (const [name, job] of jobs) {
     const result = await job;
     channels[name] = result;

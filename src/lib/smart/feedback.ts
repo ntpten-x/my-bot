@@ -4,6 +4,7 @@ import { enrichPosts } from "./enrich";
 import { getSettings } from "../settings";
 import { averageVector } from "./vector";
 import { ACTION_DELTA } from "./preference";
+import { embeddingConfig, embeddingTextKey } from "./embedding-key";
 
 const POSITIVE = new Set(["save", "contacted", "closed_won"]);
 
@@ -45,15 +46,21 @@ export async function recordFeedback(postId: string, action: string) {
   await bump("source", post.sourceId, delta);
   if (post.authorName) await bump("author", post.authorName, delta);
 
-  const vector = readVector(post.embeddingJson);
+  const settings = await getSettings();
+  const config = embeddingConfig(settings);
+  const vector = post.embeddingConfig === config && post.embeddingKey.endsWith(`|${embeddingTextKey(post.text, config)}`) ? readVector(post.embeddingJson) : null;
   if (vector) {
     const liked = POSITIVE.has(action);
     const key = liked ? "pref_liked_centroid" : "pref_disliked_centroid";
     const countKey = liked ? "pref_liked_count" : "pref_disliked_count";
+    const spaceKey = liked ? "pref_liked_space" : "pref_disliked_space";
+    const space = post.embeddingKey.split("|")[0];
     const currentRow = await prisma.setting.findUnique({ where: { key } });
     const countRow = await prisma.setting.findUnique({ where: { key: countKey } });
-    const next = averageVector(readVector(currentRow?.value), Number(countRow?.value || 0), vector);
-    await upsertSettings({ [key]: JSON.stringify(next.vector), [countKey]: String(next.count) });
+    const storedSpace = await prisma.setting.findUnique({ where: { key: spaceKey } });
+    const previous = storedSpace?.value === space ? readVector(currentRow?.value) : null;
+    const next = averageVector(previous, previous ? Number(countRow?.value || 0) : 0, vector);
+    await upsertSettings({ [key]: JSON.stringify(next.vector), [countKey]: String(next.count), [spaceKey]: space });
   }
 
   const data: { dismissed?: boolean; isSaved?: boolean; pipelineStatus?: string } = {};
@@ -76,5 +83,5 @@ export async function recordFeedback(postId: string, action: string) {
     data.isSaved = true;
   }
   await prisma.post.update({ where: { id: postId }, data });
-  await enrichPosts([postId], [], await getSettings());
+  await enrichPosts([postId], [], settings, { embed: false });
 }

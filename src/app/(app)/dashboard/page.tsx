@@ -2,12 +2,23 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Card } from "@/components/ui";
+import { Button, Card } from "@/components/ui";
 import { ApiError, api } from "@/components/api";
 import { INTENT_LABEL, timeAgo } from "@/lib/format";
 import type { Lead } from "@/lib/lead";
 
 type Stats = {
+  aiQueue: {
+    counts: Record<string, number>;
+    oldestPendingMs: number | null;
+    processingMs: { count: number; p50: number | null; p95: number | null };
+    queueWaitMs: { count: number; p50: number | null; p95: number | null };
+    recentSample: number;
+    retriedJobs: number;
+    terminalSuccessRate: number | null;
+    errors: { id: string; status: string; attempts: number; lastError: string; nextAttemptAt: string }[];
+    requests: Record<string, { count: number; p50: number | null; p95: number | null }>;
+  };
   postsToday: number;
   unread: number;
   buyers: number;
@@ -27,11 +38,25 @@ type Stats = {
 export default function DashboardPage() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [error, setError] = useState("");
+  const [retrying, setRetrying] = useState(false);
+  const [message, setMessage] = useState("");
 
   useEffect(() => {
-    api<Stats>("/api/stats")
-      .then(setStats)
-      .catch((err) => setError(err instanceof ApiError ? err.message : "โหลดแดชบอร์ดไม่สำเร็จ"));
+    let stopped = false;
+    let loading = false;
+    const load = async () => {
+      if (loading) return;
+      loading = true;
+      try {
+        const data = await api<Stats>("/api/stats");
+        if (!stopped) { setStats(data); setError(""); }
+      } catch (err) {
+        if (!stopped) setError(err instanceof ApiError ? err.message : "โหลดแดชบอร์ดไม่สำเร็จ");
+      } finally { loading = false; }
+    };
+    void load();
+    const timer = setInterval(() => { void load(); }, 15000);
+    return () => { stopped = true; clearInterval(timer); };
   }, []);
 
   const cards = stats
@@ -54,6 +79,32 @@ export default function DashboardPage() {
       {!stats && !error ? <p className="mt-6 text-sm text-muted">กำลังโหลด...</p> : null}
       {stats ? (
         <>
+          <Card className="mt-6">
+            <h2 className="font-semibold">คิวจัดหมวด AI</h2>
+            <p className="mt-2 text-sm">
+              รอ {stats.aiQueue.counts.pending ?? 0} · กำลังทำ {stats.aiQueue.counts.running ?? 0} · เสร็จ {stats.aiQueue.counts.done ?? 0} · พักหลังผิดซ้ำ {stats.aiQueue.counts.failed ?? 0} · ใช้กฎตามตั้งค่า {stats.aiQueue.counts.skipped ?? 0}
+            </p>
+            <p className="mt-2 text-sm text-muted">
+              งานรอเก่าสุด {stats.aiQueue.oldestPendingMs == null ? "ไม่มี" : `${Math.ceil(stats.aiQueue.oldestPendingMs / 60000)} นาที`}
+              {stats.aiQueue.processingMs.count ? ` · เวลาประมวลผล p50 ${stats.aiQueue.processingMs.p50} / p95 ${stats.aiQueue.processingMs.p95} ms (${stats.aiQueue.processingMs.count} งานที่จบล่าสุด)` : " · ยังไม่มีตัวอย่างเวลาประมวลผล"}
+            </p>
+            {stats.aiQueue.queueWaitMs.count ? <p className="mt-1 text-sm text-muted">เวลาตั้งแต่เข้าคิวถึงเริ่มครั้งล่าสุด p50 {stats.aiQueue.queueWaitMs.p50} / p95 {stats.aiQueue.queueWaitMs.p95} ms รวมเวลารอ retry</p> : null}
+            <p className="mt-1 text-sm text-muted">ใน {stats.aiQueue.recentSample} งานที่อัปเดตล่าสุด มีงานเคย retry {stats.aiQueue.retriedJobs} งาน · อัตราสำเร็จเฉพาะงานที่จบ {stats.aiQueue.terminalSuccessRate == null ? "ยังไม่มีข้อมูล" : `${Math.round(stats.aiQueue.terminalSuccessRate * 100)}%`}</p>
+            {Object.entries(stats.aiQueue.requests).map(([name, metric]) => <p key={name} className="mt-1 text-sm text-muted">{name === "ingest" ? "รับโพสต์" : "ค้นหา/โหลดฟีด"}: p50 {metric.p50} / p95 {metric.p95} ms ({metric.count} คำขอล่าสุดในโปรเซสนี้ รีเซ็ตเมื่อเปิดแอปใหม่)</p>)}
+            <ul className="mt-2 space-y-1 break-words text-sm">
+              {stats.aiQueue.errors.map(job => <li key={job.id}>{job.status === "failed" ? "พักงาน" : "รอลองใหม่"} · ลอง {job.attempts} ครั้ง: {job.lastError}{job.status === "pending" ? ` · ครั้งถัดไป ${new Date(job.nextAttemptAt).toLocaleString("th-TH")}` : ""}</li>)}
+            </ul>
+            <Button className="mt-3" variant="outline" disabled={retrying} onClick={async () => {
+              setRetrying(true); setError(""); setMessage("");
+              try {
+                const result = await api<{ queued: number }>("/api/ai-queue", { method: "POST" });
+                setMessage(`ส่ง ${result.queued} โพสต์ที่ยังไม่ได้ผล AI กลับเข้าคิวแล้ว`);
+                setStats(await api<Stats>("/api/stats"));
+              } catch (err) { setError(err instanceof ApiError ? err.message : "ลองใหม่ไม่สำเร็จ"); }
+              finally { setRetrying(false); }
+            }}>{retrying ? "กำลังเข้าคิว…" : "ลอง AI ใหม่สำหรับงานที่ยังไม่สำเร็จ"}</Button>
+            {message ? <p className="mt-2 text-sm" role="status">{message}</p> : null}
+          </Card>
           <Card className={`mt-6 ${stats.extension.stale ? "border-clay" : ""}`}>
             <h2 className="font-semibold">ส่วนขยาย Chrome</h2>
             <p className="mt-2 text-sm">

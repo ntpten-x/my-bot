@@ -2,13 +2,14 @@ import type { CatNode } from "../pipeline/catalog";
 import type { ClassifyInput, LooseAiItem } from "../pipeline/classify-rules";
 import type { AppSettings } from "../settings";
 import { probeProvider } from "./health";
-import { ProviderHttpError, backoffMs, takeToken } from "./bucket";
+import { ProviderHttpError, takeToken } from "./bucket";
 import { effectiveGroqModel, pickGroqModel, rememberGroqChoice } from "./models";
 import { OLLAMA_KEEP_ALIVE, resolveOllamaBaseUrl } from "./ollama-url";
 import { extractAiItems } from "./parse";
 import { AI_SYSTEM, userPrompt } from "./prompt";
 
 const CLASSIFY_TIMEOUT_MS = 12_000;
+export const OLLAMA_CLASSIFY_TIMEOUT_MS = 60_000;
 
 function asItems(raw: string): LooseAiItem[] {
   return extractAiItems(raw).map((item) => ({
@@ -28,19 +29,14 @@ function asItems(raw: string): LooseAiItem[] {
   }));
 }
 
-async function postJson(url: string, init: RequestInit, attempt = 0): Promise<unknown> {
-  const response = await fetch(url, { ...init, signal: AbortSignal.timeout(CLASSIFY_TIMEOUT_MS) });
-  if (response.status === 429 && attempt < 3) {
-    const retryAfter = Number(response.headers.get("retry-after") || "2");
-    const wait = backoffMs(attempt, Number.isFinite(retryAfter) ? retryAfter : undefined);
-    await new Promise((resolve) => setTimeout(resolve, Math.min(wait, 20_000)));
-    return postJson(url, init, attempt + 1);
-  }
+async function postJson(url: string, init: RequestInit, timeoutMs = CLASSIFY_TIMEOUT_MS): Promise<unknown> {
+  const response = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
   if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    const retryAfter = Number(response.headers.get("retry-after") || "0");
-    const message = `${response.status} ${body.replace(/\s+/g, " ").slice(0, 280)}`;
-    throw new ProviderHttpError(message, response.status === 429 ? backoffMs(attempt, retryAfter) : 0);
+    const header = response.headers.get("retry-after") || "";
+    const seconds = Number(header);
+    const retryAfterMs = Number.isFinite(seconds) ? seconds * 1000 : Math.max(0, Date.parse(header) - Date.now()) || 0;
+    // Provider bodies can contain credentials. Persist status only; the queue owns retries.
+    throw new ProviderHttpError(`HTTP ${response.status} ผู้ให้บริการปฏิเสธคำขอ`, response.status === 429 ? Math.max(5000, retryAfterMs) : 0);
   }
   return response.json() as Promise<Record<string, never>>;
 }
@@ -67,7 +63,7 @@ export async function ollamaClassify(posts: ClassifyInput[], catalog: CatNode[],
       ],
       options: { temperature: 0.2 },
     }),
-  })) as { message?: { content?: string } };
+  }, OLLAMA_CLASSIFY_TIMEOUT_MS)) as { message?: { content?: string } };
   return asItems(String(data.message?.content ?? ""));
 }
 

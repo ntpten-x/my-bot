@@ -34,13 +34,15 @@ export async function classifyLeads(
   for (let index = 0; index < posts.length; index += 10) batches.push(posts.slice(index, index + 10));
 
   const results = [];
+  const providersById: Record<string, string> = {};
   const errors = [...selected.errors];
   let provider = "rules";
   for (const batch of batches) {
     const outcome = await classifyWithChain({ posts: batch, catalog, providers, cache });
     results.push(...outcome.results);
+    Object.assign(providersById, outcome.providersById);
     errors.push(...outcome.errors);
     if (outcome.provider !== "rules") provider = outcome.provider;
   }
-  return { provider: posts.length ? provider : "rules", results, errors };
+  return { provider: posts.length ? provider : "rules", providersById, results, errors };
 }

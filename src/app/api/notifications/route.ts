@@ -9,7 +9,7 @@ export async function GET() {
   const { error } = await authed();
   if (error) return error;
   const [items, unread] = await Promise.all([
-    prisma.notification.findMany({ orderBy: { createdAt: "desc" }, take: 80 }),
+    prisma.notification.findMany({ where: { channel: { not: { startsWith: "external_" } } }, orderBy: { createdAt: "desc" }, take: 80 }),
     prisma.notification.count({ where: { read: false, channel: "in_app" } }),
   ]);
   return json({

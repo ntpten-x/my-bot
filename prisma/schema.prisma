@@ -83,6 +83,9 @@ model Post {
   score           Int            @default(0)
   scoreReason     String         @default("")
   embeddingJson   String         @default("")
+  embeddingKey    String         @default("")
+  embeddingConfig String         @default("")
+  embeddingRetryAt DateTime       @default("1970-01-01T00:00:00.000Z")
   duplicateOfId   String?
   dismissed       Boolean        @default(false)
   ocrText         String         @default("")
@@ -100,6 +103,9 @@ model Post {
   @@index([pipelineStatus])
   @@index([province])
   @@index([score])
+  @@index([normalizedText])
+  @@index([sourceId, duplicateOfId, createdAt])
+  @@index([embeddingConfig, embeddingRetryAt])
 }
 
 model AiJob {
@@ -111,10 +117,12 @@ model AiJob {
   nextAttemptAt DateTime @default(now())
   lastError     String   @default("")
   latencyMs     Int?
+  queueWaitMs   Int?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
   @@index([status, nextAttemptAt])
+  @@index([status, updatedAt])
 }
 
 model OcrCache {

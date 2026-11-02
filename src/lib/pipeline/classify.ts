@@ -27,10 +27,11 @@ export async function classifyWithChain(options: {
   catalog: CatNode[];
   providers: ProviderAttempt[];
   cache?: AiCacheStore;
-}): Promise<{ provider: string; results: AiItem[]; errors: { name: string; message: string }[] }> {
+}): Promise<{ provider: string; providersById: Record<string, string>; results: AiItem[]; errors: { name: string; message: string; retryAfterMs?: number }[] }> {
   const { posts, catalog, providers, cache } = options;
   const byId = new Map<string, AiItem>();
   const fromCache = new Set<string>();
+  const providersById: Record<string, string> = {};
   let pending = posts;
 
   if (cache) {
@@ -40,6 +41,7 @@ export async function classifyWithChain(options: {
       if (hit && hit.provider !== "rules") {
         byId.set(post.id, sanitizeAiItem({ ...hit.item, id: post.id }, post, catalog));
         fromCache.add(post.id);
+        providersById[post.id] = hit.provider;
       } else {
         uncached.push(post);
       }
@@ -48,7 +50,7 @@ export async function classifyWithChain(options: {
   }
 
   let used = fromCache.size === posts.length && posts.length > 0 ? "cache" : "rules";
-  const errors: { name: string; message: string }[] = [];
+  const errors: { name: string; message: string; retryAfterMs?: number }[] = [];
 
   for (const provider of providers) {
     if (!pending.length) break;
@@ -61,6 +63,7 @@ export async function classifyWithChain(options: {
         if (!post) continue;
         const clean = sanitizeAiItem(item, post, catalog);
         byId.set(post.id, clean);
+        providersById[post.id] = provider.name;
         accepted += 1;
         if (cache && provider.name !== "rules") {
           await cache.set(aiCacheKey(post.text, catalog, post.contentHash), {
@@ -86,16 +89,21 @@ export async function classifyWithChain(options: {
       errors.push({
         name: provider.name,
         message: error instanceof Error ? error.message : "เรียกผู้ให้บริการไม่สำเร็จ",
+        retryAfterMs: error && typeof error === "object" && "retryAfterMs" in error ? Number(error.retryAfterMs) || 0 : 0,
       });
     }
   }
 
   for (const post of posts) {
-    if (!byId.has(post.id)) byId.set(post.id, ruleItem(post, catalog));
+    if (!byId.has(post.id)) {
+      byId.set(post.id, ruleItem(post, catalog));
+      providersById[post.id] = "rules";
+    }
   }
 
   return {
     provider: used,
+    providersById,
     results: posts.map((post) => byId.get(post.id)!),
     errors,
   };

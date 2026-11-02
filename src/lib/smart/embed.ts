@@ -1,11 +1,13 @@
 import type { AppSettings } from "../settings";
 import { OLLAMA_KEEP_ALIVE, resolveOllamaBaseUrl } from "../ai/ollama-url";
 import { upsertSettings } from "../settings";
+import { embeddingConfig } from "./embedding-key";
 
 type EmbedSettings = Pick<AppSettings, "ollamaBaseUrl" | "geminiApiKey" | "embedModel" | "geminiEmbedModel">;
 
 const health = new Map<string, { ok: boolean; at: number; message: string }>();
 const BAD_TTL_MS = 20_000;
+export function clearEmbeddingHealthCache() { health.clear(); }
 
 export function parseOllamaEmbedding(data: unknown): number[] | null {
   if (!data || typeof data !== "object") return null;
@@ -14,15 +16,16 @@ export function parseOllamaEmbedding(data: unknown): number[] | null {
   if (Array.isArray(embeddings) && embeddings.length) {
     if (Array.isArray(embeddings[0])) {
       const vector = embeddings[0].map(Number);
-      return vector.length ? vector : null;
+      return vector.length && vector.every(Number.isFinite) ? vector : null;
     }
     if (typeof embeddings[0] === "number") {
       const vector = embeddings.map(Number);
-      return vector.length ? vector : null;
+      return vector.length && vector.every(Number.isFinite) ? vector : null;
     }
   }
   if (Array.isArray(row.embedding) && row.embedding.length && typeof row.embedding[0] === "number") {
-    return row.embedding.map(Number);
+    const vector = row.embedding.map(Number);
+    return vector.every(Number.isFinite) ? vector : null;
   }
   return null;
 }
@@ -65,7 +68,7 @@ async function installedModels(base: string): Promise<string[]> {
   }
 }
 
-async function requestVector(base: string, model: string, text: string): Promise<number[] | null> {
+async function requestVector(base: string, model: string, text: string): Promise<number[] | null | undefined> {
   const attempts = [
     { path: "/api/embed", body: { model, input: text, keep_alive: OLLAMA_KEEP_ALIVE } },
     { path: "/api/embeddings", body: { model, prompt: text, keep_alive: OLLAMA_KEEP_ALIVE } },
@@ -80,8 +83,8 @@ async function requestVector(base: string, model: string, text: string): Promise
         signal: AbortSignal.timeout(25_000),
       });
       if (!response.ok) {
-        const body = await response.text().catch(() => "");
-        last = `${attempt.path} ${model} ${response.status} ${body.slice(0, 120)}`;
+        if (response.status >= 500 || response.status === 429) return undefined;
+        last = `${attempt.path} ${model} HTTP ${response.status}`;
         continue;
       }
       const vector = parseOllamaEmbedding(await response.json());
@@ -89,14 +92,16 @@ async function requestVector(base: string, model: string, text: string): Promise
       last = `${attempt.path} ${model} returned no vector`;
     } catch (error) {
       last = error instanceof Error ? error.message : "embed failed";
+      return undefined;
     }
   }
   if (last) console.error("[embed]", last);
   return null;
 }
 
-async function ollamaEmbed(text: string, settings: EmbedSettings): Promise<number[] | null> {
-  const failed = health.get("ollama-embed");
+async function ollamaEmbed(text: string, settings: EmbedSettings): Promise<{ vector: number[]; space: string } | null> {
+  const healthKey = `ollama-embed:${embeddingConfig(settings)}`;
+  const failed = health.get(healthKey);
   if (failed && !failed.ok && Date.now() - failed.at < BAD_TTL_MS) return null;
   const base = await resolveOllamaBaseUrl(settings.ollamaBaseUrl);
   const installed = await installedModels(base);
@@ -104,14 +109,15 @@ async function ollamaEmbed(text: string, settings: EmbedSettings): Promise<numbe
   let last = `ไม่พบเวกเตอร์จาก ${base}`;
   for (const model of models) {
     const vector = await requestVector(base, model, text.slice(0, 2000));
+    if (vector === undefined) { last = "บริการ embedding ไม่พร้อมหรือหมดเวลา"; break; }
     if (vector) {
-      health.set("ollama-embed", { ok: true, at: Date.now(), message: `${base} ${model} (${vector.length})` });
+      health.set(healthKey, { ok: true, at: Date.now(), message: `${base} ${model} (${vector.length})` });
       await remember(true, `Ollama embedding พร้อม ${model} ที่ ${base} ขนาด ${vector.length}`);
-      return vector;
+      return { vector, space: `ollama:${base}:${model.replace(/:latest$/, "")}` };
     }
     last = `เรียก embedding ไม่สำเร็จที่ ${base} โมเดล ${model}`;
   }
-  health.set("ollama-embed", { ok: false, at: Date.now(), message: last });
+  health.set(healthKey, { ok: false, at: Date.now(), message: last });
   await remember(false, last);
   return null;
 }
@@ -131,15 +137,14 @@ async function geminiEmbed(text: string, settings: EmbedSettings): Promise<numbe
       },
     );
     if (!response.ok) {
-      const body = await response.text().catch(() => "");
-      const message = `Gemini embedding ${response.status} ${body.slice(0, 160)}`;
+      const message = `Gemini embedding HTTP ${response.status}`;
       health.set("gemini-embed", { ok: false, at: Date.now(), message });
       await remember(false, message);
       return null;
     }
     const data = await response.json();
     const vector = Array.isArray(data.embedding?.values) ? data.embedding.values.map(Number) : null;
-    if (!vector?.length) return null;
+    if (!vector?.length || !vector.every(Number.isFinite)) return null;
     health.set("gemini-embed", { ok: true, at: Date.now(), message: `gemini ${vector.length}` });
     await remember(true, `Gemini embedding ขนาด ${vector.length}`);
     return vector;
@@ -151,18 +156,17 @@ async function geminiEmbed(text: string, settings: EmbedSettings): Promise<numbe
   }
 }
 
-export async function embedText(text: string, settings: EmbedSettings): Promise<{ vector: number[] | null; provider: string; message: string }> {
+export async function embedText(text: string, settings: EmbedSettings): Promise<{ vector: number[] | null; provider: string; message: string; space: string }> {
   const local = await ollamaEmbed(text, settings);
-  if (local) return { vector: local, provider: "ollama", message: health.get("ollama-embed")?.message ?? "ollama" };
+  if (local) return { vector: local.vector, space: local.space, provider: "ollama", message: health.get(`ollama-embed:${embeddingConfig(settings)}`)?.message ?? "ollama" };
   const remote = await geminiEmbed(text, settings);
-  if (remote) return { vector: remote, provider: "gemini", message: health.get("gemini-embed")?.message ?? "gemini" };
-  const message = health.get("ollama-embed")?.message || health.get("gemini-embed")?.message || "ไม่มีโมเดลฝังข้อความ";
-  return { vector: null, provider: "none", message };
+  if (remote) return { vector: remote, space: `gemini:${settings.geminiEmbedModel}`, provider: "gemini", message: health.get("gemini-embed")?.message ?? "gemini" };
+  const message = health.get(`ollama-embed:${embeddingConfig(settings)}`)?.message || health.get("gemini-embed")?.message || "ไม่มีโมเดลฝังข้อความ";
+  return { vector: null, provider: "none", message, space: "" };
 }
 
 export async function testEmbedding(settings: EmbedSettings) {
-  health.delete("ollama-embed");
-  health.delete("gemini-embed");
+  clearEmbeddingHealthCache();
   const result = await embedText("ทดสอบภาษาไทย bge", settings);
   return {
     ok: Boolean(result.vector),

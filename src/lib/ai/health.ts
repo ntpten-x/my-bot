@@ -13,8 +13,7 @@ export function clearProviderHealthCache() {
 }
 
 async function errorText(response: Response) {
-  const body = await response.text().catch(() => "");
-  return `${response.status} ${body.replace(/\s+/g, " ").slice(0, 280)}`.trim();
+  return `HTTP ${response.status}`;
 }
 
 async function probeOnce(name: string, settings: AppSettings): Promise<{ ok: boolean; message: string }> {

@@ -22,6 +22,7 @@
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
+    "evaluate:classifier": "tsx scripts/evaluate-classifier.ts",
     "db:migrate": "prisma migrate deploy",
     "db:seed": "tsx prisma/seed.ts",
     "postinstall": "prisma generate"
