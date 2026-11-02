@@ -6,6 +6,7 @@ config();
 import { DEFAULT_GROQ_MODEL, resolveGroqModel } from "../src/lib/ai/models";
 import { CATEGORY_SEEDS, FORBIDDEN_KEYWORDS, WATCH_KEYWORDS, flattenSeeds } from "../src/lib/pipeline/catalog";
 import { prepareLead } from "../src/lib/pipeline/prepare";
+import { DEMO_SOURCE_URL, maskSecret, shouldInsertDemoPosts } from "../src/lib/seed-policy";
 
 const prisma = new PrismaClient();
 
@@ -107,16 +108,14 @@ async function main() {
     await prisma.setting.update({ where: { key: "groq_model" }, data: { value: resolveGroqModel(groq.value) } });
   }
 
-  const source = await prisma.source.upsert({
-    where: { url: "https://www.facebook.com/groups/mybot-demo" },
-    update: {},
-    create: {
-      type: "facebook_group",
-      name: "ตัวอย่าง — ลบได้",
-      url: "https://www.facebook.com/groups/mybot-demo",
-      enabled: false,
-      intervalMinutes: 10,
-    },
+  const realSourceCount = await prisma.source.count({ where: { NOT: { url: DEMO_SOURCE_URL } } });
+  const existingDemo = await prisma.source.findUnique({ where: { url: DEMO_SOURCE_URL } });
+  const demoPostCount = existingDemo ? await prisma.post.count({ where: { sourceId: existingDemo.id } }) : 0;
+  const insertDemo = shouldInsertDemoPosts({
+    realSourceCount,
+    demoExists: Boolean(existingDemo),
+    demoEnabled: existingDemo?.enabled ?? false,
+    demoPostCount,
   });
 
   const catalog = flattenSeeds();
@@ -124,6 +123,16 @@ async function main() {
     ...WATCH_KEYWORDS.map((word) => ({ word, type: "watch" as const })),
     ...FORBIDDEN_KEYWORDS.map((word) => ({ word, type: "forbidden" as const })),
   ];
+  if (insertDemo) {
+  const source = await prisma.source.create({
+    data: {
+      type: "facebook_group",
+      name: "ตัวอย่าง — ลบได้",
+      url: DEMO_SOURCE_URL,
+      enabled: false,
+      intervalMinutes: 10,
+    },
+  });
   for (const demo of DEMO) {
     const lead = prepareLead(demo, rules, catalog);
     const categoryId = rows.find((row) => row.slug === lead.categorySlug)?.id ?? null;
@@ -141,17 +150,6 @@ async function main() {
       forbiddenHit: lead.forbidden.length > 0,
       suggestedReply: lead.suggestedReply,
     };
-    const byUrl = await prisma.post.findUnique({
-      where: { sourceId_externalUrl: { sourceId: source.id, externalUrl: lead.url } },
-    });
-    if (byUrl) {
-      const hashOwner = await prisma.post.findUnique({ where: { contentHash: lead.hash } });
-      await prisma.post.update({
-        where: { id: byUrl.id },
-        data: { ...data, ...(!hashOwner || hashOwner.id === byUrl.id ? { contentHash: lead.hash } : {}) },
-      });
-      continue;
-    }
     const byHash = await prisma.post.findUnique({ where: { contentHash: lead.hash } });
     if (byHash) continue;
     try {
@@ -171,10 +169,11 @@ async function main() {
       throw error;
     }
   }
+  }
 
-  console.log("ใส่ข้อมูลเริ่มต้นแล้ว");
-  console.log(`โทเคนส่วนขยาย: ${token}`);
-  console.log("เปิดแอป ตั้งรหัสผ่าน แล้วคัดลอกโทเคนนี้ไปวางในส่วนขยายได้จากหน้าตั้งค่า");
+  console.log(insertDemo ? "ใส่ข้อมูลเริ่มต้นพร้อมประกาศตัวอย่างแล้ว" : "ใส่หมวดและคำเฝ้าดูแล้ว ไม่เพิ่มประกาศตัวอย่าง");
+  console.log(`โทเคนส่วนขยาย: ${maskSecret(token)}`);
+  console.log("ตัวเต็มอยู่ที่หน้าตั้งค่าเท่านั้น หลังตั้งรหัสผ่านเจ้าของ");
 }
 
 main()

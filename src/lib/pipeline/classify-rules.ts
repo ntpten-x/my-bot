@@ -34,12 +34,20 @@ export type LooseAiItem = {
   specificity?: number;
 };
 
-const DEVICE = /ipad|iphone|ไอแพด|ไอโฟน|แท็บเล็ต|tablet|มือถือ|samsung|การ์ดจอ|โน้ตบุ๊ก|โน๊ตบุ๊ค/i;
+const DEVICE = /ipad|iphone|ไอแพด|ไอโฟน|แท็บเล็ต|tablet|มือถือ|samsung|การ์ดจอ|โน้ตบุ๊ก|โน๊ตบุ๊ค|คอมพิวเตอร์|โทรศัพท์/i;
+const FOOD_VENDOR = /คิวว่าง|เริ่มส่ง|เมนู|อาหาร|ของกิน|ยำ|ลูกชิ้น|สั่งอาหาร|ร้านอาหาร|ข้าวมันไก่|ส้มตำ|ก๋วยเตี๋ยว|กับข้าว/;
+
+export function foodOverride(text: string) {
+  return FOOD_VENDOR.test(text) && !DEVICE.test(text);
+}
 
 export function classifyByRules(text: string, catalog: CatNode[]): {
   categorySlug: string;
   subcategorySlug: string | null;
 } {
+  if (foodOverride(text) && catalog.some((node) => node.slug === "food" && !node.parentSlug)) {
+    return { categorySlug: "food", subcategorySlug: null };
+  }
   if (DEVICE.test(text) && catalog.some((node) => node.slug === "it" && !node.parentSlug)) {
     return { categorySlug: "it", subcategorySlug: null };
   }
@@ -103,6 +111,10 @@ export function sanitizeAiItem(item: LooseAiItem, post: ClassifyInput, catalog: 
   if ((categorySlug === "other" || !parent) && fallback.categorySlug !== "other") {
     categorySlug = fallback.categorySlug;
     subcategorySlug = fallback.subcategorySlug;
+  }
+  if (foodOverride(post.text) && catalog.some((node) => node.slug === "food" && !node.parentSlug)) {
+    categorySlug = "food";
+    subcategorySlug = null;
   }
   const isAd = Boolean(item.isAd) || fallback.isAd;
   let intent: Intent;

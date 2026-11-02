@@ -8,9 +8,11 @@ import { rankHybrid } from "../../src/lib/smart/search";
 import { findNearDuplicate } from "../../src/lib/smart/vector";
 import { normalizeText } from "../../src/lib/pipeline/normalize";
 import { flattenSeeds } from "../../src/lib/pipeline/catalog";
-import { classifyByRules, sanitizeAiItem } from "../../src/lib/pipeline/classify-rules";
+import { classifyByRules, foodOverride, sanitizeAiItem } from "../../src/lib/pipeline/classify-rules";
 import { detectIntent } from "../../src/lib/pipeline/intent";
 import { publicHealth } from "../../src/lib/version";
+import { captureText, chooseKeeper, mergePermalinks, sameSourceCapture } from "../../src/lib/pipeline/capture";
+import { maskSecret, shouldInsertDemoPosts } from "../../src/lib/seed-policy";
 
 describe("audit fixes", () => {
   it("returns a public health payload with only ok and version", () => {
@@ -111,5 +113,46 @@ describe("audit fixes", () => {
       ["food", 0.15],
     ]);
     expect(rankHybrid("อาหาร ของกิน", posts, semantic)[0]?.id).toBe("food");
+  });
+
+  it("treats a truncated Facebook capture as a prefix of the longer post in the same group", () => {
+    const stem = "MS240883คิวว่างวันนี้เริ่มส่งยำลูกชิ้นกุ้งของกินเมนูน้ำจิ้มผักสดส่งถึงบ้านก่อนหนึ่งทุ่ม";
+    expect(captureText(stem).length).toBeGreaterThanOrEqual(60);
+    const truncated = `${stem}...ดูเพิ่มเติม`;
+    const full = `${stem} พร้อมกล่องและรับที่ร้านได้จนหมดคิว`;
+    expect(captureText(truncated).startsWith(captureText(stem))).toBe(true);
+    expect(sameSourceCapture({ sourceId: "g1", text: truncated }, { sourceId: "g1", text: full })).toBe("right");
+    expect(sameSourceCapture({ sourceId: "g1", text: full }, { sourceId: "g2", text: truncated })).toBeNull();
+    expect(chooseKeeper("สั้น", full)).toBeNull();
+    expect(mergePermalinks("https://www.facebook.com/groups/a/posts/9", [["https://www.facebook.com/groups/a/posts/3", "https://www.facebook.com/groups/a/posts/9"]])).toEqual([
+      "https://www.facebook.com/groups/a/posts/3",
+    ]);
+  });
+
+  it("overrides an IT label when the post is a food vendor and has no device words", () => {
+    const catalog = flattenSeeds();
+    const text = "MS240883คิวว่างวันนี้ เริ่มส่งยำ เมนูของกิน";
+    expect(foodOverride(text)).toBe(true);
+    expect(foodOverride("คิวว่าง ขาย iPad มือสอง")).toBe(false);
+    const overridden = sanitizeAiItem(
+      { id: "yam", categorySlug: "it", intent: "seller", isAd: false },
+      { id: "yam", text },
+      catalog,
+    );
+    expect(overridden.categorySlug).toBe("food");
+    expect(classifyByRules("ขาย iPad มือสอง คิวว่าง", catalog).categorySlug).toBe("it");
+  });
+
+  it("skips demo posts after a real source or a cleaned demo, and masks the token", () => {
+    expect(shouldInsertDemoPosts({ realSourceCount: 0, demoExists: false, demoEnabled: false, demoPostCount: 0 })).toBe(true);
+    expect(shouldInsertDemoPosts({ realSourceCount: 1, demoExists: false, demoEnabled: false, demoPostCount: 0 })).toBe(false);
+    expect(shouldInsertDemoPosts({ realSourceCount: 0, demoExists: true, demoEnabled: false, demoPostCount: 5 })).toBe(false);
+    expect(shouldInsertDemoPosts({ realSourceCount: 0, demoExists: true, demoEnabled: true, demoPostCount: 0 })).toBe(false);
+    const token = "fb84b894c8af0c02f35cf25c9d30910e814a00d927607b82";
+    const masked = maskSecret(token);
+    expect(masked).not.toBe(token);
+    expect(masked.includes("b894c8af")).toBe(false);
+    expect(masked.startsWith("fb")).toBe(true);
+    expect(masked.endsWith("82")).toBe(true);
   });
 });

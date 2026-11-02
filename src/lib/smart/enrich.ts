@@ -5,6 +5,7 @@ import { embedText } from "./embed";
 import { preferenceScore } from "./preference";
 import { ruleSignals, scoreLead } from "./score";
 import { CROSS_TEXT_DUP_MIN, cosine, findNearDuplicate } from "./vector";
+import { captureText, chooseKeeper, mergePermalinks, readUrlList } from "../pipeline/capture";
 
 function readVector(value: string | null | undefined) {
   if (!value) return null;
@@ -120,6 +121,7 @@ export async function enrichPosts(postIds: string[], classified: AiItem[], setti
     });
   }
   await collapseIdenticalTexts(posts.map((post) => post.normalizedText));
+  for (const sourceId of sourceIds) await collapseTruncatedCaptures(sourceId);
 }
 
 export async function collapseIdenticalTexts(texts?: string[]) {
@@ -157,6 +159,52 @@ export async function collapseIdenticalTexts(texts?: string[]) {
       if (post.duplicateOfId === canon.id) continue;
       await prisma.post.update({ where: { id: post.id }, data: { duplicateOfId: canon.id } });
       linked += 1;
+    }
+  }
+  return linked;
+}
+
+export async function collapseTruncatedCaptures(sourceId?: string) {
+  const posts = await prisma.post.findMany({
+    where: { duplicateOfId: null, ...(sourceId ? { sourceId } : {}) },
+    select: { id: true, sourceId: true, text: true, externalUrl: true, extraUrlsJson: true },
+    orderBy: { createdAt: "asc" },
+    take: 500,
+  });
+  const bySource = new Map<string, typeof posts>();
+  for (const post of posts) {
+    const list = bySource.get(post.sourceId) ?? [];
+    list.push(post);
+    bySource.set(post.sourceId, list);
+  }
+  let linked = 0;
+  for (const list of bySource.values()) {
+    const pending = new Set(list.map((post) => post.id));
+    const ranked = [...list].sort(
+      (left, right) => captureText(right.text).length - captureText(left.text).length || left.id.localeCompare(right.id),
+    );
+    for (const keeper of ranked) {
+      if (!pending.has(keeper.id)) continue;
+      const absorbed: typeof list = [];
+      for (const other of ranked) {
+        if (other.id === keeper.id || !pending.has(other.id)) continue;
+        if (chooseKeeper(keeper.text, other.text) !== "left") continue;
+        absorbed.push(other);
+      }
+      if (!absorbed.length) continue;
+      const extras = mergePermalinks(keeper.externalUrl, [
+        readUrlList(keeper.extraUrlsJson),
+        absorbed.flatMap((post) => [post.externalUrl, ...readUrlList(post.extraUrlsJson)]),
+      ]);
+      await prisma.post.update({
+        where: { id: keeper.id },
+        data: { extraUrlsJson: JSON.stringify(extras), duplicateOfId: null },
+      });
+      for (const post of absorbed) {
+        pending.delete(post.id);
+        await prisma.post.update({ where: { id: post.id }, data: { duplicateOfId: keeper.id } });
+        linked += 1;
+      }
     }
   }
   return linked;

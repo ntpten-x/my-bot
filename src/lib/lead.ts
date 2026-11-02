@@ -20,6 +20,7 @@ export type Lead = {
   scoreReason: string;
   duplicateOfId: string | null;
   dismissed: boolean;
+  extraUrls: string[];
   category: { id: string; name: string; slug: string } | null;
   subcategory: { id: string; name: string; slug: string } | null;
   source: { id: string; name: string; url: string; type: string } | null;

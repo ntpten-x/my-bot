@@ -45,7 +45,7 @@ Done when `npm run doctor` has no FAIL, `GET http://127.0.0.1:8001/api/v1/health
 5. Models: chat `qwen2.5:7b` (or `qwen2.5:3b` when VRAM is tight) and embed `bge-m3` (`ollama pull`). Gemini embed fallback is `text-embedding-004`.
 6. `npm install`, `npm run db:migrate`, `npm run db:seed`, `npm run build`. Seed is safe to repeat.
 7. Autostart (Windows, optional): the setup script can write `Startup\MY-BOT.vbs`, or run `scripts\windows\install-service.ps1`. The launcher starts Ollama hidden, then `node scripts\start-all.mjs --prod`, and appends the console to `data/mybot-console.log`. Remove with `scripts\windows\uninstall-service.ps1`.
-8. Extension: Chrome → `chrome://extensions` → developer mode → Load unpacked → `extension/`. App URL `http://localhost:8001`. Token from the settings page or `npx tsx scripts/print-extension-token.ts`. The owner sets the app password on first open (`/setup`).
+8. Extension: Chrome → `chrome://extensions` → developer mode → Load unpacked → `extension/`. App URL `http://localhost:8001`. The owner sets the password on `/setup`, then copies the extension token from **ตั้งค่า**. Seed and setup scripts only print a masked token.
 
 ## Verify
 

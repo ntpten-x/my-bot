@@ -5,7 +5,7 @@ import { aiCacheKey } from "./pipeline/classify";
 import { prepareLead } from "./pipeline/prepare";
 import { canonicalSourceUrl, normalizeUrl } from "./pipeline/normalize";
 import { touchExtension } from "./extension-status";
-import { collapseIdenticalTexts, enrichPosts } from "./smart/enrich";
+import { collapseIdenticalTexts, collapseTruncatedCaptures, enrichPosts } from "./smart/enrich";
 import { dispatchNotification, shouldNotify, shouldNotifyExternal } from "./notify";
 import { findSourceByUrl, loadCatalogFromDb, resolveCategoryIds } from "./sources";
 
@@ -119,7 +119,10 @@ export async function ingestPosts(input: {
   }
 
   const aiProvider = "rules";
-  if (createdIds.length) await collapseIdenticalTexts(fresh.map((item) => item.lead.normalizedText));
+  if (createdIds.length) {
+    await collapseIdenticalTexts(fresh.map((item) => item.lead.normalizedText));
+    await collapseTruncatedCaptures(source.id);
+  }
   const uniqueIds = createdIds.length
     ? (
         await prisma.post.findMany({

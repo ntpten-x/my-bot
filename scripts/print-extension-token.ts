@@ -1,4 +1,5 @@
 import { prisma } from "../src/lib/prisma";
+import { maskSecret } from "../src/lib/seed-policy";
 
 async function main() {
   const row = await prisma.setting.findUnique({ where: { key: "extension_token" } });
@@ -7,7 +8,8 @@ async function main() {
     process.exitCode = 1;
     return;
   }
-  console.log(row.value);
+  console.log(maskSecret(row.value));
+  console.log("Full token is on the Settings page only.");
 }
 
 main()

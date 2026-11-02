@@ -9,7 +9,7 @@ import { maybeSendScheduledSummary } from "../lib/smart/daily";
 import { enqueueUnclassifiedPosts, processAiQueue } from "../lib/ai/queue";
 import { maybeBackupDatabase } from "../lib/backup";
 import { backfillEmbeddings } from "../lib/smart/backfill";
-import { collapseIdenticalTexts } from "../lib/smart/enrich";
+import { collapseIdenticalTexts, collapseTruncatedCaptures } from "../lib/smart/enrich";
 import { repairStoredOverrides } from "../lib/pipeline/repair";
 import { warmOllamaModels } from "../lib/ai/warm";
 import { fetchErrorReason } from "../lib/fetch-error";
@@ -81,9 +81,10 @@ void (async () => {
     return workerLog({ level: "error", message: "เข้าคิวโพสต์ที่ยังเป็นกฎไม่สำเร็จ", error: message }).then(() => 0);
   });
   const linked = await collapseIdenticalTexts().catch(() => 0);
+  const trimmed = await collapseTruncatedCaptures().catch(() => 0);
   const repaired = await repairStoredOverrides().catch(() => 0);
   await workerLog({
-    message: `เข้าคิวจัดหมวดโพสต์ที่ยังเป็นกฎ ${queued} รายการ ยุบข้อความซ้ำ ${linked} รายการ แก้หมวดด้วยกฎ ${repaired} รายการ`,
+    message: `เข้าคิวจัดหมวดโพสต์ที่ยังเป็นกฎ ${queued} รายการ ยุบข้อความซ้ำ ${linked} รายการ ยุบข้อความที่ถูกตัด ${trimmed} รายการ แก้หมวดด้วยกฎ ${repaired} รายการ`,
   });
   const settings = await getSettings();
   await warmOllamaModels(settings);

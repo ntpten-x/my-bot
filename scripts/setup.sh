@@ -64,7 +64,6 @@ fi
 
 set_env PORT "8001"
 npm run build
-echo "Extension token:"
-npx tsx scripts/print-extension-token.ts
+echo "Extension token: open http://localhost:8001/settings after you set the owner password."
 echo "Load the extension folder in Chrome, then open http://localhost:8001"
 echo "Guide: docs/SETUP.th.md"

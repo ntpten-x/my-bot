@@ -113,6 +113,11 @@ export function LeadCard({
         <a href={lead.externalUrl} target="_blank" rel="noreferrer" className="inline-flex h-8 items-center rounded-lg px-3 text-xs text-clay underline">
           เปิดโพสต์
         </a>
+        {(lead.extraUrls ?? []).map((url) => (
+          <a key={url} href={url} target="_blank" rel="noreferrer" className="inline-flex h-8 items-center rounded-lg px-3 text-xs text-clay underline">
+            ลิงก์ที่ถูกตัด
+          </a>
+        ))}
         <select
           className="h-8 rounded-lg border border-line bg-card px-2 text-xs"
           value={lead.pipelineStatus}

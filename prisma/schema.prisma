@@ -86,6 +86,7 @@ model Post {
   duplicateOfId   String?
   dismissed       Boolean        @default(false)
   ocrText         String         @default("")
+  extraUrlsJson   String         @default("[]")
   aiJobs          AiJob[]
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt

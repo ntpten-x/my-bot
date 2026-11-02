@@ -185,8 +185,7 @@ shell.Run "cmd /c mkdir data 2>nul & set OLLAMA_HOST=127.0.0.1:$ollamaPort&& set
 }
 
 Write-Host ""
-Write-Host "Extension token:"
-npx tsx scripts/print-extension-token.ts
+Write-Host "Extension token: open http://localhost:8001/settings after you set the owner password."
 Write-Host "Open Chrome -> chrome://extensions -> Developer mode -> Load unpacked"
 Write-Host ("Select folder: " + (Join-Path $Repo "extension"))
 Write-Host "Paste the token into the MY-BOT popup. API base: http://localhost:8001"

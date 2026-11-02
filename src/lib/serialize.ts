@@ -23,6 +23,7 @@ export type PostRecord = {
   scoreReason: string;
   duplicateOfId: string | null;
   dismissed: boolean;
+  extraUrlsJson?: string;
   category: Ref;
   subcategory: Ref;
   source: SourceRef;
@@ -61,6 +62,7 @@ export function serializePost(post: PostRecord) {
     scoreReason: post.scoreReason ?? "",
     duplicateOfId: post.duplicateOfId ?? null,
     dismissed: post.dismissed ?? false,
+    extraUrls: parseJsonArray(post.extraUrlsJson ?? "[]"),
     category: post.category,
     subcategory: post.subcategory,
     source: post.source,
