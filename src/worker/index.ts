@@ -15,6 +15,8 @@ import { warmOllamaModels } from "../lib/ai/warm";
 import { fetchErrorReason } from "../lib/fetch-error";
 import { workerLog } from "../lib/log";
 import { processNotificationQueue } from "../lib/notification-queue";
+import { processFollowUps } from "../lib/automation";
+import { maybeBuildScheduledReplyQueue } from "../lib/reply-queue";
 
 process.env.MYBOT_PROCESS = "worker";
 
@@ -80,6 +82,8 @@ async function tick() {
     await maybeSendScheduledSummary();
     await maybeBackupDatabase();
     await collapseTruncatedCaptures();
+    await processFollowUps().catch((error) => workerLog({ level: "error", message: "เตือนตามลีดไม่สำเร็จ", error: String(error).slice(0, 300) }));
+    await maybeBuildScheduledReplyQueue().catch((error) => workerLog({ level: "error", message: "สร้างคิวตอบลีดไม่สำเร็จ", error: String(error).slice(0, 300) }));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await workerLog({ level: "error", message: "รอบ worker ล้มเหลว", error: message.slice(0, 500) });

@@ -1,5 +1,7 @@
 import { resolveGroqModel } from "./ai/models";
 import { prisma } from "./prisma";
+import { parseProvinceList } from "./service-area";
+import { parseTimes } from "./reply-queue-core";
 
 export type AiProviderName = "auto" | "ollama" | "gemini" | "groq" | "rules";
 
@@ -35,6 +37,17 @@ export type AppSettings = {
   embedLastOk: boolean;
   embedLastMessage: string;
   embedLastAt: string;
+  serviceProvinces: string[];
+  serviceAreaNotifyOnly: boolean;
+  followUpDays: number;
+  replyQueueEnabled: boolean;
+  replyQueueTimes: string[];
+  replyDailyCap: number;
+  replyGapMinMinutes: number;
+  replyGapMaxMinutes: number;
+  replyAuthorDays: number;
+  replyGroupDailyCap: number;
+  replyMinScore: number;
 };
 
 function pick(db: string | undefined, env: string | undefined, fallback = "") {
@@ -91,6 +104,17 @@ export async function getSettings(): Promise<AppSettings> {
     embedLastOk: map.embed_last_ok === "true",
     embedLastMessage: map.embed_last_message || "",
     embedLastAt: map.embed_last_at || "",
+    serviceProvinces: parseProvinceList(map.service_provinces),
+    serviceAreaNotifyOnly: map.service_area_notify_only !== "false",
+    followUpDays: num(map.follow_up_days, 2, 0, 30),
+    replyQueueEnabled: map.reply_queue_enabled === "true",
+    replyQueueTimes: parseTimes(map.reply_queue_times ?? "09:00,18:00"),
+    replyDailyCap: num(map.reply_daily_cap, 20, 1, 100),
+    replyGapMinMinutes: num(map.reply_gap_min_minutes, 2, 0, 120),
+    replyGapMaxMinutes: Math.max(num(map.reply_gap_min_minutes, 2, 0, 120), num(map.reply_gap_max_minutes, 5, 0, 180)),
+    replyAuthorDays: num(map.reply_author_days, 7, 0, 90),
+    replyGroupDailyCap: num(map.reply_group_daily_cap, 5, 1, 50),
+    replyMinScore: num(map.reply_min_score, 60, 0, 100),
   };
 }
 
@@ -139,5 +163,16 @@ export function publicSettings(settings: AppSettings) {
     embedLastOk: settings.embedLastOk,
     embedLastMessage: settings.embedLastMessage,
     embedLastAt: settings.embedLastAt,
+    serviceProvinces: settings.serviceProvinces,
+    serviceAreaNotifyOnly: settings.serviceAreaNotifyOnly,
+    followUpDays: settings.followUpDays,
+    replyQueueEnabled: settings.replyQueueEnabled,
+    replyQueueTimes: settings.replyQueueTimes,
+    replyDailyCap: settings.replyDailyCap,
+    replyGapMinMinutes: settings.replyGapMinMinutes,
+    replyGapMaxMinutes: settings.replyGapMaxMinutes,
+    replyAuthorDays: settings.replyAuthorDays,
+    replyGroupDailyCap: settings.replyGroupDailyCap,
+    replyMinScore: settings.replyMinScore,
   };
 }

@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { authed } from "@/lib/guard";
 import { json } from "@/lib/http";
-import { postInclude, serializePost } from "@/lib/serialize";
+import { postInclude, serializePost, withAlsoIn } from "@/lib/serialize";
 import { getSettings } from "@/lib/settings";
 import { semanticRank } from "@/lib/smart/enrich";
 import { isListedAd, rankHybrid, searchTokens } from "@/lib/smart/search";
@@ -41,6 +41,10 @@ export async function GET(request: Request) {
   if (categoryId) and.push({ categoryId });
   if (subcategoryId) and.push({ subcategoryId });
   if (province) and.push({ province });
+  if (params.get("area") === "1") {
+    const area = (await getSettings()).serviceProvinces;
+    if (area.length) and.push({ OR: [{ province: null }, { province: { in: area } }] });
+  }
   if (sourceId) and.push({ sourceId });
   if (intent) and.push({ intent });
   if (params.get("pipeline") === "1") and.push({ pipelineStatus: { not: "none" } });
@@ -71,7 +75,7 @@ export async function GET(request: Request) {
         prisma.post.count({ where: keywordWhere }),
         prisma.post.findMany({ where: keywordWhere, include: postInclude, orderBy: [{ isAd: "asc" }, { score: "desc" }, { createdAt: "desc" }, { id: "asc" }], skip: (page - 1) * pageSize, take: pageSize }),
       ]);
-      return json({ posts: posts.map(serializePost), total, page, pageSize, semantic: false, searchScope: "ค้นด้วยคำจากโพสต์ทั้งหมดที่ตรงตัวกรอง" });
+      return json({ posts: await withAlsoIn(posts.map(serializePost)), total, page, pageSize, semantic: false, searchScope: "ค้นด้วยคำจากโพสต์ทั้งหมดที่ตรงตัวกรอง" });
     }
     const select = { id: true, text: true, isAd: true, embeddingJson: true, embeddingKey: true, embeddingConfig: true } as const;
     const candidateLimit = 1000;
@@ -98,7 +102,7 @@ export async function GET(request: Request) {
     // If the model is unavailable, return the complete paginated keyword search.
     if (ranked.warning) {
       const posts = await prisma.post.findMany({ where: keywordWhere, include: postInclude, orderBy: [{ score: "desc" }, { createdAt: "desc" }, { id: "asc" }], skip: (page - 1) * pageSize, take: pageSize });
-      return json({ posts: posts.map(serializePost), total: keywordTotal, page, pageSize, semantic: false, searchScope: "โมเดลค้นตามความหมายไม่พร้อม จึงค้นด้วยคำจากโพสต์ทั้งหมดที่ตรงตัวกรอง" });
+      return json({ posts: await withAlsoIn(posts.map(serializePost)), total: keywordTotal, page, pageSize, semantic: false, searchScope: "โมเดลค้นตามความหมายไม่พร้อม จึงค้นด้วยคำจากโพสต์ทั้งหมดที่ตรงตัวกรอง" });
     }
     const keywordIds = new Set(keywordPosts.map(post => post.id));
     const ordered = rankHybrid(q, pool.filter(post => ranked.scores.has(post.id) || keywordIds.has(post.id)), ranked.scores);
@@ -106,7 +110,7 @@ export async function GET(request: Request) {
     const full = await prisma.post.findMany({ where: { id: { in: slice.map(post => post.id) } }, include: postInclude });
     const byFullId = new Map(full.map(post => [post.id, post]));
     return json({
-      posts: slice.flatMap(post => { const row = byFullId.get(post.id); return row ? [serializePost(row)] : []; }),
+      posts: await withAlsoIn(slice.flatMap(post => { const row = byFullId.get(post.id); return row ? [serializePost(row)] : []; })),
       total: ordered.length,
       page,
       pageSize,
@@ -132,6 +136,6 @@ export async function GET(request: Request) {
     }),
   ]);
   const visible = [...posts].sort((left, right) => Number(isListedAd(left)) - Number(isListedAd(right)));
-  return json({ posts: visible.map(serializePost), total, page, pageSize, semantic: false });
+  return json({ posts: await withAlsoIn(visible.map(serializePost)), total, page, pageSize, semantic: false });
   } finally { recordTiming("search", performance.now() - started); }
 }

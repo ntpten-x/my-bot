@@ -30,6 +30,7 @@ type Filters = {
   sort: string;
   minScore: string;
   semantic: boolean;
+  area: boolean;
 };
 
 const INITIAL: Filters = {
@@ -48,6 +49,7 @@ const INITIAL: Filters = {
   sort: "score",
   minScore: "",
   semantic: false,
+  area: false,
 };
 
 function queryFrom(filters: Filters, page: number) {
@@ -67,7 +69,8 @@ function queryFrom(filters: Filters, page: number) {
   if (filters.sort) params.set("sort", filters.sort);
   if (filters.minScore) params.set("minScore", filters.minScore);
   if (filters.semantic) params.set("semantic", "1");
-  const days = filters.range === "today" ? 0 : filters.range === "3d" ? 3 : filters.range === "7d" ? 7 : filters.range === "30d" ? 30 : null;
+  if (filters.area) params.set("area", "1");
+  const days = filters.range === "today" ? 0 : filters.range === "3d" ? 3 : filters.range === "7d" ? 7 : filters.range === "30d" ? 30 : filters.range === "90d" ? 90 : null;
   if (days !== null) params.set("from", bangkokStart(days).toISOString());
   return params.toString();
 }
@@ -219,6 +222,7 @@ export default function FeedPage() {
           <option value="3d">3 วัน</option>
           <option value="7d">7 วัน</option>
           <option value="30d">30 วัน</option>
+          <option value="90d">90 วัน</option>
         </Select>
         <Button type="submit">ค้นหา</Button>
       </form>
@@ -229,6 +233,7 @@ export default function FeedPage() {
         <label className="flex items-center gap-2"><input type="checkbox" checked={filters.hideForbidden} onChange={(event) => update({ hideForbidden: event.target.checked })} /> ซ่อนคำต้องห้าม</label>
         <label className="flex items-center gap-2"><input type="checkbox" checked={filters.hideDuplicates} onChange={(event) => update({ hideDuplicates: event.target.checked })} /> ยุบโพสต์คล้ายกัน</label>
         <label className="flex items-center gap-2"><input type="checkbox" checked={filters.semantic} onChange={(event) => update({ semantic: event.target.checked })} /> ค้นตามความหมาย</label>
+        <label className="flex items-center gap-2" title="ตั้งจังหวัดได้ที่หน้า กฎอัตโนมัติ"><input type="checkbox" checked={filters.area} onChange={(event) => update({ area: event.target.checked })} /> เฉพาะพื้นที่ให้บริการ</label>
       </div>
       {error ? <p className="mt-4 text-sm text-red-700">{error}</p> : null}
       {loading ? <p className="mt-6 text-sm text-muted">กำลังโหลดฟีด...</p> : null}

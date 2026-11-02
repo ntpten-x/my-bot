@@ -12,6 +12,7 @@ export function timeAgo(iso: string | null | undefined) {
 
 export const PIPELINE = [
   { id: "following", label: "กำลังติดตาม" },
+  { id: "replied", label: "ตอบคอมเมนต์แล้ว" },
   { id: "contacted", label: "ทักแล้ว" },
   { id: "closed_won", label: "ปิดการขายได้" },
   { id: "closed_lost", label: "ปิดไม่สำเร็จ" },

@@ -25,17 +25,17 @@ model Session {
 }
 
 model Source {
-  id              String     @id @default(cuid())
+  id              String      @id @default(cuid())
   type            String
   name            String
-  url             String     @unique
-  enabled         Boolean    @default(true)
+  url             String      @unique
+  enabled         Boolean     @default(true)
   lastFetchedAt   DateTime?
   lastExtensionAt DateTime?
   lastError       String?
-  intervalMinutes Int        @default(10)
-  createdAt       DateTime   @default(now())
-  updatedAt       DateTime   @updatedAt
+  intervalMinutes Int         @default(10)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
   posts           Post[]
   fetchLogs       FetchLog[]
   fetchTasks      FetchTask[]
@@ -56,46 +56,50 @@ model Category {
 }
 
 model Post {
-  id              String         @id @default(cuid())
-  sourceId        String
-  source          Source         @relation(fields: [sourceId], references: [id], onDelete: Cascade)
-  externalUrl     String
-  authorName      String         @default("")
-  text            String
-  normalizedText  String
-  contentHash     String         @unique
-  postedAt        DateTime?
-  imagesJson      String         @default("[]")
-  categoryId      String?
-  category        Category?      @relation("PostCategory", fields: [categoryId], references: [id], onDelete: SetNull)
-  subcategoryId   String?
-  subcategory     Category?      @relation("PostSubcategory", fields: [subcategoryId], references: [id], onDelete: SetNull)
-  intent          String         @default("unknown")
-  province        String?
-  isAd            Boolean        @default(false)
-  keywordHitsJson String         @default("[]")
-  forbiddenHit    Boolean        @default(false)
-  isRead          Boolean        @default(false)
-  isSaved         Boolean        @default(false)
-  pipelineStatus  String         @default("none")
-  suggestedReply  String         @default("")
-  aiProvider      String?
-  score           Int            @default(0)
-  scoreReason     String         @default("")
-  embeddingJson   String         @default("")
-  embeddingKey    String         @default("")
-  embeddingConfig String         @default("")
-  embeddingRetryAt DateTime       @default("1970-01-01T00:00:00.000Z")
-  duplicateOfId   String?
-  dismissed       Boolean        @default(false)
-  ocrText         String         @default("")
-  extraUrlsJson   String         @default("[]")
-  aiJobs          AiJob[]
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
-  notes           Note[]
-  notifications   Notification[]
-  feedback        Feedback[]
+  id               String          @id @default(cuid())
+  sourceId         String
+  source           Source          @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  externalUrl      String
+  authorName       String          @default("")
+  text             String
+  normalizedText   String
+  contentHash      String          @unique
+  postedAt         DateTime?
+  imagesJson       String          @default("[]")
+  categoryId       String?
+  category         Category?       @relation("PostCategory", fields: [categoryId], references: [id], onDelete: SetNull)
+  subcategoryId    String?
+  subcategory      Category?       @relation("PostSubcategory", fields: [subcategoryId], references: [id], onDelete: SetNull)
+  intent           String          @default("unknown")
+  province         String?
+  isAd             Boolean         @default(false)
+  keywordHitsJson  String          @default("[]")
+  forbiddenHit     Boolean         @default(false)
+  isRead           Boolean         @default(false)
+  isSaved          Boolean         @default(false)
+  pipelineStatus   String          @default("none")
+  suggestedReply   String          @default("")
+  aiProvider       String?
+  score            Int             @default(0)
+  scoreReason      String          @default("")
+  embeddingJson    String          @default("")
+  embeddingKey     String          @default("")
+  embeddingConfig  String          @default("")
+  embeddingRetryAt DateTime        @default("1970-01-01T00:00:00.000Z")
+  duplicateOfId    String?
+  dismissed        Boolean         @default(false)
+  ocrText          String          @default("")
+  extraUrlsJson    String          @default("[]")
+  followUpAt       DateTime?
+  statusChangedAt  DateTime?
+  repliedAt        DateTime?
+  replyItem        ReplyQueueItem?
+  aiJobs           AiJob[]
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  notes            Note[]
+  notifications    Notification[]
+  feedback         Feedback[]
 
   @@unique([sourceId, externalUrl])
   @@index([createdAt])
@@ -106,6 +110,8 @@ model Post {
   @@index([normalizedText])
   @@index([sourceId, duplicateOfId, createdAt])
   @@index([embeddingConfig, embeddingRetryAt])
+  @@index([followUpAt])
+  @@index([duplicateOfId])
 }
 
 model AiJob {
@@ -236,4 +242,67 @@ model FetchLog {
   createdAt  DateTime @default(now())
 
   @@index([createdAt])
+}
+
+model ReplyTemplate {
+  id         String   @id @default(cuid())
+  name       String
+  body       String
+  categoryId String?
+  sortOrder  Int      @default(0)
+  useCount   Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model AutomationRule {
+  id            String    @id @default(cuid())
+  name          String
+  enabled       Boolean   @default(true)
+  categoryId    String?
+  keywords      String    @default("")
+  provinces     String    @default("")
+  intent        String    @default("")
+  minScore      Int       @default(0)
+  actionNotify  Boolean   @default(true)
+  actionSave    Boolean   @default(false)
+  actionDismiss Boolean   @default(false)
+  templateId    String?
+  hitCount      Int       @default(0)
+  lastHitAt     DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  hits          RuleHit[]
+}
+
+model RuleHit {
+  id        String         @id @default(cuid())
+  ruleId    String
+  rule      AutomationRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  postId    String
+  createdAt DateTime       @default(now())
+
+  @@unique([ruleId, postId])
+  @@index([postId])
+}
+
+// Assisted-reply queue: MY-BOT fills a draft and opens the post; the owner presses send.
+model ReplyQueueItem {
+  id         String    @id @default(cuid())
+  postId     String    @unique
+  post       Post      @relation(fields: [postId], references: [id], onDelete: Cascade)
+  sourceId   String
+  authorKey  String    @default("")
+  templateId String?
+  text       String
+  day        String
+  status     String    @default("queued")
+  openedAt   DateTime?
+  sentAt     DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([day, status])
+  @@index([status, createdAt])
+  @@index([authorKey, createdAt])
 }

@@ -8,6 +8,8 @@ import { enrichPosts } from "../smart/enrich";
 import { shouldNotifyExternal } from "../notify";
 import { queueExternalNotification } from "../notification-queue";
 import { workerLog } from "../log";
+import { applyAutomationRules } from "../automation";
+import { inServiceArea } from "../service-area";
 
 export const STUCK_JOB_MS = 2 * 60 * 1000;
 export const MAX_AI_ATTEMPTS = 10;
@@ -135,9 +137,11 @@ export async function processAiQueue() {
       } else await retry(job, errorText, delay, latencyMs);
     }
     claimed = [];
-    const ready = await prisma.post.findMany({ where: { id: { in: [...successIds] }, duplicateOfId: null }, include: { category: true, subcategory: true, source: true } });
+    await applyAutomationRules([...successIds]).catch(error => workerLog({ level: "error", message: "ใช้กฎอัตโนมัติไม่สำเร็จ", error: String(error).slice(0, 300) }));
+    const ready = await prisma.post.findMany({ where: { id: { in: [...successIds] }, duplicateOfId: null, dismissed: false }, include: { category: true, subcategory: true, source: true } });
     for (const post of ready) {
       if (post.score < 80 || !shouldNotifyExternal(post)) continue;
+      if (settings.serviceAreaNotifyOnly && !inServiceArea(post.province, settings.serviceProvinces)) continue;
       const already = await prisma.notification.count({ where: { postId: post.id, channel: { in: ["discord", "line", "email"] } } });
       if (!already) await queueExternalNotification(post.id, "ลีดร้อน");
     }

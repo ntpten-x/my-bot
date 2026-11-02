@@ -2,6 +2,9 @@ import { prisma } from "./prisma";
 import { getSettings } from "./settings";
 import { dispatchNotification, shouldNotifyExternal } from "./notify";
 import { workerLog } from "./log";
+import { inServiceArea } from "./service-area";
+
+export const RULE_PREFIX = "กฎ: ";
 
 // Reuse Notification for a small local outbox. Internal rows are hidden from the UI.
 export async function queueExternalNotification(postId: string, title: string) {
@@ -19,7 +22,10 @@ export async function processNotificationQueue(limit = 10) {
   });
   for (const job of jobs) {
     const post = job.post;
-    if (!post || post.duplicateOfId || post.dismissed || post.score < settings.notifyMinScore || !shouldNotifyExternal(post)) {
+    const fromRule = job.title.startsWith(RULE_PREFIX);
+    const outsideArea = !fromRule && settings.serviceAreaNotifyOnly && post && !inServiceArea(post.province, settings.serviceProvinces);
+    const blocked = !post || post.duplicateOfId || post.dismissed || post.isAd || post.forbiddenHit;
+    if (blocked || outsideArea || (!fromRule && (post.score < settings.notifyMinScore || !shouldNotifyExternal(post)))) {
       await prisma.notification.update({ where: { id: job.id }, data: { channel: "external_skipped", body: "" } });
       continue;
     }

@@ -21,6 +21,11 @@ export type Lead = {
   duplicateOfId: string | null;
   dismissed: boolean;
   extraUrls: string[];
+  contacts?: { type: "phone" | "line" | "link"; value: string; href: string }[];
+  followUpAt?: string | null;
+  statusChangedAt?: string | null;
+  repliedAt?: string | null;
+  alsoIn?: { id: string; url: string; source: string }[];
   category: { id: string; name: string; slug: string } | null;
   subcategory: { id: string; name: string; slug: string } | null;
   source: { id: string; name: string; url: string; type: string } | null;
@@ -47,4 +52,30 @@ export type SourceRow = {
   intervalMinutes: number;
   postCount: number;
   logs: { id: string; status: string; message: string; postsFound: number; createdAt: string }[];
+};
+
+export type ReplyTemplateRow = {
+  id: string;
+  name: string;
+  body: string;
+  categoryId: string | null;
+  sortOrder: number;
+  useCount: number;
+};
+
+export type AutomationRuleRow = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  categoryId: string | null;
+  keywords: string;
+  provinces: string;
+  intent: string;
+  minScore: number;
+  actionNotify: boolean;
+  actionSave: boolean;
+  actionDismiss: boolean;
+  templateId: string | null;
+  hitCount: number;
+  lastHitAt: string | null;
 };

@@ -10,6 +10,8 @@ import { dispatchNotification, shouldNotify, shouldNotifyExternal } from "./noti
 import { findSourceByUrl, loadCatalogFromDb, resolveCategoryIds } from "./sources";
 import { recordTiming } from "./metrics";
 import { queueExternalNotification } from "./notification-queue";
+import { applyAutomationRules } from "./automation";
+import { inServiceArea } from "./service-area";
 
 export type IncomingPost = {
   url: string;
@@ -157,12 +159,14 @@ export async function ingestPosts(input: {
   });
 
   if (uniqueIds.length) {
+    await applyAutomationRules(uniqueIds).catch((error) => console.error("[automation]", error));
     const ready = await prisma.post.findMany({
-      where: { id: { in: uniqueIds }, duplicateOfId: null },
+      where: { id: { in: uniqueIds }, duplicateOfId: null, dismissed: false },
       include: { category: true, subcategory: true, source: true },
     });
     for (const post of ready) {
       if (!shouldNotify(post) || post.score < settings.notifyMinScore) continue;
+      if (settings.serviceAreaNotifyOnly && !inServiceArea(post.province, settings.serviceProvinces)) continue;
       const title = post.score >= 80 ? "ลีดร้อน" : "ลีดใหม่";
       await dispatchNotification(post, settings, title);
       if (shouldNotifyExternal(post)) await queueExternalNotification(post.id, title);

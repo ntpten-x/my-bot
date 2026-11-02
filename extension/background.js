@@ -1,3 +1,5 @@
+importScripts("assist.js");
+
 const DEFAULTS = {
   apiBase: "http://localhost:8001",
   token: "",
@@ -104,7 +106,7 @@ async function cycle() {
       await chrome.storage.local.set({ schedules });
       await sleep(4000 + Math.random() * 6000);
     }
-  } catch (_error) {
+  } catch {
     // เปิดแอปไม่ติดหรือเน็ตหลุด — รอรอบถัดไป
   } finally {
     cycling = false;
@@ -145,7 +147,7 @@ async function pollTasks() {
         postsFound: result.postsFound,
       }).catch(() => undefined);
     }
-  } catch (_error) {
+  } catch {
     // แอปปิดอยู่
   } finally {
     cycling = false;
@@ -175,5 +177,69 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   forwardManual(message)
     .then(() => sendResponse({ ok: true }))
     .catch(() => sendResponse({ ok: false }));
+  return true;
+});
+
+// ---- Assisted reply (owner-triggered only; the owner presses send in Facebook) ----
+const ASSIST_TTL_MS = 3 * 60 * 1000;
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1"]);
+
+function fromMyBotApp(senderUrl, apiBase) {
+  try {
+    const page = new URL(senderUrl);
+    const app = new URL(apiBase);
+    if (page.origin === app.origin) return true;
+    return LOCAL_HOSTS.has(page.hostname) && LOCAL_HOSTS.has(app.hostname) && page.port === app.port;
+  } catch {
+    return false;
+  }
+}
+
+async function loadPendingAssist() {
+  const stored = await chrome.storage.session.get({ pendingAssist: [] });
+  return (stored.pendingAssist || []).filter((entry) => Date.now() - entry.at < ASSIST_TTL_MS);
+}
+
+async function acceptAssist(message, sender) {
+  const cfg = await loadConfig();
+  const assist = globalThis.MyBotAssist;
+  if (!sender.tab || !sender.url || !fromMyBotApp(sender.url, base(cfg))) return { ok: false, error: "คำขอไม่ได้มาจากหน้า MY-BOT" };
+  if (!assist.isFacebookUrl(message.url)) return { ok: false, error: "ลิงก์นี้ไม่ใช่โพสต์ Facebook" };
+  const text = String(message.text || "").slice(0, assist.MAX_TEXT).trim();
+  if (!text) return { ok: false, error: "ไม่มีข้อความ" };
+  const pending = (await loadPendingAssist()).slice(-4);
+  pending.push({ id: message.nonce || String(Date.now()), key: assist.postKey(message.url), openerTabId: sender.tab.id, text, at: Date.now() });
+  await chrome.storage.session.set({ pendingAssist: pending });
+  return { ok: true };
+}
+
+chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
+  if (info.status !== "complete" || !tab.url) return;
+  const assist = globalThis.MyBotAssist;
+  if (!assist.isFacebookUrl(tab.url)) return;
+  void (async () => {
+    const pending = await loadPendingAssist();
+    const key = assist.postKey(tab.url);
+    // Exact post match, or the tab MY-BOT itself just opened (Facebook sometimes rewrites post URLs).
+    const index = pending.findIndex(
+      (entry) => (entry.key && entry.key === key) || (tab.openerTabId !== undefined && tab.openerTabId === entry.openerTabId && Date.now() - entry.at < 30000),
+    );
+    if (index < 0) return;
+    const [entry] = pending.splice(index, 1);
+    await chrome.storage.session.set({ pendingAssist: pending });
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["assist.js"] });
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      func: (text) => globalThis.MyBotAssist.runAssist(text),
+      args: [entry.text],
+    });
+  })().catch(() => undefined);
+});
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type !== "assist-reply") return;
+  acceptAssist(message, sender)
+    .then(sendResponse)
+    .catch(() => sendResponse({ ok: false, error: "ส่วนขยายรับคำขอไม่ได้" }));
   return true;
 });
