@@ -5,7 +5,7 @@ import { aiCacheKey } from "./pipeline/classify";
 import { prepareLead } from "./pipeline/prepare";
 import { canonicalSourceUrl, normalizeUrl } from "./pipeline/normalize";
 import { touchExtension } from "./extension-status";
-import { enrichPosts } from "./smart/enrich";
+import { collapseIdenticalTexts, enrichPosts } from "./smart/enrich";
 import { dispatchNotification, shouldNotify, shouldNotifyExternal } from "./notify";
 import { findSourceByUrl, loadCatalogFromDb, resolveCategoryIds } from "./sources";
 
@@ -119,7 +119,17 @@ export async function ingestPosts(input: {
   }
 
   const aiProvider = "rules";
-  if (createdIds.length) await enqueueAiJobs(createdIds);
+  if (createdIds.length) await collapseIdenticalTexts(fresh.map((item) => item.lead.normalizedText));
+  const uniqueIds = createdIds.length
+    ? (
+        await prisma.post.findMany({
+          where: { id: { in: createdIds }, duplicateOfId: null },
+          select: { id: true },
+        })
+      ).map((post) => post.id)
+    : [];
+  duplicates += createdIds.length - uniqueIds.length;
+  if (uniqueIds.length) await enqueueAiJobs(uniqueIds);
 
   await prisma.source.update({
     where: { id: source.id },
@@ -130,19 +140,19 @@ export async function ingestPosts(input: {
     },
   });
   if (input.actor === "extension") await touchExtension(source.id);
-  if (createdIds.length) await enrichPosts(createdIds, [], settings);
+  if (uniqueIds.length) await enrichPosts(uniqueIds, [], settings);
   await prisma.fetchLog.create({
     data: {
       sourceId: source.id,
       status: "ok",
-      message: `${input.actor}: ใหม่ ${createdIds.length} ซ้ำ ${duplicates} จัดโดย ${aiProvider}`,
-      postsFound: createdIds.length,
+      message: `${input.actor}: ใหม่ ${uniqueIds.length} ซ้ำ ${duplicates} จัดโดย ${aiProvider}`,
+      postsFound: uniqueIds.length,
     },
   });
 
-  if (createdIds.length) {
+  if (uniqueIds.length) {
     const ready = await prisma.post.findMany({
-      where: { id: { in: createdIds } },
+      where: { id: { in: uniqueIds }, duplicateOfId: null },
       include: { category: true, subcategory: true, source: true },
     });
     for (const post of ready) {
@@ -153,7 +163,7 @@ export async function ingestPosts(input: {
 
   return {
     ok: true as const,
-    inserted: createdIds.length,
+    inserted: uniqueIds.length,
     duplicates,
     source: canonicalSourceUrl(source.url),
   };

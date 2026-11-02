@@ -20,6 +20,7 @@ export const PIPELINE = [
 export const INTENT_LABEL: Record<string, string> = {
   buyer: "กำลังหา",
   seller: "กำลังขาย",
+  ad: "โฆษณา",
   unknown: "ไม่ชัด",
 };
 

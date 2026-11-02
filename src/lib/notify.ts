@@ -146,7 +146,7 @@ export function keywordHitsOf(post: { keywordHitsJson: string }) {
 }
 
 export function shouldNotify(post: { isAd: boolean; forbiddenHit: boolean; intent: string; keywordHitsJson: string }) {
-  if (post.isAd || post.forbiddenHit) return false;
+  if (post.isAd || post.forbiddenHit || post.intent === "ad") return false;
   return keywordHitsOf(post).length > 0 || post.intent === "buyer";
 }
 

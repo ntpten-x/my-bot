@@ -5,7 +5,7 @@ import { json } from "@/lib/http";
 import { postInclude, serializePost } from "@/lib/serialize";
 import { getSettings } from "@/lib/settings";
 import { semanticRank } from "@/lib/smart/enrich";
-import { rankHybrid, searchTokens } from "@/lib/smart/search";
+import { isListedAd, rankHybrid, searchTokens } from "@/lib/smart/search";
 
 export const dynamic = "force-dynamic";
 
@@ -90,7 +90,10 @@ export async function GET(request: Request) {
       semantic: semantic && !ranked.warning,
     });
   }
-  const sort = params.get("sort") === "score" ? [{ score: "desc" as const }, { createdAt: "desc" as const }] : [{ createdAt: "desc" as const }];
+  const sort =
+    params.get("sort") === "score"
+      ? [{ isAd: "asc" as const }, { score: "desc" as const }, { createdAt: "desc" as const }]
+      : [{ isAd: "asc" as const }, { createdAt: "desc" as const }];
   const [total, posts] = await Promise.all([
     prisma.post.count({ where }),
     prisma.post.findMany({
@@ -101,5 +104,6 @@ export async function GET(request: Request) {
       take: pageSize,
     }),
   ]);
-  return json({ posts: posts.map(serializePost), total, page, pageSize, semantic: false });
+  const visible = [...posts].sort((left, right) => Number(isListedAd(left)) - Number(isListedAd(right)));
+  return json({ posts: visible.map(serializePost), total, page, pageSize, semantic: false });
 }

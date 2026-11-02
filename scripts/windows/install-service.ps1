@@ -24,7 +24,7 @@ shell.Environment("PROCESS").Item("OLLAMA_KEEP_ALIVE") = "30m"
 shell.Run "cmd /c set OLLAMA_HOST=127.0.0.1:41434&& set OLLAMA_MAX_LOADED_MODELS=2&& set OLLAMA_KEEP_ALIVE=30m&& ollama serve", 0, False
 WScript.Sleep 1500
 shell.CurrentDirectory = "$repoVbs"
-shell.Run "cmd /c set OLLAMA_HOST=127.0.0.1:41434&& set OLLAMA_MAX_LOADED_MODELS=2&& set OLLAMA_KEEP_ALIVE=30m&& set OLLAMA_BASE_URL=http://127.0.0.1:41434&& ""$nodeVbs"" scripts\start-all.mjs --prod", 0, False
+shell.Run "cmd /c mkdir data 2>nul & set OLLAMA_HOST=127.0.0.1:41434&& set OLLAMA_MAX_LOADED_MODELS=2&& set OLLAMA_KEEP_ALIVE=30m&& set OLLAMA_BASE_URL=http://127.0.0.1:41434&& ""$nodeVbs"" scripts\start-all.mjs --prod >> data\mybot-console.log 2>&1", 0, False
 "@
   Set-Content -Path $VbsPath -Value $vbs -Encoding ASCII
   Write-Host "Startup launcher written: $VbsPath"
@@ -39,7 +39,7 @@ Pop-Location
 
 $registered = $false
 try {
-  $Command = "Set-Location -LiteralPath '$Repo'; & '$Node' 'scripts/start-all.mjs' --prod"
+  $Command = "New-Item -ItemType Directory -Force -Path '$Repo\data' | Out-Null; Set-Location -LiteralPath '$Repo'; & '$Node' 'scripts/start-all.mjs' --prod *>> '$Repo\data\mybot-console.log'"
   $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -Command $Command"
   $Trigger = New-ScheduledTaskTrigger -AtLogOn
   $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -Hidden -ExecutionTimeLimit ([TimeSpan]::Zero)

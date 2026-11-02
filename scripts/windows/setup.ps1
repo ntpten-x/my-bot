@@ -178,7 +178,7 @@ Set shell = CreateObject("Wscript.Shell")
 shell.Run "cmd /c set OLLAMA_HOST=127.0.0.1:$ollamaPort&& set OLLAMA_MAX_LOADED_MODELS=2&& set OLLAMA_KEEP_ALIVE=30m&& ollama serve", 0, False
 WScript.Sleep 1500
 shell.CurrentDirectory = "$repoVbs"
-shell.Run "cmd /c set OLLAMA_HOST=127.0.0.1:$ollamaPort&& set OLLAMA_MAX_LOADED_MODELS=2&& set OLLAMA_KEEP_ALIVE=30m&& set OLLAMA_BASE_URL=$baseUrl&& ""$node"" scripts\start-all.mjs --prod", 0, False
+shell.Run "cmd /c mkdir data 2>nul & set OLLAMA_HOST=127.0.0.1:$ollamaPort&& set OLLAMA_MAX_LOADED_MODELS=2&& set OLLAMA_KEEP_ALIVE=30m&& set OLLAMA_BASE_URL=$baseUrl&& ""$node"" scripts\start-all.mjs --prod >> data\mybot-console.log 2>&1", 0, False
 "@
   Set-Content -LiteralPath (Join-Path $startup "MY-BOT.vbs") -Value $vbs -Encoding ASCII
   Write-Host "Wrote Startup\MY-BOT.vbs"

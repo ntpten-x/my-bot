@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 export const NEAR_DUPLICATE = 0.95;
 export const DUPLICATE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+export const CROSS_TEXT_DUP_MIN = 12;
 
 export function normalizedTextHash(text: string) {
   return createHash("sha256").update(text).digest("hex");
@@ -49,17 +50,17 @@ export function findNearDuplicate(input: {
 }) {
   const windowMs = input.windowMs ?? DUPLICATE_WINDOW_MS;
   const threshold = input.threshold ?? NEAR_DUPLICATE;
+  const ownHash = input.normalizedText ? normalizedTextHash(input.normalizedText) : "";
   for (const other of input.others) {
     if (other.id === undefined) continue;
-    if (other.sourceId !== input.sourceId) continue;
-    if (Math.abs(input.createdAt - other.createdAt) > windowMs) continue;
-    if (
-      input.normalizedText &&
-      other.normalizedText &&
-      normalizedTextHash(input.normalizedText) === normalizedTextHash(other.normalizedText)
-    ) {
+    const otherHash = other.normalizedText ? normalizedTextHash(other.normalizedText) : "";
+    const sameText = Boolean(ownHash) && ownHash === otherHash;
+    if (sameText && input.normalizedText.length >= CROSS_TEXT_DUP_MIN) {
       return { id: other.id, reason: "text" as const };
     }
+    if (other.sourceId !== input.sourceId) continue;
+    if (Math.abs(input.createdAt - other.createdAt) > windowMs) continue;
+    if (sameText) return { id: other.id, reason: "text" as const };
     if (input.vector && other.vector && cosine(input.vector, other.vector) > threshold) {
       return { id: other.id, reason: "embedding" as const };
     }

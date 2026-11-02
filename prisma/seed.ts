@@ -128,29 +128,48 @@ async function main() {
     const lead = prepareLead(demo, rules, catalog);
     const categoryId = rows.find((row) => row.slug === lead.categorySlug)?.id ?? null;
     const subcategoryId = lead.subcategorySlug ? rows.find((row) => row.slug === lead.subcategorySlug)?.id ?? null : null;
-    const found = await prisma.post.findUnique({ where: { contentHash: lead.hash } });
-    if (found) continue;
-    await prisma.post.create({
-      data: {
-        sourceId: source.id,
-        externalUrl: lead.url,
-        authorName: demo.authorName,
-        text: demo.text,
-        normalizedText: lead.normalizedText,
-        contentHash: lead.hash,
-        imagesJson: "[]",
-        categoryId,
-        subcategoryId,
-        intent: lead.intent,
-        province: lead.province,
-        isAd: lead.isAd,
-        keywordHitsJson: JSON.stringify(lead.watch),
-        forbiddenHit: lead.forbidden.length > 0,
-        suggestedReply: lead.suggestedReply,
-        aiProvider: "rules",
-        createdAt: new Date(Date.now() - demo.hoursAgo * 3600 * 1000),
-      },
+    const data = {
+      authorName: demo.authorName,
+      text: demo.text,
+      normalizedText: lead.normalizedText,
+      categoryId,
+      subcategoryId,
+      intent: lead.intent,
+      province: lead.province,
+      isAd: lead.isAd,
+      keywordHitsJson: JSON.stringify(lead.watch),
+      forbiddenHit: lead.forbidden.length > 0,
+      suggestedReply: lead.suggestedReply,
+    };
+    const byUrl = await prisma.post.findUnique({
+      where: { sourceId_externalUrl: { sourceId: source.id, externalUrl: lead.url } },
     });
+    if (byUrl) {
+      const hashOwner = await prisma.post.findUnique({ where: { contentHash: lead.hash } });
+      await prisma.post.update({
+        where: { id: byUrl.id },
+        data: { ...data, ...(!hashOwner || hashOwner.id === byUrl.id ? { contentHash: lead.hash } : {}) },
+      });
+      continue;
+    }
+    const byHash = await prisma.post.findUnique({ where: { contentHash: lead.hash } });
+    if (byHash) continue;
+    try {
+      await prisma.post.create({
+        data: {
+          ...data,
+          sourceId: source.id,
+          externalUrl: lead.url,
+          contentHash: lead.hash,
+          imagesJson: "[]",
+          aiProvider: "rules",
+          createdAt: new Date(Date.now() - demo.hoursAgo * 3600 * 1000),
+        },
+      });
+    } catch (error) {
+      if (typeof error === "object" && error !== null && "code" in error && (error as { code: string }).code === "P2002") continue;
+      throw error;
+    }
   }
 
   console.log("ใส่ข้อมูลเริ่มต้นแล้ว");

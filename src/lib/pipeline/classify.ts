@@ -38,7 +38,7 @@ export async function classifyWithChain(options: {
     for (const post of posts) {
       const hit = await cache.get(aiCacheKey(post.text, catalog, post.contentHash));
       if (hit && hit.provider !== "rules") {
-        byId.set(post.id, { ...hit.item, id: post.id });
+        byId.set(post.id, sanitizeAiItem({ ...hit.item, id: post.id }, post, catalog));
         fromCache.add(post.id);
       } else {
         uncached.push(post);

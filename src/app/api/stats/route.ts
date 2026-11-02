@@ -25,7 +25,7 @@ export async function GET() {
         _count: { _all: true },
       }),
       prisma.post.findMany({
-        where: { isAd: false, forbiddenHit: false },
+        where: { isAd: false, forbiddenHit: false, duplicateOfId: null },
         orderBy: { createdAt: "desc" },
         take: 6,
         include: postInclude,

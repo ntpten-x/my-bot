@@ -36,11 +36,18 @@ yarn-error.log*
 .env.*.local
 !.env.example
 
-# sqlite
+# sqlite and local runtime files
 /data/*.db
 /data/*.db-journal
+/data/*.db-wal
+/data/*.db-shm
+/data/*.sqlite*
+/data/*.log
 /data/backups/
-/data/mybot.log
+*.db-wal
+*.db-shm
+*.sqlite*
+*.traineddata
 /prisma/*.db
 /prisma/*.db-journal
 
@@ -54,8 +61,3 @@ agent-tools/
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-/data/*.log
-/data/*.db-wal
-/data/*.db-shm
-/data/*.sqlite*
-*.traineddata

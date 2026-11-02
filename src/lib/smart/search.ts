@@ -1,4 +1,11 @@
+import { scoreAd } from "../pipeline/ad-filter";
+
 const TOKEN = /[\p{L}\p{M}\p{N}]+/gu;
+const AD_RANK_PENALTY = 0.85;
+
+export function isListedAd(post: { text: string; isAd?: boolean }) {
+  return Boolean(post.isAd) || scoreAd(post.text).isAd;
+}
 
 export function searchTokens(query: string): string[] {
   const raw = query.match(TOKEN) ?? [];
@@ -39,7 +46,7 @@ export function blendScores(lexical: number, semantic: number): number {
   return lex * 0.72 + sem * 0.28 + product;
 }
 
-export function rankHybrid<T extends { id: string; text: string }>(
+export function rankHybrid<T extends { id: string; text: string; isAd?: boolean }>(
   query: string,
   posts: T[],
   semantic: Map<string, number> = new Map(),
@@ -47,7 +54,7 @@ export function rankHybrid<T extends { id: string; text: string }>(
   const ranked = posts.map((post, index) => ({
     post,
     index,
-    score: blendScores(lexicalScore(query, post.text), semantic.get(post.id) ?? 0),
+    score: blendScores(lexicalScore(query, post.text), semantic.get(post.id) ?? 0) - (isListedAd(post) ? AD_RANK_PENALTY : 0),
   }));
   ranked.sort((left, right) => right.score - left.score || left.index - right.index);
   const seenId = new Set<string>();

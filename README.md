@@ -6,7 +6,7 @@
 
 ส่วนขยาย **อ่านอย่างเดียว** ไม่โพสต์ ไม่คอมเมนต์ และไม่เรียก API ภายในของ Facebook
 
-เครื่อง Windows ใหม่ให้เปิดคู่มือ [docs/SETUP.th.md](docs/SETUP.th.md) แล้วรัน
+เอเจนต์ที่เปิดรีโปนี้ให้อ่าน [AGENTS.md](AGENTS.md) ก่อนลงมือ เครื่อง Windows ใหม่ให้เปิดคู่มือ [docs/SETUP.th.md](docs/SETUP.th.md) แล้วรัน
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\windows\setup.ps1

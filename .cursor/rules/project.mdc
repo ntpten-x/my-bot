@@ -1,0 +1,6 @@
+---
+description: How to run and change MY-BOT
+alwaysApply: true
+---
+
+Read AGENTS.md before setup, code changes, or a commit. It owns the fresh-machine checklist, secrets, the read-only Facebook extension, ASCII PowerShell, and the test-plus-build gate.

@@ -6,7 +6,7 @@ export type Lead = {
   postedAt: string | null;
   createdAt: string;
   images: string[];
-  intent: "buyer" | "seller" | "unknown";
+  intent: "buyer" | "seller" | "ad" | "unknown";
   province: string | null;
   isAd: boolean;
   isRead: boolean;

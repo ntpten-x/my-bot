@@ -24,7 +24,7 @@ export function buildLeadEmbed(input: {
   group?: string;
   reply?: string;
 }) {
-  const intentLabel = input.intent === "buyer" ? "กำลังหา" : input.intent === "seller" ? "กำลังขาย" : "ไม่ชัด";
+  const intentLabel = input.intent === "buyer" ? "กำลังหา" : input.intent === "seller" ? "กำลังขาย" : input.intent === "ad" ? "โฆษณา" : "ไม่ชัด";
   const reply = (input.reply || "ยังไม่มีคำตอบแนะนำ").slice(0, 900);
   return {
     title: input.title.slice(0, 200),

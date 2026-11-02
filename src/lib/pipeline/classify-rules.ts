@@ -1,5 +1,5 @@
 import type { CatNode } from "./catalog";
-import { detectIntent, type Intent } from "./intent";
+import { STRONG_BUYER, STRONG_SELLER, detectIntent, type Intent } from "./intent";
 import { normalizeText } from "./normalize";
 import { extractProvince, normalizeProvinceName } from "./province";
 import { scoreAd } from "./ad-filter";
@@ -93,14 +93,23 @@ export function ruleItem(post: ClassifyInput, catalog: CatNode[]): AiItem {
 export function sanitizeAiItem(item: LooseAiItem, post: ClassifyInput, catalog: CatNode[]): AiItem {
   const fallback = ruleItem(post, catalog);
   const parent = catalog.find((node) => node.slug === item.categorySlug && !node.parentSlug);
-  const categorySlug = parent ? parent.slug : fallback.categorySlug;
+  let categorySlug = parent ? parent.slug : fallback.categorySlug;
   let subcategorySlug: string | null = null;
   if (item.subcategorySlug) {
     const child = catalog.find((node) => node.slug === item.subcategorySlug && node.parentSlug === categorySlug);
     if (child) subcategorySlug = child.slug;
   }
   if (!subcategorySlug && fallback.categorySlug === categorySlug) subcategorySlug = fallback.subcategorySlug;
-  const intent: Intent = item.intent === "buyer" || item.intent === "seller" ? item.intent : fallback.intent;
+  if ((categorySlug === "other" || !parent) && fallback.categorySlug !== "other") {
+    categorySlug = fallback.categorySlug;
+    subcategorySlug = fallback.subcategorySlug;
+  }
+  const isAd = Boolean(item.isAd) || fallback.isAd;
+  let intent: Intent;
+  if (isAd || fallback.intent === "ad") intent = "ad";
+  else if (STRONG_SELLER.test(post.text) && !STRONG_BUYER.test(post.text)) intent = "seller";
+  else if (item.intent === "buyer" || item.intent === "seller" || item.intent === "ad") intent = item.intent;
+  else intent = fallback.intent;
   const province = normalizeProvinceName(item.province) || fallback.province;
   const suggestedReply =
     typeof item.suggestedReply === "string" && item.suggestedReply.trim()
@@ -112,7 +121,7 @@ export function sanitizeAiItem(item: LooseAiItem, post: ClassifyInput, catalog: 
     subcategorySlug,
     intent,
     province,
-    isAd: Boolean(item.isAd) || fallback.isAd,
+    isAd,
     suggestedReply,
     urgency: typeof item.urgency === "number" ? Math.max(0, Math.min(1, item.urgency)) : fallback.urgency,
     hasBudget: typeof item.hasBudget === "boolean" ? item.hasBudget : fallback.hasBudget,

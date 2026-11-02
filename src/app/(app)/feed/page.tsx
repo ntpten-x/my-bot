@@ -202,6 +202,7 @@ export default function FeedPage() {
           <option value="">ทุกเจตนา</option>
           <option value="buyer">กำลังหา</option>
           <option value="seller">กำลังขาย</option>
+          <option value="ad">โฆษณา</option>
           <option value="unknown">ไม่ชัด</option>
         </Select>
         <Select value={filters.sort} onChange={(event) => update({ sort: event.target.value })}>

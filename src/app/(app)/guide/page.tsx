@@ -75,7 +75,7 @@ export default function GuidePage() {
       <Card className="space-y-2 text-sm leading-6">
         <h2 className="font-semibold">หลังอัปเดต</h2>
         <p>รัน npm run db:migrate แล้ว npm run db:seed จากนั้นเปิดแอปให้ worker จัดหมวดโพสต์เดิมใหม่ ถ้าต้องการลบประกาศตัวอย่างที่ปิดไว้ รัน npm run db:clean-samples</p>
-        <p>หน้าแหล่งข้อมูลโชว์สาเหตุเมื่อดึงไม่สำเร็จ บันทึกงานของ worker อยู่ที่ data/mybot.log มีรหัสงาน ผู้ให้บริการ AI เวลาที่ใช้ และข้อผิดพลาด</p>
+        <p>หน้าแหล่งข้อมูลโชว์สาเหตุเมื่อดึงไม่สำเร็จ บันทึกงานของ worker อยู่ที่ data/mybot.log และข้อความจอของตัวเปิดอัตโนมัติอยู่ที่ data/mybot-console.log</p>
         <p>ตรวจว่าเว็บยังตอบโดยไม่ต้องเข้าสู่ระบบได้ที่ /api/v1/health จะได้เฉพาะ ok กับเลขเวอร์ชัน</p>
       </Card>
       <Card className="space-y-2 text-sm leading-6">

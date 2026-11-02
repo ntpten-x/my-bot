@@ -33,7 +33,7 @@ export function ruleSignals(text: string): ScoreSignals {
 
 export function scoreLead(input: ScoreInput): { score: number; reason: string } {
   if (input.forbidden) return { score: 5, reason: "มีคำต้องห้าม" };
-  if (input.isAd) return { score: 8, reason: "ดูเหมือนโฆษณาหรือประกาศขายส่ง" };
+  if (input.isAd || input.intent === "ad") return { score: 8, reason: "ดูเหมือนโฆษณาหรือประกาศขายส่ง" };
   const signals = input.signals ?? ruleSignals(input.text);
   let score = 0;
   const bits: string[] = [];

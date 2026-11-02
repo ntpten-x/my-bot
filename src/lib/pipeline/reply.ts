@@ -7,5 +7,6 @@ export function draftReply(intent: Intent, categoryName: string): string {
   if (intent === "seller") {
     return `สวัสดีครับ สนใจประกาศในหมวด${categoryName} รบกวนขอรายละเอียดราคาและสภาพเพิ่มเติมหน่อยครับ`;
   }
+  if (intent === "ad") return "";
   return `สวัสดีครับ ขออนุญาตสอบถามรายละเอียดเพิ่มเติมจากประกาศนี้หน่อยครับ`;
 }
