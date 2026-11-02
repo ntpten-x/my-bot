@@ -8,6 +8,7 @@ import { checkExtensionSilence } from "../lib/extension-status";
 import { maybeSendScheduledSummary } from "../lib/smart/daily";
 import { processAiQueue } from "../lib/ai/queue";
 import { maybeBackupDatabase } from "../lib/backup";
+import { backfillEmbeddings } from "../lib/smart/backfill";
 
 let running = false;
 
@@ -44,6 +45,7 @@ async function tick() {
     await maybeSendScheduledSummary();
     await maybeBackupDatabase();
     await processAiQueue();
+    await backfillEmbeddings(5);
   } catch (error) {
     console.error("[worker]", error instanceof Error ? error.message : error);
   } finally {

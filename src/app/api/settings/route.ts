@@ -3,6 +3,7 @@ import { authed } from "@/lib/guard";
 import { json } from "@/lib/http";
 import { getSettings, publicSettings, upsertSettings } from "@/lib/settings";
 import { clearProviderHealthCache } from "@/lib/ai/health";
+import { clearOllamaUrlCache } from "@/lib/ai/ollama-url";
 
 export const dynamic = "force-dynamic";
 
@@ -81,6 +82,7 @@ export async function PUT(request: Request) {
   set("ocr_enabled", body.ocrEnabled);
   set("vision_ocr", body.visionOcr);
   clearProviderHealthCache();
+  clearOllamaUrlCache();
   await upsertSettings(entries);
   return json({ settings: publicSettings(await getSettings()) });
 }

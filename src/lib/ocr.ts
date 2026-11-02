@@ -1,6 +1,7 @@
 import { createHash } from "crypto";
 import { prisma } from "./prisma";
 import type { AppSettings } from "./settings";
+import { resolveOllamaBaseUrl } from "./ai/ollama-url";
 
 const MAX_BYTES = 2_000_000;
 const MAX_IMAGES = 3;
@@ -23,13 +24,14 @@ export async function downloadImage(url: string): Promise<Buffer | null> {
 async function readWithVision(bytes: Buffer, settings: AppSettings): Promise<string | null> {
   if (!settings.visionOcr) return null;
   try {
-    const tags = await fetch(`${settings.ollamaBaseUrl}/api/tags`, { signal: AbortSignal.timeout(1500) });
+    const ollamaBase = await resolveOllamaBaseUrl(settings.ollamaBaseUrl);
+    const tags = await fetch(`${ollamaBase}/api/tags`, { signal: AbortSignal.timeout(1500) });
     if (!tags.ok) return null;
     const data = await tags.json();
     const names: string[] = (data.models ?? []).map((model: { name?: string }) => model.name ?? "");
     const model = names.find((name) => /qwen2\.5vl|llava/i.test(name));
     if (!model) return null;
-    const response = await fetch(`${settings.ollamaBaseUrl}/api/chat`, {
+    const response = await fetch(`${ollamaBase}/api/chat`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({

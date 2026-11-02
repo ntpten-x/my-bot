@@ -4,6 +4,7 @@ import type { AppSettings } from "../settings";
 import { probeProvider } from "./health";
 import { ProviderHttpError, backoffMs, takeToken } from "./bucket";
 import { effectiveGroqModel, pickGroqModel, rememberGroqChoice } from "./models";
+import { resolveOllamaBaseUrl } from "./ollama-url";
 import { extractAiItems } from "./parse";
 import { AI_SYSTEM, userPrompt } from "./prompt";
 
@@ -51,7 +52,8 @@ function assertRate(name: string) {
 
 export async function ollamaClassify(posts: ClassifyInput[], catalog: CatNode[], settings: AppSettings) {
   assertRate("ollama");
-  const data = (await postJson(`${settings.ollamaBaseUrl}/api/chat`, {
+  const ollamaBase = await resolveOllamaBaseUrl(settings.ollamaBaseUrl);
+  const data = (await postJson(`${ollamaBase}/api/chat`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({

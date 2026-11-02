@@ -34,6 +34,9 @@ type Settings = {
   visionOcr: boolean;
   lastBackupAt: string;
   lastBackupFile: string;
+  embedLastOk: boolean;
+  embedLastMessage: string;
+  embedLastAt: string;
 };
 
 export default function SettingsPage() {
@@ -205,6 +208,33 @@ export default function SettingsPage() {
               <Label>โมเดลฝังข้อความ Gemini</Label>
               <Input value={settings.geminiEmbedModel} onChange={(event) => setSettings({ ...settings, geminiEmbedModel: event.target.value })} />
             </div>
+          </div>
+          <p className="text-sm text-muted">
+            สถานะ embedding: {settings.embedLastMessage || "ยังไม่ได้ทดสอบ"} {settings.embedLastAt ? `(${settings.embedLastAt})` : ""}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" onClick={async () => {
+              setMessage("");
+              setError("");
+              try {
+                const data = await api<{ ok: boolean; message: string; dimensions: number; missing: number }>("/api/settings/test-embed", { method: "POST" });
+                const text = `${data.message} ขาดอีก ${data.missing} โพสต์`;
+                if (data.ok) setMessage(text);
+                else setError(text);
+              } catch (err) {
+                setError(err instanceof ApiError ? err.message : "ทดสอบ embedding ไม่สำเร็จ");
+              }
+            }}>ทดสอบ embedding</Button>
+            <Button type="button" variant="outline" onClick={async () => {
+              setMessage("");
+              setError("");
+              try {
+                const data = await api<{ filled: number; remaining: number }>("/api/settings/backfill-embeddings", { method: "POST" });
+                setMessage(`เติม embedding แล้ว ${data.filled} เหลือ ${data.remaining}`);
+              } catch (err) {
+                setError(err instanceof ApiError ? err.message : "เติม embedding ไม่สำเร็จ");
+              }
+            }}>เติมโพสต์ที่ยังไม่มีเวกเตอร์</Button>
           </div>
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={settings.ocrEnabled} onChange={(event) => setSettings({ ...settings, ocrEnabled: event.target.checked })} />

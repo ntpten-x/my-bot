@@ -95,7 +95,7 @@ export async function enrichPosts(postIds: string[], classified: AiItem[], setti
 
 export async function semanticRank(query: string, settings: AppSettings, posts: { id: string; embeddingJson: string }[]) {
   const embedded = await embedText(query, settings);
-  if (!embedded.vector) return { warning: "ยังไม่มีโมเดลฝังข้อความ (Ollama bge-m3 หรือ Gemini) จึงค้นด้วยคำแทน", scores: new Map<string, number>() };
+  if (!embedded.vector) return { warning: embedded.message || "ยังไม่มีโมเดลฝังข้อความ จึงค้นด้วยคำแทน", scores: new Map<string, number>() };
   const scores = new Map<string, number>();
   for (const post of posts) {
     const vector = readVector(post.embeddingJson);

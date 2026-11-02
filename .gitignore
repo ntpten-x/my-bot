@@ -53,3 +53,10 @@ agent-tools/
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# MY-BOT runtime data (added)
+/data/*.log
+/data/*.db-wal
+/data/*.db-shm
+/data/*.sqlite*
+*.traineddata

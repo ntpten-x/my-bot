@@ -6,6 +6,14 @@
 
 ส่วนขยาย **อ่านอย่างเดียว** ไม่โพสต์ ไม่คอมเมนต์ และไม่เรียก API ภายในของ Facebook
 
+เครื่อง Windows ใหม่ให้เปิดคู่มือ [docs/SETUP.th.md](docs/SETUP.th.md) แล้วรัน
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\windows\setup.ps1
+```
+
+ตรวจว่าพร้อมด้วย `npm run doctor` หลังเข้าแอปแล้วดูหน้า **วิธีใช้**
+
 ## สิ่งที่ต้องติดตั้งก่อน
 
 1. [Node.js 20 หรือใหม่กว่า](https://nodejs.org) เลือกตัว LTS แล้วกดติดตั้งแบบปกติ
@@ -181,9 +189,9 @@ npm run start:prod
 powershell -ExecutionPolicy Bypass -File scripts\windows\install-service.ps1
 ```
 
-สคริปต์นี้ build ให้หนึ่งครั้ง แล้วลงทะเบียนงานชื่อ `MY-BOT` ใน Task Scheduler แบบหน้าต่างซ่อน รีสตาร์ตได้ 3 ครั้งห่างกัน 1 นาที
+สคริปต์นี้ build ให้หนึ่งครั้ง แล้วพยายามลงทะเบียนงานชื่อ `MY-BOT` ใน Task Scheduler แบบหน้าต่างซ่อน รีสตาร์ตได้ 3 ครั้งห่างกัน 1 นาที ถ้าบัญชีไม่ได้เป็นผู้ดูแลระบบและ Task Scheduler ตอบ access denied สคริปต์จะวาง `MY-BOT.vbs` ในโฟลเดอร์ Startup แทน ไฟล์นั้นเปิด Ollama ที่ `127.0.0.1:41434` แล้วเปิด MY-BOT แบบซ่อนทุกครั้งที่ล็อกอิน
 
-เอาออก
+เอาออกทั้งงานและไฟล์ Startup
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\windows\uninstall-service.ps1
@@ -216,7 +224,8 @@ pm2 save
 - หน้าเว็บขึ้นว่าเชื่อมฐานข้อมูลไม่ได้: รัน `npm run db:migrate` อีกครั้ง
 - ส่วนขยายส่งไม่เข้า: ตรวจว่าแอปยังเปิดอยู่ โทเคนตรงกับหน้าตั้งค่า และที่อยู่เป็น `http://localhost:8001`
 - กลุ่มไม่มีโพสต์ใหม่: ต้องล็อกอิน Facebook ใน Chrome นั้น และลิงก์ในหน้าแหล่งข้อมูลต้องเป็นกลุ่มที่คุณเข้าได้
-- Ollama ทดสอบไม่ผ่าน: เปิดแอป Ollama ก่อน และรัน `ollama pull qwen2.5:7b`
+- Ollama ทดสอบไม่ผ่าน: เปิดแอป Ollama ก่อน ถ้าพอร์ต 11434 ใช้ไม่ได้ ให้รัน `set OLLAMA_HOST=127.0.0.1:41434` แล้วเปิด `ollama serve` ระบบจะลอง 11434 ก่อนแล้วจึง 41434
+- ค้นตามความหมายไม่เจอ: หน้าตั้งค่ากดทดสอบ embedding แล้วกดเติมโพสต์ที่ยังไม่มีเวกเตอร์ หรือรัน `npm run db:backfill-embeddings` ต้องมีโมเดล `bge-m3` (`ollama pull bge-m3`)
 - ลืมรหัสผ่าน: ลบไฟล์ `data/mybot.db` แล้วรัน `npm run db:migrate` กับ `npm run db:seed` ใหม่ ข้อมูลลีดจะหายไปด้วย
 
 ## ข้อควรรู้

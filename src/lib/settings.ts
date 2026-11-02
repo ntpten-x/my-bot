@@ -32,6 +32,9 @@ export type AppSettings = {
   visionOcr: boolean;
   lastBackupAt: string;
   lastBackupFile: string;
+  embedLastOk: boolean;
+  embedLastMessage: string;
+  embedLastAt: string;
 };
 
 function pick(db: string | undefined, env: string | undefined, fallback = "") {
@@ -85,6 +88,9 @@ export async function getSettings(): Promise<AppSettings> {
     visionOcr: map.vision_ocr !== "false",
     lastBackupAt: map.backup_last_at || "",
     lastBackupFile: map.backup_last_file || "",
+    embedLastOk: map.embed_last_ok === "true",
+    embedLastMessage: map.embed_last_message || "",
+    embedLastAt: map.embed_last_at || "",
   };
 }
 
@@ -130,5 +136,8 @@ export function publicSettings(settings: AppSettings) {
     visionOcr: settings.visionOcr,
     lastBackupAt: settings.lastBackupAt,
     lastBackupFile: settings.lastBackupFile,
+    embedLastOk: settings.embedLastOk,
+    embedLastMessage: settings.embedLastMessage,
+    embedLastAt: settings.embedLastAt,
   };
 }

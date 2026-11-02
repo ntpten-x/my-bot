@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Bell, Bookmark, Bug, LayoutDashboard, Lightbulb, LogOut, Radar, Rss, Settings, Sun, Tags } from "lucide-react";
+import { Bell, BookOpen, Bookmark, Bug, LayoutDashboard, Lightbulb, LogOut, Radar, Rss, Settings, Sun, Tags } from "lucide-react";
 import { api } from "./api";
 import { cn } from "@/lib/utils";
 
@@ -17,6 +17,7 @@ const NAV = [
   { href: "/learn", label: "เรียนรู้", icon: Lightbulb },
   { href: "/summaries", label: "สรุปรายวัน", icon: Sun },
   { href: "/notifications", label: "การแจ้งเตือน", icon: Bell },
+  { href: "/guide", label: "วิธีใช้", icon: BookOpen },
   { href: "/settings", label: "ตั้งค่า", icon: Settings },
 ];
 

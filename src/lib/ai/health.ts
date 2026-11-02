@@ -1,5 +1,6 @@
 import type { AppSettings } from "../settings";
 import { groqAvailability, rememberGroqChoice } from "./models";
+import { resolveOllamaBaseUrl } from "./ollama-url";
 
 type Health = { ok: boolean; message: string; at: number };
 
@@ -20,7 +21,8 @@ async function probeOnce(name: string, settings: AppSettings): Promise<{ ok: boo
   if (name === "rules") return { ok: true, message: "ตัวคัดด้วยคีย์เวิร์ดพร้อมใช้งานเสมอ ไม่ต้องต่อเน็ต" };
   try {
     if (name === "ollama") {
-      const response = await fetch(`${settings.ollamaBaseUrl}/api/tags`, { signal: AbortSignal.timeout(1500) });
+      const ollamaBase = await resolveOllamaBaseUrl(settings.ollamaBaseUrl);
+      const response = await fetch(`${ollamaBase}/api/tags`, { signal: AbortSignal.timeout(1500) });
       if (!response.ok) return { ok: false, message: `Ollama ใช้ไม่ได้: ${await errorText(response)}` };
       const data = await response.json();
       const names: string[] = (data.models ?? []).map((model: { name?: string }) => model.name ?? "");
