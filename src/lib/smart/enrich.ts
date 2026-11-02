@@ -1,0 +1,106 @@
+import { prisma } from "../prisma";
+import type { AppSettings } from "../settings";
+import type { AiItem } from "../pipeline/classify-rules";
+import { embedText } from "./embed";
+import { preferenceScore } from "./preference";
+import { ruleSignals, scoreLead } from "./score";
+import { cosine, nearestDuplicate } from "./vector";
+
+function readVector(value: string | null | undefined) {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.map(Number) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function loadCentroids() {
+  const rows = await prisma.setting.findMany({
+    where: { key: { in: ["pref_liked_centroid", "pref_disliked_centroid"] } },
+  });
+  const map = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+  return {
+    liked: readVector(map.pref_liked_centroid),
+    disliked: readVector(map.pref_disliked_centroid),
+  };
+}
+
+export async function enrichPosts(postIds: string[], classified: AiItem[], settings: AppSettings) {
+  if (!postIds.length) return;
+  const posts = await prisma.post.findMany({
+    where: { id: { in: postIds } },
+    include: { source: true, category: true },
+  });
+  const weights = await prisma.preferenceWeight.findMany();
+  const centroids = await loadCentroids();
+  const since = new Date(Date.now() - 7 * 24 * 3600 * 1000);
+  const recent = await prisma.post.findMany({
+    where: { createdAt: { gte: since }, embeddingJson: { not: "" }, id: { notIn: postIds } },
+    select: { id: true, embeddingJson: true },
+    orderBy: { createdAt: "desc" },
+    take: 400,
+  });
+  const neighbors = recent
+    .map((row) => ({ id: row.id, vector: readVector(row.embeddingJson) }))
+    .filter((row): row is { id: string; vector: number[] } => Array.isArray(row.vector));
+
+  for (const post of posts) {
+    const item = classified.find((row) => row.id === post.id);
+    const embedded = await embedText(post.text, settings);
+    const vector = embedded.vector;
+    const duplicate = vector ? nearestDuplicate(vector, neighbors) : null;
+    const ageHours = Math.max(0, (Date.now() - post.createdAt.getTime()) / 3600000);
+    let keywords: string[] = [];
+    try {
+      const parsed = JSON.parse(post.keywordHitsJson);
+      if (Array.isArray(parsed)) keywords = parsed.map(String);
+    } catch {
+      keywords = [];
+    }
+    const preference = preferenceScore(
+      weights,
+      { category: post.category?.slug, keywords, sourceId: post.sourceId, author: post.authorName },
+      vector,
+      centroids.liked,
+      centroids.disliked,
+    );
+    const signals = item
+      ? { urgency: item.urgency, hasBudget: item.hasBudget, specificity: item.specificity }
+      : ruleSignals(post.text);
+    const scored = scoreLead({
+      text: post.text,
+      intent: post.intent,
+      isAd: post.isAd,
+      forbidden: post.forbiddenHit,
+      keywordHits: keywords.length,
+      ageHours,
+      sourceQuality: post.source.lastError ? 0.35 : 0.85,
+      signals,
+      preference,
+    });
+    await prisma.post.update({
+      where: { id: post.id },
+      data: {
+        score: scored.score,
+        scoreReason: scored.reason,
+        embeddingJson: vector ? JSON.stringify(vector) : "",
+        duplicateOfId: duplicate?.id ?? null,
+      },
+    });
+    if (vector) neighbors.push({ id: post.id, vector });
+  }
+}
+
+export async function semanticRank(query: string, settings: AppSettings, posts: { id: string; embeddingJson: string }[]) {
+  const embedded = await embedText(query, settings);
+  if (!embedded.vector) return { warning: "ยังไม่มีโมเดลฝังข้อความ (Ollama bge-m3 หรือ Gemini) จึงค้นด้วยคำแทน", scores: new Map<string, number>() };
+  const scores = new Map<string, number>();
+  for (const post of posts) {
+    const vector = readVector(post.embeddingJson);
+    if (!vector) continue;
+    scores.set(post.id, cosine(embedded.vector, vector));
+  }
+  return { warning: "", scores };
+}

@@ -1,0 +1,134 @@
+import { resolveGroqModel } from "./ai/models";
+import { prisma } from "./prisma";
+
+export type AiProviderName = "auto" | "ollama" | "gemini" | "groq" | "rules";
+
+export type AppSettings = {
+  aiProvider: AiProviderName;
+  ollamaBaseUrl: string;
+  ollamaModel: string;
+  geminiModel: string;
+  geminiApiKey: string;
+  groqModel: string;
+  groqApiKey: string;
+  fetchIntervalMinutes: number;
+  jitterMinutes: number;
+  maxGroupsPerCycle: number;
+  extensionToken: string;
+  lineToken: string;
+  lineUserId: string;
+  discordWebhook: string;
+  notifyEmailTo: string;
+  smtpHost: string;
+  smtpPort: number;
+  smtpUser: string;
+  smtpPass: string;
+  notifySound: boolean;
+  notifyMinScore: number;
+  summaryTime: string;
+  embedModel: string;
+  geminiEmbedModel: string;
+  ocrEnabled: boolean;
+  visionOcr: boolean;
+  lastBackupAt: string;
+  lastBackupFile: string;
+};
+
+function pick(db: string | undefined, env: string | undefined, fallback = "") {
+  if (db && db.trim()) return db.trim();
+  if (env && env.trim()) return env.trim();
+  return fallback;
+}
+
+function num(value: string | undefined, fallback: number, min: number, max: number) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(parsed)));
+}
+
+export async function readSettingMap() {
+  const rows = await prisma.setting.findMany();
+  return Object.fromEntries(rows.map((row) => [row.key, row.value]));
+}
+
+export async function getSettings(): Promise<AppSettings> {
+  const map = await readSettingMap();
+  const env = process.env;
+  const provider = pick(map.ai_provider, undefined, "auto");
+  const allowed: AiProviderName[] = ["auto", "ollama", "gemini", "groq", "rules"];
+  return {
+    aiProvider: (allowed.includes(provider as AiProviderName) ? provider : "auto") as AiProviderName,
+    ollamaBaseUrl: pick(map.ollama_base_url, env.OLLAMA_BASE_URL, "http://127.0.0.1:11434").replace(/\/$/, ""),
+    ollamaModel: pick(map.ollama_model, env.OLLAMA_MODEL, "qwen2.5:7b"),
+    geminiModel: pick(map.gemini_model, undefined, "gemini-2.0-flash"),
+    geminiApiKey: pick(map.gemini_api_key, env.GEMINI_API_KEY),
+    groqModel: resolveGroqModel(pick(map.groq_model, env.GROQ_MODEL, "")),
+    groqApiKey: pick(map.groq_api_key, env.GROQ_API_KEY),
+    fetchIntervalMinutes: num(map.fetch_interval_minutes, 10, 5, 180),
+    jitterMinutes: num(map.jitter_minutes, 5, 0, 30),
+    maxGroupsPerCycle: num(map.max_groups_per_cycle, 3, 1, 10),
+    extensionToken: pick(map.extension_token, undefined),
+    lineToken: pick(map.line_token, env.LINE_CHANNEL_ACCESS_TOKEN),
+    lineUserId: pick(map.line_user_id, env.LINE_USER_ID),
+    discordWebhook: pick(map.discord_webhook, env.DISCORD_WEBHOOK_URL),
+    notifyEmailTo: pick(map.notify_email_to, env.NOTIFY_EMAIL_TO),
+    smtpHost: pick(map.smtp_host, env.SMTP_HOST),
+    smtpPort: num(map.smtp_port || env.SMTP_PORT, 587, 1, 65535),
+    smtpUser: pick(map.smtp_user, env.SMTP_USER),
+    smtpPass: pick(map.smtp_pass, env.SMTP_PASS),
+    notifySound: map.notify_sound !== "false",
+    notifyMinScore: num(map.notify_min_score, 50, 0, 100),
+    summaryTime: /^\d{2}:\d{2}$/.test(pick(map.summary_time, undefined, "08:00")) ? pick(map.summary_time, undefined, "08:00") : "08:00",
+    embedModel: pick(map.embed_model, env.OLLAMA_EMBED_MODEL, "bge-m3"),
+    geminiEmbedModel: pick(map.gemini_embed_model, env.GEMINI_EMBED_MODEL, "text-embedding-004"),
+    ocrEnabled: map.ocr_enabled !== "false",
+    visionOcr: map.vision_ocr !== "false",
+    lastBackupAt: map.backup_last_at || "",
+    lastBackupFile: map.backup_last_file || "",
+  };
+}
+
+export async function upsertSettings(entries: Record<string, string>) {
+  await prisma.$transaction(
+    Object.entries(entries).map(([key, value]) =>
+      prisma.setting.upsert({
+        where: { key },
+        update: { value },
+        create: { key, value },
+      }),
+    ),
+  );
+}
+
+export function publicSettings(settings: AppSettings) {
+  return {
+    aiProvider: settings.aiProvider,
+    ollamaBaseUrl: settings.ollamaBaseUrl,
+    ollamaModel: settings.ollamaModel,
+    geminiModel: settings.geminiModel,
+    groqModel: settings.groqModel,
+    geminiKeySet: Boolean(settings.geminiApiKey),
+    groqKeySet: Boolean(settings.groqApiKey),
+    fetchIntervalMinutes: settings.fetchIntervalMinutes,
+    jitterMinutes: settings.jitterMinutes,
+    maxGroupsPerCycle: settings.maxGroupsPerCycle,
+    extensionToken: settings.extensionToken,
+    lineUserId: settings.lineUserId,
+    lineTokenSet: Boolean(settings.lineToken),
+    discordWebhook: settings.discordWebhook,
+    notifyEmailTo: settings.notifyEmailTo,
+    smtpHost: settings.smtpHost,
+    smtpPort: settings.smtpPort,
+    smtpUser: settings.smtpUser,
+    smtpPassSet: Boolean(settings.smtpPass),
+    notifySound: settings.notifySound,
+    notifyMinScore: settings.notifyMinScore,
+    summaryTime: settings.summaryTime,
+    embedModel: settings.embedModel,
+    geminiEmbedModel: settings.geminiEmbedModel,
+    ocrEnabled: settings.ocrEnabled,
+    visionOcr: settings.visionOcr,
+    lastBackupAt: settings.lastBackupAt,
+    lastBackupFile: settings.lastBackupFile,
+  };
+}

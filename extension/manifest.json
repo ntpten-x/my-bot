@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "MY-BOT Lead Radar",
+  "version": "1.0.0",
+  "description": "อ่านโพสต์กลุ่ม Facebook ที่คุณเป็นสมาชิก แล้วส่งเข้า MY-BOT บนเครื่องตัวเอง อ่านอย่างเดียว ไม่โพสต์ ไม่คอมเมนต์ และไม่เรียก API ภายในของ Facebook",
+  "permissions": ["storage", "alarms", "tabs", "scripting"],
+  "host_permissions": [
+    "https://www.facebook.com/*",
+    "https://facebook.com/*",
+    "https://web.facebook.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "MY-BOT",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.facebook.com/groups/*",
+        "https://facebook.com/groups/*",
+        "https://web.facebook.com/groups/*"
+      ],
+      "js": ["selectors.js", "parser.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

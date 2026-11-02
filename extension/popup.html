@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { font: 14px/1.5 "Segoe UI", sans-serif; width: 320px; margin: 0; padding: 14px; color: #1c1612; background: #f3ecdf; }
+      h1 { font-size: 18px; margin: 0 0 4px; }
+      p { margin: 0 0 10px; color: #6f6256; }
+      label { display: block; margin: 8px 0 4px; font-weight: 600; }
+      input { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #e3d5c3; border-radius: 8px; }
+      button { margin-top: 12px; width: 100%; padding: 8px; border: 0; border-radius: 8px; background: #c24e1d; color: white; }
+      .row { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+      #status { min-height: 1.2em; margin-top: 8px; }
+    </style>
+  </head>
+  <body>
+    <h1>MY-BOT</h1>
+    <p>อ่านโพสต์กลุ่มที่คุณเป็นสมาชิก แล้วส่งเข้าแอปบนเครื่อง ไม่โพสต์และไม่คอมเมนต์ให้</p>
+    <label>ที่อยู่แอป</label>
+    <input id="apiBase" value="http://localhost:8001" />
+    <label>โทเคนจากหน้าตั้งค่า</label>
+    <input id="token" type="password" />
+    <div class="row">
+      <input id="enabled" type="checkbox" style="width:auto" />
+      <label for="enabled" style="margin:0">เปิดดึงกลุ่มอัตโนมัติ</label>
+    </div>
+    <button id="save">บันทึก</button>
+    <div id="status"></div>
+    <script src="popup.js"></script>
+  </body>
+</html>

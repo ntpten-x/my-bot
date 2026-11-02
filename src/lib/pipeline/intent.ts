@@ -1,0 +1,18 @@
+const LOOKING_FOR_PERSON = /หาคนรับ|หาคน|ตามหาคน|อยากได้คน|ต้องการคนรับ/;
+const BUYER =
+  /รับซื้อ|หาซื้อ|ตามหา|อยากได้|มองหา|ต้องการ|หาคน|ใครมี|มีใครขาย|ใครขาย|จัดหา|รบกวนแนะนำ|รบกวนหา|ต้องการซื้อ|ต้องการหา/;
+const SELLER = /ขาย|ปล่อย|รับทำ|รับจ้าง|รับเติม|บริการ|พร้อมส่ง|มีของ|เปิดรับ|รับผลิต/;
+const BUYER_WINS = /หาคน|ตามหา|อยากได้|รับซื้อ|หาซื้อ|ใครมี|รบกวนแนะนำ|รบกวนหา|ต้องการ|มองหา/;
+
+export type Intent = "buyer" | "seller" | "unknown";
+
+export function detectIntent(text: string): Intent {
+  if (LOOKING_FOR_PERSON.test(text)) return "buyer";
+  const buyer = BUYER.test(text);
+  const seller = SELLER.test(text);
+  if (buyer && !seller) return "buyer";
+  if (seller && !buyer) return "seller";
+  if (buyer && seller) return BUYER_WINS.test(text) ? "buyer" : "seller";
+  if (/ด่วน/.test(text) && !seller) return "buyer";
+  return "unknown";
+}

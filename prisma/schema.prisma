@@ -1,0 +1,229 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Owner {
+  id           String    @id @default(cuid())
+  passwordHash String
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  sessions     Session[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  ownerId   String
+  owner     Owner    @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+model Source {
+  id              String     @id @default(cuid())
+  type            String
+  name            String
+  url             String     @unique
+  enabled         Boolean    @default(true)
+  lastFetchedAt   DateTime?
+  lastExtensionAt DateTime?
+  lastError       String?
+  intervalMinutes Int        @default(10)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  posts           Post[]
+  fetchLogs       FetchLog[]
+  fetchTasks      FetchTask[]
+}
+
+model Category {
+  id         String     @id @default(cuid())
+  name       String
+  slug       String     @unique
+  parentId   String?
+  parent     Category?  @relation("CatTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children   Category[] @relation("CatTree")
+  matchWords String     @default("")
+  sortOrder  Int        @default(0)
+  createdAt  DateTime   @default(now())
+  posts      Post[]     @relation("PostCategory")
+  subPosts   Post[]     @relation("PostSubcategory")
+}
+
+model Post {
+  id              String         @id @default(cuid())
+  sourceId        String
+  source          Source         @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  externalUrl     String
+  authorName      String         @default("")
+  text            String
+  normalizedText  String
+  contentHash     String         @unique
+  postedAt        DateTime?
+  imagesJson      String         @default("[]")
+  categoryId      String?
+  category        Category?      @relation("PostCategory", fields: [categoryId], references: [id], onDelete: SetNull)
+  subcategoryId   String?
+  subcategory     Category?      @relation("PostSubcategory", fields: [subcategoryId], references: [id], onDelete: SetNull)
+  intent          String         @default("unknown")
+  province        String?
+  isAd            Boolean        @default(false)
+  keywordHitsJson String         @default("[]")
+  forbiddenHit    Boolean        @default(false)
+  isRead          Boolean        @default(false)
+  isSaved         Boolean        @default(false)
+  pipelineStatus  String         @default("none")
+  suggestedReply  String         @default("")
+  aiProvider      String?
+  score           Int            @default(0)
+  scoreReason     String         @default("")
+  embeddingJson   String         @default("")
+  duplicateOfId   String?
+  dismissed       Boolean        @default(false)
+  ocrText         String         @default("")
+  aiJobs          AiJob[]
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  notes           Note[]
+  notifications   Notification[]
+  feedback        Feedback[]
+
+  @@unique([sourceId, externalUrl])
+  @@index([createdAt])
+  @@index([isRead])
+  @@index([pipelineStatus])
+  @@index([province])
+  @@index([score])
+}
+
+model AiJob {
+  id            String   @id @default(cuid())
+  postId        String   @unique
+  post          Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  status        String   @default("pending")
+  attempts      Int      @default(0)
+  nextAttemptAt DateTime @default(now())
+  lastError     String   @default("")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([status, nextAttemptAt])
+}
+
+model OcrCache {
+  imageHash String   @id
+  text      String
+  provider  String
+  createdAt DateTime @default(now())
+}
+
+model Feedback {
+  id        String   @id @default(cuid())
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  action    String
+  createdAt DateTime @default(now())
+
+  @@index([postId, createdAt])
+}
+
+model PreferenceWeight {
+  id        String   @id @default(cuid())
+  kind      String
+  key       String
+  weight    Float    @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@unique([kind, key])
+}
+
+model Summary {
+  id        String   @id @default(cuid())
+  day       String   @unique
+  title     String
+  body      String
+  createdAt DateTime @default(now())
+}
+
+model Keyword {
+  id        String   @id @default(cuid())
+  word      String
+  type      String
+  createdAt DateTime @default(now())
+
+  @@unique([word, type])
+}
+
+model Note {
+  id        String   @id @default(cuid())
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  body      String
+  createdAt DateTime @default(now())
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  postId    String?
+  post      Post?    @relation(fields: [postId], references: [id], onDelete: SetNull)
+  channel   String
+  title     String
+  body      String
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([read, createdAt])
+}
+
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+model AiCache {
+  id        String   @id @default(cuid())
+  cacheKey  String   @unique
+  provider  String
+  result    String
+  createdAt DateTime @default(now())
+}
+
+model FetchTask {
+  id         String    @id @default(cuid())
+  sourceId   String
+  source     Source    @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  status     String    @default("pending")
+  message    String    @default("")
+  postsFound Int       @default(0)
+  createdAt  DateTime  @default(now())
+  pickedAt   DateTime?
+  finishedAt DateTime?
+
+  @@index([status, createdAt])
+}
+
+model ParseSample {
+  id        String   @id @default(cuid())
+  sourceUrl String
+  payload   String
+  postCount Int      @default(0)
+  createdAt DateTime @default(now())
+}
+
+model FetchLog {
+  id         String   @id @default(cuid())
+  sourceId   String?
+  source     Source?  @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  status     String
+  message    String   @default("")
+  postsFound Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+}
