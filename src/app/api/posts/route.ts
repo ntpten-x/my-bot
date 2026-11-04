@@ -129,7 +129,7 @@ export async function GET(request: Request) {
       ? [{ isAd: "asc" }, { score: "desc" }, { createdAt: "desc" }, { id: "asc" }]
       : sortParam === "captured"
         ? [{ createdAt: "desc" }, { id: "asc" }]
-        : [{ postedAt: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }, { id: "asc" }];
+        : [{ sortAt: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }, { id: "asc" }];
   const [total, posts] = await Promise.all([
     prisma.post.count({ where }),
     prisma.post.findMany({

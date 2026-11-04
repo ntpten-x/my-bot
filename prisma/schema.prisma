@@ -75,6 +75,8 @@ model Post {
   normalizedText   String
   contentHash      String          @unique
   postedAt         DateTime?
+  /// Generated column COALESCE(postedAt, createdAt); never write it.
+  sortAt           DateTime?
   imagesJson       String          @default("[]")
   categoryId       String?
   category         Category?       @relation("PostCategory", fields: [categoryId], references: [id], onDelete: SetNull)
@@ -113,6 +115,7 @@ model Post {
 
   @@unique([sourceId, externalUrl])
   @@index([createdAt])
+  @@index([sortAt(sort: Desc)])
   @@index([isRead])
   @@index([pipelineStatus])
   @@index([province])
