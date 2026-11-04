@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Copy, ExternalLink, LogIn, RefreshCw } from "lucide-react";
 import { Badge, Button, Card } from "@/components/ui";
 import { LEVEL_STYLE, LevelDot, useSystemOverview } from "@/components/system-overview";
 import { timeAgo } from "@/lib/format";
@@ -39,6 +39,9 @@ export default function OverviewPage() {
   const { data, error, loading, reload } = useSystemOverview();
   const installedHere = useInstalledExtensionVersion();
   const [pinged, setPinged] = useState("");
+  const [fbHint, setFbHint] = useState(false);
+  const [copied, setCopied] = useState("");
+  const waitingFocus = useRef(false);
 
   const refreshAll = async () => {
     // Ask the extension in this browser (if any) to send a fresh heartbeat, then re-test everything.
@@ -46,6 +49,31 @@ export default function OverviewPage() {
     setPinged("ขอให้ส่วนขยายส่งสถานะใหม่แล้ว");
     await new Promise((resolve) => setTimeout(resolve, 1200));
     await reload(true);
+  };
+
+  // After the user opens Facebook in a new tab, re-check as soon as they come back to this tab.
+  useEffect(() => {
+    const onFocus = () => {
+      if (!waitingFocus.current) return;
+      waitingFocus.current = false;
+      void refreshAll();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  });
+
+  const openedFacebook = () => {
+    waitingFocus.current = true;
+    setFbHint(true);
+  };
+
+  const copyExtensionsUrl = async () => {
+    try {
+      await navigator.clipboard.writeText("chrome://extensions");
+      setCopied("คัดลอกแล้ว — เปิดแท็บใหม่ วาง (Ctrl+V) แล้วกด Enter จากนั้นกดรีโหลด MY-BOT");
+    } catch {
+      setCopied("คัดลอกไม่ได้ — พิมพ์ chrome://extensions ในแถบที่อยู่เอง");
+    }
   };
 
   return (
@@ -94,6 +122,32 @@ export default function OverviewPage() {
 
               {item.id === "facebook" ? (
                 <div className="mt-4 overflow-x-auto">
+                  <div className="mb-3 flex flex-wrap items-center gap-2">
+                    {data.facebook.loggedIn === true ? (
+                      <>
+                        <a href="https://www.facebook.com/" target="_blank" rel="noopener noreferrer" onClick={openedFacebook}
+                          className="inline-flex items-center gap-1 rounded-lg border border-line bg-card px-3 py-1.5 text-sm hover:bg-stone-50">
+                          <ExternalLink className="h-4 w-4" /> เปิด Facebook
+                        </a>
+                        <a href="https://www.facebook.com/groups/feed/" target="_blank" rel="noopener noreferrer" onClick={openedFacebook}
+                          className="inline-flex items-center gap-1 rounded-lg border border-line bg-card px-3 py-1.5 text-sm hover:bg-stone-50">
+                          <ExternalLink className="h-4 w-4" /> เปิดกลุ่มที่ติดตาม
+                        </a>
+                        <a href="https://www.facebook.com/login" target="_blank" rel="noopener noreferrer" onClick={openedFacebook}
+                          className="text-xs text-muted hover:underline">
+                          เพิ่ม/สลับบัญชี
+                        </a>
+                      </>
+                    ) : (
+                      <a href="https://www.facebook.com/login" target="_blank" rel="noopener noreferrer" onClick={openedFacebook}
+                        className="inline-flex items-center gap-2 rounded-lg bg-[#1877F2] px-4 py-2 text-sm font-semibold text-white hover:bg-[#166FE5]">
+                        <LogIn className="h-4 w-4" /> เข้าสู่ระบบ Facebook
+                      </a>
+                    )}
+                  </div>
+                  {fbHint ? (
+                    <p className="mb-3 rounded-lg bg-sky-50 px-3 py-2 text-xs text-sky-900">ล็อกอินเสร็จแล้วกลับมาที่นี่ ระบบจะตรวจเองภายใน 1 นาที</p>
+                  ) : null}
                   {data.facebook.accounts.length ? (
                     <table className="w-full min-w-[640px] text-left text-sm">
                       <thead className="text-xs text-muted">
@@ -136,6 +190,17 @@ export default function OverviewPage() {
                   <p className="mt-2 text-xs text-muted">
                     ส่วนขยายอ่านแค่เลขบัญชีจากคุกกี้ c_user ของ facebook.com และชื่อที่แสดงบนหน้า (ถ้าหาได้) ไม่อ่านรหัสผ่าน ไม่โพสต์ ไม่คอมเมนต์แทนคุณ
                   </p>
+                </div>
+              ) : null}
+
+              {item.id === "extension" && item.level !== "ok" ? (
+                <div className="mt-4 flex flex-wrap items-center gap-2 text-sm">
+                  <Button variant="outline" size="sm" onClick={() => void copyExtensionsUrl()}>
+                    <Copy className="h-4 w-4" /> คัดลอก chrome://extensions
+                  </Button>
+                  <span className="text-xs text-muted">
+                    {copied || "เบราว์เซอร์ไม่ให้ลิงก์ไปหน้านี้ตรง ๆ — คัดลอกแล้ววางในแท็บใหม่ แล้วกดรีโหลดส่วนขยาย MY-BOT"}
+                  </span>
                 </div>
               ) : null}
 
