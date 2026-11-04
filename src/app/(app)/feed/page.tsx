@@ -46,15 +46,35 @@ const INITIAL: Filters = {
   hideAds: true,
   hideForbidden: true,
   hideDuplicates: true,
-  sort: "score",
+  sort: "new",
   minScore: "",
   semantic: false,
   area: false,
 };
 
+const PAGE_SIZE = 20;
+
+function readUrl(): { filters: Filters; page: number } {
+  if (typeof window === "undefined") return { filters: INITIAL, page: 1 };
+  const params = new URLSearchParams(window.location.search);
+  const page = Math.max(1, Number(params.get("page")) || 1);
+  const sort = params.get("sort");
+  return { filters: { ...INITIAL, q: params.get("q") ?? "", sort: sort === "score" || sort === "captured" ? sort : "new" }, page };
+}
+
+function pageList(page: number, pages: number): (number | "...")[] {
+  const out: (number | "...")[] = [];
+  for (let i = 1; i <= pages; i++) {
+    if (i === 1 || i === pages || Math.abs(i - page) <= 2) out.push(i);
+    else if (out[out.length - 1] !== "...") out.push("...");
+  }
+  return out;
+}
+
 function queryFrom(filters: Filters, page: number) {
   const params = new URLSearchParams();
   params.set("page", String(page));
+  params.set("pageSize", String(PAGE_SIZE));
   if (filters.q) params.set("q", filters.q);
   if (filters.categoryId) params.set("categoryId", filters.categoryId);
   if (filters.subcategoryId) params.set("subcategoryId", filters.subcategoryId);
@@ -124,12 +144,34 @@ export default function FeedPage() {
       .catch(() => undefined);
   }, []);
 
+  const [ready, setReady] = useState(false);
   useEffect(() => {
+    const initial = readUrl();
+    setFilters(initial.filters);
+    setDraftQ(initial.filters.q);
+    setPage(initial.page);
+    setReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!ready) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set("page", String(page));
+    if (filters.sort !== "new") url.searchParams.set("sort", filters.sort); else url.searchParams.delete("sort");
+    if (filters.q) url.searchParams.set("q", filters.q); else url.searchParams.delete("q");
+    window.history.replaceState(null, "", url.toString());
     void load(page, filters);
-  }, [page, filters, load]);
+  }, [ready, page, filters, load]);
+
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  function goto(next: number) {
+    setPage(Math.min(Math.max(1, next), pages));
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
 
   useEffect(() => {
     const stream = new EventSource("/api/v1/stream");
+    if (!ready) return;
     stream.onmessage = (event) => {
       const data = JSON.parse(event.data) as { type: string; posts?: Lead[] };
       if (data.type !== "posts" || !data.posts?.length) return;
@@ -143,7 +185,7 @@ export default function FeedPage() {
       void load(page, filters);
     };
     return () => stream.close();
-  }, [filters, load, page, sound]);
+  }, [ready, filters, load, page, sound]);
 
   const parents = meta?.categories.filter((item) => !item.parentId) ?? [];
   const children = meta?.categories.filter((item) => item.parentId === filters.categoryId) ?? [];
@@ -162,7 +204,7 @@ export default function FeedPage() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold">ฟีดลีด</h1>
-          <p className="mt-1 text-sm text-muted">พบ {total} รายการตามตัวกรองนี้</p>
+          <p className="mt-1 text-sm text-muted">พบ {total} รายการ · หน้า {page}/{pages}</p>
           {searchScope ? <p className="mt-1 max-w-2xl text-sm text-muted" role="status">{searchScope}</p> : null}
         </div>
         <Button
@@ -212,8 +254,9 @@ export default function FeedPage() {
           <option value="unknown">ไม่ชัด</option>
         </Select>
         <Select value={filters.sort} onChange={(event) => update({ sort: event.target.value })}>
+          <option value="new">ล่าสุดก่อน (เวลาโพสต์)</option>
+          <option value="captured">ล่าสุดก่อน (เวลาที่เก็บ)</option>
           <option value="score">เรียงตามคะแนน</option>
-          <option value="new">เรียงตามเวลา</option>
         </Select>
         <Input value={filters.minScore} onChange={(event) => update({ minScore: event.target.value })} placeholder="คะแนนขั้นต่ำ" />
         <Select value={filters.range} onChange={(event) => update({ range: event.target.value })}>
@@ -253,12 +296,19 @@ export default function FeedPage() {
           />
         ))}
       </div>
-      {total > 30 ? (
-        <div className="mt-4 flex items-center justify-between">
-          <Button variant="outline" disabled={page === 1} onClick={() => setPage((value) => value - 1)}>ก่อนหน้า</Button>
-          <span className="text-sm text-muted">หน้า {page}</span>
-          <Button variant="outline" disabled={page * 30 >= total} onClick={() => setPage((value) => value + 1)}>ถัดไป</Button>
-        </div>
+      {pages > 1 ? (
+        <nav className="mt-4 flex flex-wrap items-center justify-center gap-2" aria-label="เลือกหน้า">
+          <Button variant="outline" disabled={page <= 1} onClick={() => goto(page - 1)}>ก่อนหน้า</Button>
+          {pageList(page, pages).map((item, index) =>
+            item === "..." ? (
+              <span key={"gap" + index} className="px-1 text-sm text-muted">…</span>
+            ) : (
+              <Button key={item} variant={item === page ? undefined : "outline"} aria-current={item === page ? "page" : undefined} onClick={() => goto(item)}>{item}</Button>
+            ),
+          )}
+          <Button variant="outline" disabled={page >= pages} onClick={() => goto(page + 1)}>ถัดไป</Button>
+          <span className="text-sm text-muted">หน้า {page}/{pages}</span>
+        </nav>
       ) : null}
     </div>
   );

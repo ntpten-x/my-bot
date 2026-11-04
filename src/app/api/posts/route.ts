@@ -18,7 +18,8 @@ export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
   const rawPage = Number(params.get("page") || 1);
   const page = Number.isSafeInteger(rawPage) && rawPage > 0 ? rawPage : 1;
-  const pageSize = 30;
+  const rawSize = Number(params.get("pageSize") || 30);
+  const pageSize = Number.isSafeInteger(rawSize) && rawSize > 0 ? Math.min(rawSize, 100) : 30;
   const where: Prisma.PostWhereInput = {};
   const and: Prisma.PostWhereInput[] = [];
 
@@ -121,10 +122,14 @@ export async function GET(request: Request) {
         : "ค้นจากโพสต์ทั้งหมดที่ตรงคำและโพสต์ที่มีเวกเตอร์เข้ากันได้ตามตัวกรอง",
     });
   }
-  const sort =
-    params.get("sort") === "score"
-      ? [{ isAd: "asc" as const }, { score: "desc" as const }, { createdAt: "desc" as const }]
-      : [{ isAd: "asc" as const }, { createdAt: "desc" as const }];
+  const sortParam = params.get("sort");
+  // Default: newest post first (post time, falling back to capture time).
+  const sort: Prisma.PostOrderByWithRelationInput[] =
+    sortParam === "score"
+      ? [{ isAd: "asc" }, { score: "desc" }, { createdAt: "desc" }, { id: "asc" }]
+      : sortParam === "captured"
+        ? [{ createdAt: "desc" }, { id: "asc" }]
+        : [{ postedAt: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }, { id: "asc" }];
   const [total, posts] = await Promise.all([
     prisma.post.count({ where }),
     prisma.post.findMany({
