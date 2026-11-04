@@ -1,4 +1,5 @@
 import { createHash } from "crypto";
+import { canonicalMarketplaceUrl, isMarketplaceUrl, marketplaceSourceName } from "../scrape-plan";
 
 const DROP_PARAMS = new Set([
   "fbclid",
@@ -51,6 +52,7 @@ export function canonicalSourceUrl(input: string): string {
     if (host.endsWith("facebook.com") && group) {
       return `https://www.facebook.com/groups/${group[1]}`;
     }
+    if (isMarketplaceUrl(url.toString())) return canonicalMarketplaceUrl(url.toString());
     for (const key of [...url.searchParams.keys()]) {
       if (key.startsWith("utm_") || key === "fbclid") url.searchParams.delete(key);
     }
@@ -66,8 +68,9 @@ export function contentHash(text: string, url: string): string {
   return createHash("sha256").update(basis).digest("hex");
 }
 
-export function detectSourceType(url: string): "facebook_group" | "rss" | "web_board" {
+export function detectSourceType(url: string): "facebook_group" | "facebook_marketplace" | "rss" | "web_board" {
   const value = url.toLowerCase();
+  if (isMarketplaceUrl(url)) return "facebook_marketplace";
   if (value.includes("facebook.com/groups/") || value.includes("web.facebook.com/groups/")) {
     return "facebook_group";
   }
@@ -78,6 +81,7 @@ export function detectSourceType(url: string): "facebook_group" | "rss" | "web_b
 }
 
 export function defaultSourceName(url: string, type: string): string {
+  if (type === "facebook_marketplace") return marketplaceSourceName(url);
   if (type === "facebook_group") {
     const match = url.match(/groups\/([^/?#]+)/i);
     if (match) {

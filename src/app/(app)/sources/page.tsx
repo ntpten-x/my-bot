@@ -3,11 +3,43 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Badge, Button, Card, Input, Select, Textarea } from "@/components/ui";
 import { ApiError, api } from "@/components/api";
-import { timeAgo } from "@/lib/format";
+import { timeAgo, timeUntil } from "@/lib/format";
+import { PRIORITY_INTERVAL, PRIORITY_LABEL, isExtensionSource, type SourcePriority } from "@/lib/scrape-plan";
 import type { SourceRow } from "@/lib/lead";
+
+const STOP_LABEL: Record<string, string> = {
+  seen: "เจอโพสต์ที่เก็บแล้ว",
+  old: "เจอโพสต์เก่าเกินกำหนด",
+  cap: "ครบจำนวนต่อรอบ",
+  end: "ไม่มีโพสต์เพิ่ม",
+  screens: "เลื่อนครบตามที่ตั้ง",
+  error: "ผิดพลาด",
+};
+
+function IntervalInput({ value, onSave }: { value: number; onSave: (minutes: number) => void }) {
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => setDraft(String(value)), [value]);
+  return (
+    <Input
+      type="number"
+      min={2}
+      max={180}
+      value={draft}
+      className="w-20"
+      aria-label="ทุกกี่นาที"
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={() => {
+        const minutes = Math.round(Number(draft));
+        if (Number.isFinite(minutes) && minutes >= 2 && minutes <= 180 && minutes !== value) onSave(minutes);
+        else setDraft(String(value));
+      }}
+    />
+  );
+}
 
 const TYPE_LABEL: Record<string, string> = {
   facebook_group: "กลุ่ม Facebook",
+  facebook_marketplace: "Marketplace",
   rss: "RSS",
   web_board: "เว็บบอร์ด",
 };
@@ -17,6 +49,7 @@ export default function SourcesPage() {
   const [urls, setUrls] = useState("");
   const [name, setName] = useState("");
   const [type, setType] = useState("auto");
+  const [priority, setPriority] = useState<SourcePriority>("normal");
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
   const [loading, setLoading] = useState(true);
@@ -45,7 +78,7 @@ export default function SourcesPage() {
     try {
       const data = await api<{ created: number; skipped: string[] }>("/api/sources", {
         method: "POST",
-        body: JSON.stringify({ urls, name, type }),
+        body: JSON.stringify({ urls, name, type, priority }),
       });
       setInfo(`เพิ่มแล้ว ${data.created} แหล่ง${data.skipped.length ? ` ข้าม ${data.skipped.length} ลิงก์` : ""}`);
       setUrls("");
@@ -65,22 +98,28 @@ export default function SourcesPage() {
     <div>
       <h1 className="text-2xl font-semibold">แหล่งข้อมูล</h1>
       <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
-        วางลิงก์กลุ่ม Facebook ที่คุณเป็นสมาชิกอยู่แล้ว ได้ทีละหลายบรรทัด กลุ่ม Facebook ให้ส่วนขยายเป็นคนอ่านจากเบราว์เซอร์ที่ล็อกอิน ส่วน RSS และเว็บบอร์ดให้โปรแกรมหลังบ้านดึงเอง
+        วางลิงก์กลุ่ม Facebook ที่คุณเป็นสมาชิกอยู่แล้ว หรือหน้าค้นหา/หมวดของ Facebook Marketplace (เช่น facebook.com/marketplace/bangkok/search?query=แอร์) ได้ทีละหลายบรรทัด กลุ่มและ Marketplace ให้ส่วนขยายอ่านจากเบราว์เซอร์ที่ล็อกอิน (อ่านอย่างเดียว ไม่กดอะไรบน Facebook) ส่วน RSS และเว็บบอร์ดให้โปรแกรมหลังบ้านดึงเอง ประกาศจาก Marketplace จะถูกจัดเป็น “ขาย” เสมอ
       </p>
       <Card className="mt-5">
         <form onSubmit={add} className="space-y-3">
           <Textarea
             value={urls}
             onChange={(event) => setUrls(event.target.value)}
-            placeholder={"https://www.facebook.com/groups/123456\nhttps://example.com/feed.xml"}
+            placeholder={"https://www.facebook.com/groups/123456\nhttps://www.facebook.com/marketplace/bangkok/search?query=แอร์\nhttps://example.com/feed.xml"}
           />
-          <div className="grid gap-3 md:grid-cols-[1fr_180px_auto]">
+          <div className="grid gap-3 md:grid-cols-[1fr_180px_150px_auto]">
             <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="ชื่อแหล่ง (ใช้เมื่อวางลิงก์เดียว)" />
             <Select value={type} onChange={(event) => setType(event.target.value)}>
               <option value="auto">ตรวจชนิดอัตโนมัติ</option>
               <option value="facebook_group">กลุ่ม Facebook</option>
+              <option value="facebook_marketplace">Facebook Marketplace</option>
               <option value="rss">RSS</option>
               <option value="web_board">เว็บบอร์ด</option>
+            </Select>
+            <Select value={priority} onChange={(event) => setPriority(event.target.value as SourcePriority)} aria-label="ความสำคัญ">
+              {(["high", "normal", "low"] as SourcePriority[]).map((value) => (
+                <option key={value} value={value}>ความสำคัญ{PRIORITY_LABEL[value]} ({PRIORITY_INTERVAL[value]} นาที)</option>
+              ))}
             </Select>
             <Button type="submit">เพิ่มแหล่ง</Button>
           </div>
@@ -98,14 +137,47 @@ export default function SourcesPage() {
                   <h2 className="font-semibold">{source.name}</h2>
                   <Badge>{TYPE_LABEL[source.type] ?? source.type}</Badge>
                   <Badge tone={source.enabled ? "pine" : "neutral"}>{source.enabled ? "เปิด" : "ปิด"}</Badge>
+                  {isExtensionSource(source.type) ? <Badge tone={source.priority === "high" ? "pine" : "neutral"}>สำคัญ{PRIORITY_LABEL[source.priority]}</Badge> : null}
                 </div>
                 <a href={source.url} className="mt-1 block break-all text-sm text-clay" target="_blank" rel="noreferrer">{source.url}</a>
                 <p className="mt-2 text-sm text-muted">
-                  {source.postCount} โพสต์ · ดึงล่าสุด {timeAgo(source.lastFetchedAt)} · ส่วนขยาย {timeAgo(source.lastExtensionAt)} · ทุก {source.intervalMinutes} นาที
+                  {source.postCount} โพสต์ · ดึงล่าสุด {timeAgo(source.lastFetchedAt)}
+                  {isExtensionSource(source.type) ? null : ` · ทุก ${source.intervalMinutes} นาที`}
                 </p>
+                {isExtensionSource(source.type) ? (
+                  <div className="mt-2 grid gap-x-4 gap-y-1 text-sm text-muted sm:grid-cols-2 lg:grid-cols-4">
+                    <span>รอบล่าสุด: {source.lastRunAt ? timeAgo(source.lastRunAt) : "ยังไม่เคย"}</span>
+                    <span>
+                      เจอใหม่: <b className="text-ink">{source.lastRunNew}</b>
+                      {source.lastRunAt ? ` จาก ${source.lastRunFound} · เลื่อน ${source.lastRunScrolls} จอ` : ""}
+                    </span>
+                    <span>รอบถัดไป: {source.enabled ? timeUntil(source.nextRunAt) : "ปิดอยู่"}</span>
+                    <span>
+                      รอบตอนนี้: ทุก {Math.round(source.currentIntervalMinutes * 10) / 10} นาที (ตั้งไว้ {source.intervalMinutes}, ไม่เกิน {source.maxIntervalMinutes})
+                    </span>
+                    {source.lastRunStop ? <span className="sm:col-span-2 lg:col-span-4">หยุดรอบล่าสุดเพราะ{STOP_LABEL[source.lastRunStop] ?? source.lastRunStop}</span> : null}
+                  </div>
+                ) : null}
                 {source.lastError ? <p className="mt-1 text-sm text-red-700">สาเหตุที่ดึงไม่สำเร็จ: {source.lastError}</p> : null}
               </div>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {isExtensionSource(source.type) ? (
+                  <>
+                    <Select
+                      value={source.priority}
+                      aria-label="ความสำคัญ"
+                      className="w-auto"
+                      onChange={(event) => void patch(source.id, { priority: event.target.value })}
+                    >
+                      {(["high", "normal", "low"] as SourcePriority[]).map((value) => (
+                        <option key={value} value={value}>สำคัญ{PRIORITY_LABEL[value]}</option>
+                      ))}
+                    </Select>
+                    <span className="text-sm text-muted">ทุก</span>
+                    <IntervalInput value={source.intervalMinutes} onSave={(minutes) => void patch(source.id, { intervalMinutes: minutes })} />
+                    <span className="text-sm text-muted">นาที</span>
+                  </>
+                ) : null}
                 <Button
                   size="sm"
                   onClick={async () => {

@@ -16,6 +16,9 @@ export type AppSettings = {
   fetchIntervalMinutes: number;
   jitterMinutes: number;
   maxGroupsPerCycle: number;
+  scrollScreens: number;
+  maxPostAgeHours: number;
+  maxPostsPerRun: number;
   extensionToken: string;
   lineToken: string;
   lineUserId: string;
@@ -85,7 +88,10 @@ export async function getSettings(): Promise<AppSettings> {
     groqApiKey: pick(map.groq_api_key, env.GROQ_API_KEY),
     fetchIntervalMinutes: num(map.fetch_interval_minutes, 10, 5, 180),
     jitterMinutes: num(map.jitter_minutes, 5, 0, 30),
-    maxGroupsPerCycle: num(map.max_groups_per_cycle, 3, 1, 10),
+    maxGroupsPerCycle: num(map.max_groups_per_cycle, 5, 1, 10),
+    scrollScreens: num(map.scroll_screens, 3, 0, 10),
+    maxPostAgeHours: num(map.max_post_age_hours, 24, 1, 168),
+    maxPostsPerRun: num(map.max_posts_per_run, 40, 5, 40),
     extensionToken: pick(map.extension_token, undefined),
     lineToken: pick(map.line_token, env.LINE_CHANNEL_ACCESS_TOKEN),
     lineUserId: pick(map.line_user_id, env.LINE_USER_ID),
@@ -148,6 +154,9 @@ export function publicSettings(settings: AppSettings) {
     fetchIntervalMinutes: settings.fetchIntervalMinutes,
     jitterMinutes: settings.jitterMinutes,
     maxGroupsPerCycle: settings.maxGroupsPerCycle,
+    scrollScreens: settings.scrollScreens,
+    maxPostAgeHours: settings.maxPostAgeHours,
+    maxPostsPerRun: settings.maxPostsPerRun,
     extensionToken: settings.extensionToken,
     lineUserId: settings.lineUserId,
     lineTokenSet: Boolean(settings.lineToken),

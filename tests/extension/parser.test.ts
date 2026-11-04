@@ -54,3 +54,42 @@ describe("facebook parser", () => {
     expect(dom.window.MyBotParser.parseFacebookPosts(dom.window.document)).toEqual([]);
   });
 });
+
+describe("facebook parser — See more and Marketplace (synthetic fixtures)", () => {
+  function domFor(name: string, url: string) {
+    const html = readFileSync(path.join(process.cwd(), "extension/fixtures", name), "utf8");
+    const dom = new JSDOM(`<!doctype html><body>${html}</body>`, { runScripts: "dangerously", url });
+    loadScripts(dom);
+    return dom;
+  }
+
+  it("drops the inline See more toggle text without touching it", () => {
+    const dom = domFor("see-more-feed.html", "https://www.facebook.com/groups/123");
+    const toggle = dom.window.document.querySelector('[role="button"]')!;
+    const posts = dom.window.MyBotParser.parseFacebookPosts(dom.window.document);
+    expect(posts).toHaveLength(1);
+    expect(posts[0].text).not.toMatch(/ดูเพิ่มเติม/);
+    expect(posts[0].text).toMatch(/^หาช่างซ่อมแอร์ด่วน แถวนิมมาน ใครว่างบ้างครับ/);
+    expect(posts[0].text).toMatch(/…$/);
+    expect(toggle.textContent).toBe("ดูเพิ่มเติม");
+  });
+
+  it("reads Marketplace listing cards into seller posts", () => {
+    const dom = domFor("marketplace-search.html", "https://www.facebook.com/marketplace/chiangmai/search?query=iphone");
+    const listings = dom.window.MyBotParser.parseMarketplaceListings(dom.window.document);
+    // duplicate card, category link and a price-only card without a title are skipped
+    expect(listings).toHaveLength(2);
+    expect(listings[0]).toMatchObject({
+      url: "https://www.facebook.com/marketplace/item/111222333444/",
+      title: "iPhone 13 128GB สภาพดี",
+      price: "฿12,500",
+      location: "เชียงใหม่",
+      kind: "marketplace",
+      postedAt: null,
+      images: ["https://scontent.xx.fbcdn.net/v/listing-1.jpg"],
+    });
+    expect(listings[0].text).toBe("ขาย iPhone 13 128GB สภาพดี ราคา ฿12,500 · เชียงใหม่");
+    expect(listings[1]).toMatchObject({ price: "ฟรี", title: "โต๊ะไม้เก่า มารับเอง", location: "Bangkok, Thailand" });
+    expect(listings[1].images).toEqual(["https://scontent.xx.fbcdn.net/v/listing-2.jpg"]);
+  });
+});

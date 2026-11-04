@@ -8,6 +8,8 @@ import { aiQueueStats } from "./ai/stats";
 import { resolveOllamaBaseUrl } from "./ai/ollama-url";
 import { liveTestProvider } from "./ai/live-test";
 import { EXPECTED_EXTENSION_VERSION } from "./extension-heartbeat";
+import { EXTENSION_SOURCE_TYPES, PRIORITY_LABEL, maxIntervalFor, normalizePriority } from "./scrape-plan";
+import { STOP_REASON_LABEL } from "./scrape-runs";
 import {
   ageMs,
   bangkokLabel,
@@ -39,6 +41,23 @@ export type AccountRow = {
   profileLabel: string;
   postsCaptured: number;
   firstSeenAt: string;
+};
+
+export type ScrapeRow = {
+  id: string;
+  name: string;
+  kind: "group" | "marketplace";
+  enabled: boolean;
+  priority: "high" | "normal" | "low";
+  intervalMinutes: number;
+  currentIntervalMinutes: number;
+  maxIntervalMinutes: number;
+  lastRunAt: string | null;
+  lastRunFound: number;
+  lastRunNew: number;
+  lastRunStop: string;
+  nextRunAt: string | null;
+  lastError: string;
 };
 
 export type InstallRow = {
@@ -139,6 +158,7 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
       sections: [section("system", "ระบบอื่น ๆ", checks)],
       facebook: { loggedIn: null as boolean | null, accountCount: 0, loggedInCount: 0, accounts: [] as AccountRow[] },
       extension: { expectedVersion: EXPECTED_EXTENSION_VERSION, installs: [] as InstallRow[], openTabs: [] as { title: string; url: string }[] },
+      scrape: [] as ScrapeRow[],
     };
   }
 
@@ -159,12 +179,12 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
       readSettingsMap(keys),
       prisma.fbAccount.findMany({ orderBy: { lastSeenAt: "desc" } }),
       prisma.extensionHeartbeat.findMany({ orderBy: { lastSeenAt: "desc" }, take: 10 }),
-      prisma.source.findMany({ where: { type: "facebook_group" }, orderBy: { name: "asc" } }),
+      prisma.source.findMany({ where: { type: { in: [...EXTENSION_SOURCE_TYPES] } }, orderBy: { name: "asc" } }),
       prisma.post.count({ where: { createdAt: { gte: todayStart } } }),
       prisma.post.count({ where: { createdAt: { gte: todayStart }, intent: "buyer", isAd: false, forbiddenHit: false, duplicateOfId: null } }),
-      prisma.post.findFirst({ where: { source: { type: "facebook_group" } }, orderBy: { createdAt: "desc" }, select: { createdAt: true, source: { select: { name: true } } } }),
+      prisma.post.findFirst({ where: { source: { type: { in: [...EXTENSION_SOURCE_TYPES] } } }, orderBy: { createdAt: "desc" }, select: { createdAt: true, source: { select: { name: true } } } }),
       prisma.fetchLog.findMany({
-        where: { status: "error", createdAt: { gte: since24h }, source: { type: "facebook_group" } },
+        where: { status: "error", createdAt: { gte: since24h }, source: { type: { in: [...EXTENSION_SOURCE_TYPES] } } },
         orderBy: { createdAt: "desc" },
         take: 5,
         include: { source: { select: { name: true } } },
@@ -272,8 +292,8 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
       key: "ext-reading",
       label: "กำลังอ่านกลุ่ม",
       level: enabledFb.length ? (activeInstalls.some((row) => row.enabled) || !newest ? "ok" : "warn") : "off",
-      value: `${enabledFb.length} กลุ่มที่เปิดไว้ · แท็บ Facebook กลุ่มที่เปิดอยู่ ${openTabs.length} แท็บ`,
-      detail: enabledFb.length ? enabledFb.slice(0, 8).map((source) => source.name).join(", ") : "ยังไม่ได้เพิ่มกลุ่ม Facebook",
+      value: `${enabledFb.length} กลุ่ม/Marketplace ที่เปิดไว้ · แท็บ Facebook ที่เปิดอยู่ ${openTabs.length} แท็บ`,
+      detail: enabledFb.length ? enabledFb.slice(0, 8).map((source) => source.name).join(", ") : "ยังไม่ได้เพิ่มกลุ่ม Facebook หรือ Marketplace",
       hint: newest && !activeInstalls.some((row) => row.enabled) && enabledFb.length ? "ติ๊ก “เปิดใช้งาน” ในป๊อปอัปของส่วนขยาย" : undefined,
     },
     {
@@ -313,6 +333,48 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
     lastPostAt: row.lastPostAt?.toISOString() ?? null,
     postsSent: row.postsSent,
   }));
+
+  // ---------- Per-source scrape stats ----------
+  const scrapeRows: ScrapeRow[] = facebookSources.map((source) => ({
+    id: source.id,
+    name: source.name,
+    kind: source.type === "facebook_marketplace" ? "marketplace" : "group",
+    enabled: source.enabled,
+    priority: normalizePriority(source.priority),
+    intervalMinutes: source.intervalMinutes,
+    currentIntervalMinutes: source.currentIntervalMinutes || source.intervalMinutes,
+    maxIntervalMinutes: maxIntervalFor(source.intervalMinutes),
+    lastRunAt: source.lastRunAt?.toISOString() ?? null,
+    lastRunFound: source.lastRunFound,
+    lastRunNew: source.lastRunNew,
+    lastRunStop: source.lastRunStop,
+    nextRunAt: source.nextRunAt?.toISOString() ?? null,
+    lastError: clean(source.lastError ?? ""),
+  }));
+  const scrapeChecks: Check[] = facebookSources.length
+    ? facebookSources.slice(0, 20).map((source) => {
+        const interval = source.currentIntervalMinutes || source.intervalMinutes;
+        const overdueMs = source.nextRunAt ? now - source.nextRunAt.getTime() : 0;
+        const level: Level = !source.enabled
+          ? "off"
+          : source.lastRunStop === "error" || overdueMs > Math.max(15, interval * 2) * 60_000
+            ? "warn"
+            : "ok";
+        const next = !source.enabled
+          ? "ปิดอยู่"
+          : !source.nextRunAt || overdueMs >= 0
+            ? "ถึงรอบแล้ว"
+            : `อีก ${Math.max(1, Math.round(-overdueMs / 60000))} นาที`;
+        return {
+          key: `scrape-${source.id}`,
+          label: `${source.type === "facebook_marketplace" ? "Marketplace" : "กลุ่ม"}: ${source.name}`,
+          level,
+          value: source.lastRunAt ? `ใหม่ ${source.lastRunNew} จาก ${source.lastRunFound} · ${thaiAgo(ageMs(source.lastRunAt, now))}` : "ยังไม่มีรอบอ่านแบบใหม่",
+          detail: `สำคัญ${PRIORITY_LABEL[normalizePriority(source.priority)]} · ตอนนี้ทุก ${Math.round(interval * 10) / 10} นาที (ตั้งไว้ ${source.intervalMinutes}) · รอบถัดไป ${next}${source.lastRunStop ? ` · หยุดเพราะ${STOP_REASON_LABEL[source.lastRunStop] ?? source.lastRunStop}` : ""}`,
+          hint: level === "warn" ? (source.lastError ? clean(source.lastError) : "เลยรอบมานาน ตรวจว่า Chrome และส่วนขยายเปิดอยู่") : undefined,
+        };
+      })
+    : [{ key: "scrape-none", label: "แหล่งที่ส่วนขยายอ่าน", level: "off" as Level, value: "ยังไม่ได้เพิ่มกลุ่มหรือ Marketplace" }];
 
   // ---------- AI ----------
   const usage: Record<string, number> = {};
@@ -485,6 +547,7 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
   const sections = [
     section("facebook", "บัญชี Facebook", fbChecks),
     section("extension", "ส่วนขยาย (Extension)", extChecks),
+    section("scrape", "รอบอ่านแต่ละแหล่ง", scrapeChecks),
     section("ai", "AI", aiChecks),
     section("system", "ระบบอื่น ๆ", otherChecks),
   ];
@@ -499,6 +562,7 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
     sections,
     facebook: { loggedIn: facebookLoggedIn, accountCount: accountRows.length, loggedInCount: loggedInIds.size, accounts: accountRows },
     extension: { expectedVersion: EXPECTED_EXTENSION_VERSION, installs: installRows, openTabs: openTabs.slice(0, 20) },
+    scrape: scrapeRows,
   };
 }
 

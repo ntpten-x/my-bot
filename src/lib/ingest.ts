@@ -51,6 +51,8 @@ export async function ingestPosts(input: {
   }
 
   const settings = await getSettings();
+  // Marketplace listings are always offers to sell; never let keyword rules or AI turn them into buyer leads or ads.
+  const marketplace = source.type === "facebook_marketplace";
   const keywords = await prisma.keyword.findMany();
   const { rows, catalog } = await loadCatalogFromDb();
   const rules = keywords.map((keyword) => ({
@@ -108,9 +110,9 @@ export async function ingestPosts(input: {
           imagesJson: JSON.stringify(cleanImages(item.raw.images)),
           categoryId: ids.categoryId,
           subcategoryId: ids.subcategoryId,
-          intent: item.lead.intent,
+          intent: marketplace ? "seller" : item.lead.intent,
           province: item.lead.province,
-          isAd: item.lead.isAd,
+          isAd: marketplace ? false : item.lead.isAd,
           keywordHitsJson: JSON.stringify(item.lead.watch),
           forbiddenHit: item.lead.forbidden.length > 0,
           suggestedReply: item.lead.suggestedReply,

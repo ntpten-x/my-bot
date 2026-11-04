@@ -73,7 +73,7 @@ export async function processAiQueue() {
     const jobs = await prisma.$transaction(async tx => {
       const rows = await tx.aiJob.findMany({
         where: { status: "pending", nextAttemptAt: { lte: new Date() } },
-        orderBy: [{ nextAttemptAt: "asc" }, { id: "asc" }], take: 10, include: { post: true },
+        orderBy: [{ nextAttemptAt: "asc" }, { id: "asc" }], take: 10, include: { post: { include: { source: { select: { type: true } } } } },
       });
       if (rows.length) await tx.aiJob.updateMany({ where: { id: { in: rows.map(row => row.id) }, status: "pending" }, data: { status: "running" } });
       return rows;
@@ -119,8 +119,11 @@ export async function processAiQueue() {
       },
     });
     const successful = outcome.results.filter(item => outcome.providersById[item.id] && outcome.providersById[item.id] !== "rules");
+    const marketplaceIds = new Set(jobs.filter(job => job.post.source?.type === "facebook_marketplace").map(job => job.postId));
     for (const item of successful) {
       const ids = resolveCategoryIds(rows, item.categorySlug, item.subcategorySlug);
+      // Marketplace listings stay "seller" (and not ads) whatever the model says.
+      if (marketplaceIds.has(item.id)) Object.assign(item, { intent: "seller", isAd: false });
       await prisma.post.update({ where: { id: item.id }, data: { categoryId: ids.categoryId, subcategoryId: ids.subcategoryId, intent: item.intent, province: item.province, isAd: item.isAd, suggestedReply: item.suggestedReply, aiProvider: outcome.providersById[item.id] } });
     }
     // Scoring must not block completion on an embedding provider.

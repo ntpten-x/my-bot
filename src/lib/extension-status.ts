@@ -3,6 +3,7 @@ import { upsertSettings } from "./settings";
 import { heartbeatIsStale, sourceIsStale } from "./extension-health";
 import { dispatchNotification } from "./notify";
 import { getSettings } from "./settings";
+import { EXTENSION_SOURCE_TYPES } from "./scrape-plan";
 
 export async function touchExtension(sourceId?: string) {
   const now = new Date();
@@ -35,7 +36,7 @@ export async function saveParseSample(sourceUrl: string, posts: unknown[]) {
 }
 
 export async function checkExtensionSilence() {
-  const sources = await prisma.source.findMany({ where: { type: "facebook_group", enabled: true } });
+  const sources = await prisma.source.findMany({ where: { type: { in: [...EXTENSION_SOURCE_TYPES] }, enabled: true } });
   if (!sources.length) return;
   const now = Date.now();
   const staleSources = sources.filter((source) => sourceIsStale(source, now));

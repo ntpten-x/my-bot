@@ -5,6 +5,7 @@ import { bangkokStart } from "@/lib/format";
 import { postInclude, serializePost } from "@/lib/serialize";
 import { heartbeatIsStale, sourceIsStale } from "@/lib/extension-health";
 import { aiQueueStats } from "@/lib/ai/stats";
+import { EXTENSION_SOURCE_TYPES } from "@/lib/scrape-plan";
 
 export const dynamic = "force-dynamic";
 
@@ -43,7 +44,7 @@ export async function GET() {
     .sort((a, b) => b.count - a.count);
   const [seen, facebookSources, aiQueue] = await Promise.all([
     prisma.setting.findUnique({ where: { key: "extension_last_seen" } }),
-    prisma.source.findMany({ where: { type: "facebook_group" }, orderBy: { name: "asc" } }),
+    prisma.source.findMany({ where: { type: { in: [...EXTENSION_SOURCE_TYPES] } }, orderBy: { name: "asc" } }),
     aiQueueStats(),
   ]);
   const lastSeen = seen?.value ? new Date(seen.value) : null;

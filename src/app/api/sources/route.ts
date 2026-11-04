@@ -4,13 +4,15 @@ import { authed } from "@/lib/guard";
 import { json } from "@/lib/http";
 import { canonicalSourceUrl, defaultSourceName, detectSourceType } from "@/lib/pipeline/normalize";
 import { getSettings } from "@/lib/settings";
+import { PRIORITY_INTERVAL, isMarketplaceUrl, maxIntervalFor, normalizePriority } from "@/lib/scrape-plan";
 
 export const dynamic = "force-dynamic";
 
 const createSchema = z.object({
   urls: z.string().min(1),
   name: z.string().optional(),
-  type: z.enum(["facebook_group", "rss", "web_board", "auto"]).optional(),
+  type: z.enum(["facebook_group", "facebook_marketplace", "rss", "web_board", "auto"]).optional(),
+  priority: z.enum(["high", "normal", "low"]).optional(),
 });
 
 export async function GET() {
@@ -34,6 +36,15 @@ export async function GET() {
       lastExtensionAt: source.lastExtensionAt?.toISOString() ?? null,
       lastError: source.lastError,
       intervalMinutes: source.intervalMinutes,
+      priority: normalizePriority(source.priority),
+      currentIntervalMinutes: source.currentIntervalMinutes || source.intervalMinutes,
+      maxIntervalMinutes: maxIntervalFor(source.intervalMinutes),
+      nextRunAt: source.nextRunAt?.toISOString() ?? null,
+      lastRunAt: source.lastRunAt?.toISOString() ?? null,
+      lastRunFound: source.lastRunFound,
+      lastRunNew: source.lastRunNew,
+      lastRunScrolls: source.lastRunScrolls,
+      lastRunStop: source.lastRunStop,
       postCount: source._count.posts,
       logs: source.fetchLogs.map((log) => ({
         id: log.id,
@@ -57,6 +68,8 @@ export async function POST(request: Request) {
     .map((line) => line.trim())
     .filter((line) => line && !line.startsWith("#"));
   if (!lines.length) return json({ error: "ไม่พบลิงก์" }, 400);
+  const priority = normalizePriority(parsed.data.priority);
+  const interval = priority === "normal" ? settings.fetchIntervalMinutes : PRIORITY_INTERVAL[priority];
   const created = [];
   const skipped: string[] = [];
   for (const line of lines) {
@@ -76,6 +89,10 @@ export async function POST(request: Request) {
       skipped.push(line);
       continue;
     }
+    if (type === "facebook_marketplace" && !isMarketplaceUrl(line)) {
+      skipped.push(line);
+      continue;
+    }
     const url = canonicalSourceUrl(line);
     const name = lines.length === 1 && parsed.data.name?.trim() ? parsed.data.name.trim() : defaultSourceName(url, type);
     try {
@@ -84,7 +101,9 @@ export async function POST(request: Request) {
           type,
           name,
           url,
-          intervalMinutes: settings.fetchIntervalMinutes,
+          intervalMinutes: interval,
+          currentIntervalMinutes: interval,
+          priority,
         },
       });
       created.push(source.id);

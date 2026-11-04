@@ -23,6 +23,12 @@
     ],
     time: ['time[datetime]', "abbr[data-utime]"],
     image: ['img[src*="scontent"]', 'img[src*="fbcdn"]', "img[src]"],
+    // Inline "See more" toggles inside a post body. Read-only: their text is removed, they are never clicked.
+    seeMore: ['[role="button"]', 'div[tabindex="0"]', "span[tabindex]"],
+    marketplace: {
+      card: ['a[href*="/marketplace/item/"]'],
+      image: ['img[src*="scontent"]', 'img[src*="fbcdn"]', "img[src]"],
+    },
   };
   root.MyBotSelectors = SELECTORS;
   if (typeof module !== "undefined" && module.exports) module.exports = SELECTORS;

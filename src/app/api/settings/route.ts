@@ -26,6 +26,9 @@ const putSchema = z.object({
   fetchIntervalMinutes: z.number().int().min(5).max(180).optional(),
   jitterMinutes: z.number().int().min(0).max(30).optional(),
   maxGroupsPerCycle: z.number().int().min(1).max(10).optional(),
+  scrollScreens: z.number().int().min(0).max(10).optional(),
+  maxPostAgeHours: z.number().int().min(1).max(168).optional(),
+  maxPostsPerRun: z.number().int().min(5).max(40).optional(),
   lineUserId: z.string().optional(),
   updateLineToken: z.boolean().optional(),
   lineToken: z.string().optional(),
@@ -66,6 +69,9 @@ export async function PUT(request: Request) {
   set("fetch_interval_minutes", body.fetchIntervalMinutes);
   set("jitter_minutes", body.jitterMinutes);
   set("max_groups_per_cycle", body.maxGroupsPerCycle);
+  set("scroll_screens", body.scrollScreens);
+  set("max_post_age_hours", body.maxPostAgeHours);
+  set("max_posts_per_run", body.maxPostsPerRun);
   set("line_user_id", body.lineUserId?.trim());
   if (body.updateLineToken) entries.line_token = body.lineToken?.trim() ?? "";
   set("discord_webhook", body.discordWebhook?.trim());

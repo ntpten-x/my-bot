@@ -37,3 +37,14 @@ export function bangkokStart(daysAgo = 0) {
   date.setUTCDate(date.getUTCDate() - daysAgo);
   return date;
 }
+
+/** "อีก 4 นาที" for a future time, "ถึงรอบแล้ว" once it has passed. */
+export function timeUntil(iso: string | null | undefined, now = Date.now()) {
+  if (!iso) return "ถึงรอบแล้ว";
+  const ms = new Date(iso).getTime() - now;
+  if (!Number.isFinite(ms) || ms <= 0) return "ถึงรอบแล้ว";
+  const minutes = Math.round(ms / 60000);
+  if (minutes < 1) return "ไม่ถึง 1 นาที";
+  if (minutes < 60) return `อีก ${minutes} นาที`;
+  return `อีก ${Math.floor(minutes / 60)} ชม. ${minutes % 60} นาที`;
+}

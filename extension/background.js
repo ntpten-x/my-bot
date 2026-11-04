@@ -1,4 +1,4 @@
-importScripts("assist.js", "identity.js");
+importScripts("assist.js", "identity.js", "scrape.js");
 
 const DEFAULTS = {
   apiBase: "http://localhost:8001",
@@ -24,10 +24,13 @@ function base(cfg) {
   return String(cfg.apiBase || DEFAULTS.apiBase).replace(/\/$/, "");
 }
 
-function chronoUrl(url) {
-  const parsed = new URL(url);
-  if (!parsed.searchParams.get("sorting_setting")) parsed.searchParams.set("sorting_setting", "CHRONOLOGICAL");
-  return parsed.href;
+function sourceKind(group) {
+  if (group && (group.kind === "marketplace" || group.type === "facebook_marketplace")) return "marketplace";
+  try {
+    return /^\/marketplace(\/|$)/.test(new URL(group.url).pathname) ? "marketplace" : "group";
+  } catch {
+    return "group";
+  }
 }
 
 function waitComplete(tabId) {
@@ -109,7 +112,16 @@ function browserName() {
 
 async function readingTabs() {
   const tabs = await chrome.tabs
-    .query({ url: ["https://www.facebook.com/groups/*", "https://facebook.com/groups/*", "https://web.facebook.com/groups/*"] })
+    .query({
+      url: [
+        "https://www.facebook.com/groups/*",
+        "https://facebook.com/groups/*",
+        "https://web.facebook.com/groups/*",
+        "https://www.facebook.com/marketplace/*",
+        "https://facebook.com/marketplace/*",
+        "https://web.facebook.com/marketplace/*",
+      ],
+    })
     .catch(() => []);
   return tabs.slice(0, 15).map((tab) => ({ title: String(tab.title || "").slice(0, 120), url: String(tab.url || "").split("?")[0].slice(0, 200) }));
 }
@@ -144,40 +156,128 @@ async function heartbeat() {
   }
 }
 
-async function scrapeGroup(cfg, group) {
-  let tabId;
+// ---- Read-only scroll scrape ----
+// One background tab at a time (the shared `cycling` lock). Scrolls the page with scrollTop only:
+// no clicks, no key presses, no form actions, no Facebook APIs. "See more" text is read as-is, never expanded.
+const scrapingTabs = new Set();
+
+async function readPage(tabId, kind) {
+  const [executed] = await chrome.scripting.executeScript({
+    target: { tabId },
+    args: [kind],
+    func: (pageKind) => ({
+      posts:
+        pageKind === "marketplace"
+          ? globalThis.MyBotParser.parseMarketplaceListings(document)
+          : globalThis.MyBotParser.parseFacebookPosts(document),
+      identity: globalThis.MyBotIdentity ? globalThis.MyBotIdentity.readFacebookIdentity(document) : null,
+    }),
+  });
+  return executed && executed.result ? executed.result : { posts: [], identity: null };
+}
+
+async function scrollOneScreen(tabId) {
+  const [executed] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => {
+      const page = document.scrollingElement || document.documentElement;
+      const before = page.scrollTop;
+      page.scrollTop = before + Math.max(window.innerHeight || 0, 800);
+      return { moved: page.scrollTop - before, height: page.scrollHeight };
+    },
+  });
+  return executed && executed.result ? executed.result : { moved: 0, height: 0 };
+}
+
+async function scrapeSettingsFor(remote) {
+  if (remote) {
+    const picked = { scrollScreens: remote.scrollScreens, maxAgeHours: remote.maxAgeHours, maxPostsPerRun: remote.maxPostsPerRun };
+    await chrome.storage.local.set({ scrapeSettings: picked });
+    return globalThis.MyBotScrape.scrapeSettings(picked);
+  }
+  const stored = await chrome.storage.local.get({ scrapeSettings: null });
+  return globalThis.MyBotScrape.scrapeSettings(stored.scrapeSettings);
+}
+
+async function reportRun(cfg, group, run) {
   try {
-    const tab = await chrome.tabs.create({ url: chronoUrl(group.url), active: false });
-    tabId = tab.id;
-    await waitComplete(tabId);
-    await sleep(2500);
-    await chrome.scripting.executeScript({ target: { tabId }, files: ["selectors.js", "parser.js", "identity.js"] });
-    const [executed] = await chrome.scripting.executeScript({
-      target: { tabId },
-      func: () => ({
-        posts: globalThis.MyBotParser.parseFacebookPosts(document),
-        identity: globalThis.MyBotIdentity ? globalThis.MyBotIdentity.readFacebookIdentity(document) : null,
-      }),
-    });
-    const posts = executed?.result?.posts || [];
-    if (executed?.result?.identity) await rememberIdentity(executed.result.identity);
-    await sendPosts(cfg, group.url, posts);
-    await postJson(cfg, "/api/v1/extension/sample", { sourceUrl: group.url, posts: (posts || []).slice(0, 8) }).catch(() => undefined);
-    return { ok: true, postsFound: posts.length, message: `อ่านได้ ${posts.length} โพสต์` };
-  } catch (error) {
-    await rememberError(`อ่านกลุ่ม ${group.name || group.url} ไม่สำเร็จ: ${String(error && error.message ? error.message : error)}`).catch(() => undefined);
-    await postJson(cfg, "/api/v1/fetch-log", {
+    const response = await postJson(cfg, "/api/v1/extension/scrape-result", {
       sourceUrl: group.url,
-      status: "error",
-      message: String(error && error.message ? error.message : error).slice(0, 300),
-    }).catch(() => undefined);
-    return { ok: false, postsFound: 0, message: String(error && error.message ? error.message : error).slice(0, 300) };
-  } finally {
-    if (tabId) await chrome.tabs.remove(tabId).catch(() => undefined);
+      ok: run.ok,
+      postsFound: run.postsFound,
+      newPosts: run.newPosts,
+      scrolls: run.scrolls,
+      stoppedBy: run.ok ? run.stoppedBy || "screens" : "error",
+      message: run.ok ? undefined : run.message,
+    });
+    if (!response.ok) return null;
+    const data = await response.json().catch(() => ({}));
+    const next = Date.parse(data.nextRunAt || "");
+    return Number.isFinite(next) ? next : null;
+  } catch {
+    return null;
   }
 }
 
+async function scrapeGroup(cfg, group, remote) {
+  const Scrape = globalThis.MyBotScrape;
+  const kind = sourceKind(group);
+  const settings = await scrapeSettingsFor(remote);
+  const run = Scrape.createRun({ knownKeys: group.knownKeys || [], maxAgeMs: settings.maxAgeMs, maxPosts: settings.maxPosts });
+  const result = { ok: true, postsFound: 0, newPosts: 0, scrolls: 0, stoppedBy: "", message: "", nextRunAt: null };
+  let tabId;
+  let sample = [];
+  try {
+    const tab = await chrome.tabs.create({ url: Scrape.scrapeUrl(group.url, kind), active: false });
+    tabId = tab.id;
+    scrapingTabs.add(tabId);
+    await waitComplete(tabId);
+    await sleep(2500);
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["selectors.js", "parser.js", "identity.js"] });
+    const first = await readPage(tabId, kind);
+    if (first.identity) await rememberIdentity(first.identity);
+    sample = (first.posts || []).slice(0, 8);
+    let stop = Scrape.addStep(run, first.posts);
+    while (!stop && result.scrolls < settings.screens) {
+      const moved = await scrollOneScreen(tabId);
+      result.scrolls += 1;
+      await sleep(Scrape.scrollWaitMs());
+      const page = await readPage(tabId, kind);
+      stop = Scrape.addStep(run, page.posts);
+      if (!stop && !moved.moved) stop = Scrape.addStep(run, []);
+    }
+    result.stoppedBy = run.stoppedBy || "screens";
+    result.postsFound = run.found;
+    const fresh = run.fresh.slice(0, settings.maxPosts).map((post) => ({
+      url: post.url,
+      authorName: post.authorName || "",
+      text: Scrape.cleanupText(post.text),
+      postedAt: post.postedAt || null,
+      images: post.images || [],
+    }));
+    if (fresh.length) {
+      const response = await sendPosts(cfg, group.url, fresh);
+      const data = response && response.ok ? await response.clone().json().catch(() => ({})) : {};
+      result.newPosts = Number(data.inserted) || 0;
+    }
+    await postJson(cfg, "/api/v1/extension/sample", { sourceUrl: group.url, posts: sample }).catch(() => undefined);
+    result.message = `อ่านได้ ${run.found} โพสต์ ใหม่ ${result.newPosts} · เลื่อน ${result.scrolls} หน้าจอ`;
+  } catch (error) {
+    const message = String(error && error.message ? error.message : error).slice(0, 300);
+    await rememberError(`อ่าน ${kind === "marketplace" ? "Marketplace" : "กลุ่ม"} ${group.name || group.url} ไม่สำเร็จ: ${message}`).catch(() => undefined);
+    Object.assign(result, { ok: false, message, postsFound: run.found });
+  } finally {
+    if (tabId) {
+      await chrome.tabs.remove(tabId).catch(() => undefined);
+      scrapingTabs.delete(tabId);
+    }
+  }
+  result.nextRunAt = await reportRun(cfg, group, result);
+  return result;
+}
+
 let cycling = false;
+const RUN_LOCK_MS = 3 * 60 * 1000;
 
 async function cycle() {
   if (cycling) return;
@@ -190,15 +290,20 @@ async function cycle() {
     const remote = await response.json();
     const now = Date.now();
     const schedules = { ...cfg.schedules };
-    const due = (remote.groups || []).filter((group) => !schedules[group.id] || now >= schedules[group.id]);
-    const batch = due.slice(0, remote.maxGroupsPerCycle || 3);
+    // The server decides what is due (priority + adaptive interval); the local schedule is only a short lock.
+    const due = (remote.groups || []).filter(
+      (group) => (!remote.serverScheduling || group.due !== false) && (!schedules[group.id] || now >= schedules[group.id]),
+    );
+    const batch = due.slice(0, remote.maxGroupsPerCycle || 5);
     for (const group of batch) {
-      await scrapeGroup(cfg, group);
-      const interval = group.intervalMinutes || remote.defaultIntervalMinutes || 10;
-      const jitter = Math.random() * (remote.jitterMinutes ?? 5);
-      schedules[group.id] = Date.now() + (interval + jitter) * 60 * 1000;
+      schedules[group.id] = Date.now() + RUN_LOCK_MS;
       await chrome.storage.local.set({ schedules });
-      await sleep(4000 + Math.random() * 6000);
+      const result = await scrapeGroup(cfg, group, remote);
+      const interval = group.currentIntervalMinutes || group.intervalMinutes || remote.defaultIntervalMinutes || 10;
+      const jitter = Math.random() * Math.min(remote.jitterMinutes ?? 5, interval * 0.25);
+      schedules[group.id] = result.nextRunAt ? Math.min(result.nextRunAt, Date.now() + 180 * 60 * 1000) : Date.now() + (interval + jitter) * 60 * 1000;
+      await chrome.storage.local.set({ schedules });
+      if (batch.indexOf(group) < batch.length - 1) await sleep(4000 + Math.random() * 6000);
     }
   } catch {
     // เปิดแอปไม่ติดหรือเน็ตหลุด — รอรอบถัดไป
@@ -209,7 +314,9 @@ async function cycle() {
 
 const recentManual = new Map();
 
-async function forwardManual(message) {
+async function forwardManual(message, sender) {
+  // Pages opened by the background scrape report through scrapeGroup, not here.
+  if (sender && sender.tab && scrapingTabs.has(sender.tab.id)) return;
   const cfg = await loadConfig();
   if (!cfg.token) return;
   const key = message.sourceUrl;
@@ -233,7 +340,7 @@ async function pollTasks() {
     if (!response.ok) return;
     const data = await response.json();
     for (const task of data.tasks || []) {
-      const result = await scrapeGroup(cfg, task);
+      const result = await scrapeGroup(cfg, task, null);
       await postJson(cfg, "/api/v1/extension/tasks", {
         id: task.id,
         status: result.ok ? "done" : "error",
@@ -281,7 +388,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "heartbeat-now") {
     heartbeat()
       .then(() => sendResponse({ ok: true }))
@@ -289,7 +396,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
   if (message?.type !== "manual-posts") return;
-  forwardManual(message)
+  forwardManual(message, sender)
     .then(() => sendResponse({ ok: true }))
     .catch(() => sendResponse({ ok: false }));
   return true;

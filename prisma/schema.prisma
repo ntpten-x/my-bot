@@ -35,6 +35,15 @@ model Source {
   lastExtensionAt DateTime?
   lastError       String?
   intervalMinutes Int         @default(10)
+  // Read-only scrape scheduling (extension): priority high|normal|low, adaptive interval, last-run stats.
+  priority               String    @default("normal")
+  currentIntervalMinutes Float     @default(10)
+  nextRunAt              DateTime?
+  lastRunAt              DateTime?
+  lastRunFound           Int       @default(0)
+  lastRunNew             Int       @default(0)
+  lastRunScrolls         Int       @default(0)
+  lastRunStop            String    @default("")
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
   posts           Post[]

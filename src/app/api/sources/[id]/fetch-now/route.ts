@@ -5,6 +5,7 @@ import { ingestPosts } from "@/lib/ingest";
 import { fetchRssPosts } from "@/lib/rss";
 import { fetchWebBoardPosts } from "@/lib/web-board";
 import { fetchErrorReason } from "@/lib/fetch-error";
+import { isExtensionSource } from "@/lib/scrape-plan";
 
 export const dynamic = "force-dynamic";
 
@@ -14,17 +15,17 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
   const { id } = await context.params;
   const source = await prisma.source.findUnique({ where: { id } });
   if (!source) return json({ error: "ไม่พบแหล่งข้อมูล" }, 404);
-  if (source.type === "facebook_group") {
+  if (isExtensionSource(source.type)) {
     const task = await prisma.fetchTask.create({ data: { sourceId: source.id, status: "pending" } });
     await prisma.fetchLog.create({
       data: {
         sourceId: source.id,
         status: "queued",
-        message: "สั่งดึงทันทีแล้ว รอส่วนขยายเปิดกลุ่มในรอบถัดไป",
+        message: "สั่งดึงทันทีแล้ว รอส่วนขยายเปิดหน้านี้ในรอบถัดไป",
         postsFound: 0,
       },
     });
-    return json({ queued: true, taskId: task.id, message: "ส่งคิวให้ส่วนขยายแล้ว จะเปิดกลุ่มนี้ภายในประมาณ 30 วินาที" });
+    return json({ queued: true, taskId: task.id, message: "ส่งคิวให้ส่วนขยายแล้ว จะเปิดหน้านี้ภายในประมาณ 30 วินาที" });
   }
   try {
     const posts = source.type === "rss" ? await fetchRssPosts(source.url) : await fetchWebBoardPosts(source.url);

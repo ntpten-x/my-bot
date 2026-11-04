@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "MY-BOT Lead Radar",
-  "version": "1.3.0",
-  "description": "อ่านโพสต์กลุ่ม Facebook ที่คุณเป็นสมาชิก แล้วส่งเข้า MY-BOT บนเครื่องตัวเอง ไม่โพสต์อัตโนมัติ ไม่กดส่งคอมเมนต์ และไม่เรียก API ภายในของ Facebook — ช่วยพิมพ์ข้อความตอบให้เฉพาะตอนที่คุณกด \"ตอบลีดนี้\" แล้วคุณกดส่งเอง",
+  "version": "1.4.0",
+  "description": "อ่านโพสต์กลุ่ม Facebook ที่คุณเป็นสมาชิก และประกาศ Marketplace ที่คุณเลือก แล้วส่งเข้า MY-BOT บนเครื่องตัวเอง อ่านอย่างเดียว: เลื่อนหน้าจออ่าน ไม่กดปุ่มบน Facebook ไม่โพสต์อัตโนมัติ ไม่กดส่งคอมเมนต์ และไม่เรียก API ภายในของ Facebook — ช่วยพิมพ์ข้อความตอบให้เฉพาะตอนที่คุณกด \"ตอบลีดนี้\" แล้วคุณกดส่งเอง",
   "permissions": [
     "storage",
     "alarms",
@@ -39,7 +39,10 @@
       "matches": [
         "https://www.facebook.com/groups/*",
         "https://facebook.com/groups/*",
-        "https://web.facebook.com/groups/*"
+        "https://web.facebook.com/groups/*",
+        "https://www.facebook.com/marketplace/*",
+        "https://facebook.com/marketplace/*",
+        "https://web.facebook.com/marketplace/*"
       ],
       "js": [
         "selectors.js",

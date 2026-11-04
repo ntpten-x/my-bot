@@ -51,7 +51,7 @@ Done when `npm run doctor` has no FAIL, `GET http://127.0.0.1:8001/api/v1/health
 
 - `npm run doctor` — PASS / WARN / FAIL, no secrets in the output. The same checks sit behind the signed-in `GET /api/v1/health/doctor`.
 - `GET /api/v1/health` — public, body is only `ok` and `version`.
-- **ภาพรวมระบบ** (`/overview`, signed-in `GET /api/system/overview`, `?fresh=1` re-tests cloud AI) — Facebook accounts from the extension heartbeat (`c_user` id only), extension version/token/tabs, Ollama/Groq/Gemini live checks (cached 5 min), worker, schedules, notifications, disk. Secrets are always masked. The extension (v1.3.0) POSTs `/api/v1/extension/heartbeat` every minute.
+- **ภาพรวมระบบ** (`/overview`, signed-in `GET /api/system/overview`, `?fresh=1` re-tests cloud AI) — Facebook accounts from the extension heartbeat (`c_user` id only), extension version/token/tabs, Ollama/Groq/Gemini live checks (cached 5 min), worker, schedules, notifications, disk. Secrets are always masked. The extension (v1.4.0) POSTs `/api/v1/extension/heartbeat` every minute.
 - `npm test` and `npm run build` — both must finish clean before a commit.
 
 ## Commands
@@ -101,6 +101,8 @@ Restart the app (or the Startup launcher). Then, if older posts need it: `npm ru
 
 - Commit `.env.example` only. Leave `.env`, `data/*.db`, `data/*.log`, `data/backups/`, and `*.traineddata` untracked.
 - The extension reads posts the owner can already see and POSTs them to this app. It does not publish, comment, or call Facebook's private GraphQL.
+- **Scrape scheduling (v1.4.0)** — `GET /api/v1/extension-config` (`src/lib/scrape-runs.ts`) returns enabled `facebook_group` + `facebook_marketplace` sources sorted by priority (สูง/ปกติ/ต่ำ = 3/10/30 min) with `due`, `knownKeys` (recent post keys) and the scroll settings (`scroll_screens` 0–10, `max_post_age_hours`, `max_posts_per_run` ≤40, `max_groups_per_cycle` default 5). The extension opens one inactive tab at a time, scrolls with `scrollTop` only (1.5–4 s waits, no clicks — "ดูเพิ่มเติม" text is read as-is), stops on known posts / too-old posts / cap / end, then POSTs `/api/v1/extension/scrape-result`. The server adapts `currentIntervalMinutes` (×0.6 when ≥5 new, min 2 min; ×1.5 when none, max 3× base ≤180) and stores `nextRunAt` + `lastRun*` stats shown on แหล่งข้อมูล and ภาพรวมระบบ. Pure logic: `src/lib/scrape-plan.ts` and `extension/scrape.js` (post keys must stay identical).
+- **Marketplace sources** — search/category URLs (`/marketplace/...`, not `/marketplace/item/`) are canonicalized without `sortBy`; listing cards (title, price, location, image) become posts with intent `seller`. Parser fixtures in `extension/fixtures/` marked SYNTHETIC are hand-written, not captured from Facebook.
 - Leave audio devices and OS sound settings alone.
 - `scripts/windows/*.ps1` stay ASCII so Windows PowerShell 5.1 can parse them.
 - Run `npm test` and `npm run build` before every commit. Fix failures first.

@@ -50,6 +50,15 @@ export type SourceRow = {
   lastExtensionAt: string | null;
   lastError: string | null;
   intervalMinutes: number;
+  priority: "high" | "normal" | "low";
+  currentIntervalMinutes: number;
+  maxIntervalMinutes: number;
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  lastRunFound: number;
+  lastRunNew: number;
+  lastRunScrolls: number;
+  lastRunStop: string;
   postCount: number;
   logs: { id: string; status: string; message: string; postsFound: number; createdAt: string }[];
 };

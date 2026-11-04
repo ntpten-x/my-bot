@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { requireExtensionToken } from "@/lib/auth";
 import { corsPreflight, json, withCors } from "@/lib/http";
 import { touchExtension } from "@/lib/extension-status";
+import { EXTENSION_SOURCE_TYPES } from "@/lib/scrape-plan";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +23,7 @@ export async function GET(request: Request) {
   });
   const pending = (
     await prisma.fetchTask.findMany({
-      where: { status: "pending", source: { enabled: true, type: "facebook_group" } },
+      where: { status: "pending", source: { enabled: true, type: { in: [...EXTENSION_SOURCE_TYPES] } } },
       orderBy: { createdAt: "asc" },
       take: 3,
       include: { source: true },
@@ -41,6 +42,8 @@ export async function GET(request: Request) {
           sourceId: task.sourceId,
           name: task.source.name,
           url: task.source.url,
+          type: task.source.type,
+          kind: task.source.type === "facebook_marketplace" ? "marketplace" : "group",
         })),
     }),
   );
