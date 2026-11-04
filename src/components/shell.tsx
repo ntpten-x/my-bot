@@ -3,11 +3,12 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Bell, BookOpen, Bookmark, Bug, LayoutDashboard, Lightbulb, LogOut, MessageSquareText, Radar, Rss, Settings, Sun, Tags, Workflow } from "lucide-react";
+import { Activity, Bell, BookOpen, Bookmark, Bug, LayoutDashboard, Lightbulb, LogOut, MessageSquareText, Radar, Rss, Settings, Sun, Tags, Workflow } from "lucide-react";
 import { api } from "./api";
 import { cn } from "@/lib/utils";
 
 const NAV = [
+  { href: "/overview", label: "ภาพรวมระบบ", icon: Activity },
   { href: "/dashboard", label: "แดชบอร์ด", icon: LayoutDashboard },
   { href: "/feed", label: "ฟีดลีด", icon: Radar },
   { href: "/pipeline", label: "ไปป์ไลน์", icon: Bookmark },

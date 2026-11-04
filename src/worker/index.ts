@@ -1,6 +1,6 @@
 import cron from "node-cron";
 import { prisma } from "../lib/prisma";
-import { getSettings } from "../lib/settings";
+import { getSettings, upsertSettings } from "../lib/settings";
 import { fetchRssPosts } from "../lib/rss";
 import { fetchWebBoardPosts } from "../lib/web-board";
 import { ingestPosts } from "../lib/ingest";
@@ -53,6 +53,7 @@ async function tick() {
   if (running) return;
   running = true;
   try {
+    await upsertSettings({ worker_last_tick: new Date().toISOString() }).catch(() => undefined);
     const settings = await getSettings();
     const sources = await prisma.source.findMany({
       where: { enabled: true, type: { in: ["rss", "web_board"] } },
@@ -94,6 +95,7 @@ async function tick() {
 
 console.log("[worker] MY-BOT worker เริ่มทำงาน — ตรวจ RSS และเว็บบอร์ดทุก 1 นาที");
 void (async () => {
+  await upsertSettings({ worker_started_at: new Date().toISOString(), worker_last_tick: new Date().toISOString() }).catch(() => undefined);
   const queued = await enqueueUnclassifiedPosts().catch((error) => {
     const message = error instanceof Error ? error.message : "เข้าคิวไม่สำเร็จ";
     return workerLog({ level: "error", message: "เข้าคิวโพสต์ที่ยังเป็นกฎไม่สำเร็จ", error: message }).then(() => 0);

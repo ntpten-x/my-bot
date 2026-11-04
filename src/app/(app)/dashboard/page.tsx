@@ -6,6 +6,7 @@ import { Button, Card } from "@/components/ui";
 import { ApiError, api } from "@/components/api";
 import { INTENT_LABEL, timeAgo } from "@/lib/format";
 import type { Lead } from "@/lib/lead";
+import { SystemOverviewWidget } from "@/components/system-overview";
 
 type Stats = {
   aiQueue: {
@@ -75,6 +76,7 @@ export default function DashboardPage() {
     <div>
       <h1 className="text-2xl font-semibold">แดชบอร์ด</h1>
       <p className="mt-1 text-sm text-muted">ภาพรวมลีดที่เก็บจากกลุ่มและบอร์ดที่คุณเฝ้าดู</p>
+      <SystemOverviewWidget />
       {error ? <p className="mt-4 text-sm text-red-700">{error}</p> : null}
       {!stats && !error ? <p className="mt-6 text-sm text-muted">กำลังโหลด...</p> : null}
       {stats ? (

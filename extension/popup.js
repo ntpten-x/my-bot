@@ -14,6 +14,7 @@ document.getElementById("save").addEventListener("click", () => {
     { apiBase: apiBase.value.trim() || "http://localhost:8001", token: token.value.trim(), enabled: enabled.checked },
     () => {
       status.textContent = "บันทึกแล้ว";
+      chrome.runtime.sendMessage({ type: "heartbeat-now" }, () => void chrome.runtime.lastError);
     },
   );
 });

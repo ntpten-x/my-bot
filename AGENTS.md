@@ -14,7 +14,7 @@ Stack: Next.js App Router, TypeScript, Tailwind, Prisma on Supabase Postgres (`D
 
 | Path | Role |
 | --- | --- |
-| `src/app/(app)` | Signed-in pages: dashboard, feed, pipeline, sources, parser, categories, learn, summaries, notifications, guide, settings |
+| `src/app/(app)` | Signed-in pages: overview (ภาพรวมระบบ), dashboard, feed, pipeline, sources, parser, categories, learn, summaries, notifications, guide, settings |
 | `src/app/api` | Session routes. `src/app/api/v1` is the extension and health surface |
 | `src/lib/pipeline` | Normalize, intent, ads, categories, rules |
 | `src/lib/ai` | Provider chain, queue, Ollama URL, warm-up |
@@ -51,6 +51,7 @@ Done when `npm run doctor` has no FAIL, `GET http://127.0.0.1:8001/api/v1/health
 
 - `npm run doctor` — PASS / WARN / FAIL, no secrets in the output. The same checks sit behind the signed-in `GET /api/v1/health/doctor`.
 - `GET /api/v1/health` — public, body is only `ok` and `version`.
+- **ภาพรวมระบบ** (`/overview`, signed-in `GET /api/system/overview`, `?fresh=1` re-tests cloud AI) — Facebook accounts from the extension heartbeat (`c_user` id only), extension version/token/tabs, Ollama/Groq/Gemini live checks (cached 5 min), worker, schedules, notifications, disk. Secrets are always masked. The extension (v1.3.0) POSTs `/api/v1/extension/heartbeat` every minute.
 - `npm test` and `npm run build` — both must finish clean before a commit.
 
 ## Commands

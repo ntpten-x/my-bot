@@ -2,7 +2,8 @@
 // "open the next queued lead when the gap allows") to the extension. It accepts messages from this page only.
 (function () {
   document.documentElement.setAttribute("data-mybot-extension", "assist-2");
-  const RELAYED = new Set(["assist-reply", "queue-advance", "queue-advance-cancel"]);
+  document.documentElement.setAttribute("data-mybot-extension-version", chrome.runtime.getManifest().version);
+  const RELAYED = new Set(["assist-reply", "queue-advance", "queue-advance-cancel", "heartbeat-now"]);
   window.addEventListener("message", (event) => {
     if (event.source !== window || event.origin !== location.origin) return;
     const data = event.data;

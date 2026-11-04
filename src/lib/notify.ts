@@ -131,6 +131,7 @@ export async function dispatchNotification(
   for (const [name, job] of jobs) {
     const result = await job;
     channels[name] = result;
+    if (!result.skipped) await recordChannelResult(name, result);
     if (result.skipped && !options.forceExternal) continue;
     if (result.ok) {
       await prisma.notification.create({ data: { postId: post.id, channel: name, title, body } });
@@ -139,6 +140,21 @@ export async function dispatchNotification(
     }
   }
   return { channels };
+}
+
+// Last send result per channel for the "ภาพรวมระบบ" page. URLs and tokens are stripped from the message.
+export function safeChannelMessage(message: string) {
+  return String(message || "")
+    .replace(/https?:\/\/\S+/gi, "[url]")
+    .replace(/\b[A-Za-z0-9_\-+/=]{32,}\b/g, "[hidden]")
+    .slice(0, 200);
+}
+
+async function recordChannelResult(name: string, result: ChannelResult) {
+  const value = JSON.stringify({ ok: result.ok, message: safeChannelMessage(result.message), at: new Date().toISOString() });
+  await prisma.setting
+    .upsert({ where: { key: `notify_last_${name}` }, update: { value }, create: { key: `notify_last_${name}`, value } })
+    .catch(() => undefined);
 }
 
 export function keywordHitsOf(post: { keywordHitsJson: string }) {

@@ -122,7 +122,7 @@ describe("extension safety policy", () => {
       .replace(/\/\*[\s\S]*?\*\//g, "")
       .replace(/(^|[^:])\/\/.*$/gm, "$1");
 
-  it.each(["assist.js", "bridge.js", "background.js", "content.js"])("%s never clicks, presses keys, submits or calls GraphQL", (file) => {
+  it.each(["assist.js", "bridge.js", "background.js", "content.js", "identity.js"])("%s never clicks, presses keys, submits or calls GraphQL", (file) => {
     const src = code(file);
     expect(src).not.toMatch(/\.click\s*\(/);
     expect(src).not.toMatch(/["']Enter["']|keydown|keypress|keyup|KeyboardEvent/);
@@ -138,13 +138,13 @@ describe("extension safety policy", () => {
     }
   });
 
-  it("version 1.2 registers only the mark-sent / skip shortcuts", () => {
+  it("version 1.3 registers only the mark-sent / skip shortcuts", () => {
     const manifest = JSON.parse(readFileSync(path.join(ext, "manifest.json"), "utf8")) as {
       version: string;
       commands: Record<string, { suggested_key?: { default?: string } }>;
       permissions: string[];
     };
-    expect(manifest.version).toBe("1.2.0");
+    expect(manifest.version).toBe("1.3.0");
     expect(Object.keys(manifest.commands).sort()).toEqual(["mark-sent", "mark-skip"]);
     expect(manifest.commands["mark-sent"].suggested_key?.default).toBe("Alt+Shift+S");
     expect(manifest.commands["mark-skip"].suggested_key?.default).toBe("Alt+Shift+K");

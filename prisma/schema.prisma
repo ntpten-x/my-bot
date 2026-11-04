@@ -307,3 +307,41 @@ model ReplyQueueItem {
   @@index([status, createdAt])
   @@index([authorKey, createdAt])
 }
+
+// Facebook accounts seen by the read-only extension (id = the c_user value on facebook.com).
+model FbAccount {
+  id            String   @id
+  name          String   @default("")
+  browser       String   @default("")
+  profileLabel  String   @default("")
+  installId     String   @default("")
+  loggedIn      Boolean  @default(true)
+  postsCaptured Int      @default(0)
+  firstSeenAt   DateTime @default(now())
+  lastSeenAt    DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([lastSeenAt])
+}
+
+// One row per extension install (random id kept in chrome.storage). Updated every minute.
+model ExtensionHeartbeat {
+  id           String    @id
+  version      String    @default("")
+  browser      String    @default("")
+  profileLabel String    @default("")
+  enabled      Boolean   @default(false)
+  fbLoggedIn   Boolean   @default(false)
+  fbUserId     String?
+  fbUserName   String    @default("")
+  fbCheckedAt  DateTime?
+  tabsJson     String    @default("[]")
+  lastError    String    @default("")
+  lastErrorAt  DateTime?
+  lastPostAt   DateTime?
+  postsSent    Int       @default(0)
+  lastSeenAt   DateTime  @default(now())
+  createdAt    DateTime  @default(now())
+
+  @@index([lastSeenAt])
+}

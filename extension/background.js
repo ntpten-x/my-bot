@@ -1,4 +1,4 @@
-importScripts("assist.js");
+importScripts("assist.js", "identity.js");
 
 const DEFAULTS = {
   apiBase: "http://localhost:8001",
@@ -48,11 +48,100 @@ function waitComplete(tabId) {
 }
 
 async function postJson(cfg, path, body) {
-  await fetch(`${base(cfg)}${path}`, {
+  return fetch(`${base(cfg)}${path}`, {
     method: "POST",
     headers: headers(cfg.token),
     body: JSON.stringify(body),
   });
+}
+
+// ---- Status for the "ภาพรวมระบบ" page (read-only facts about this browser) ----
+async function installId() {
+  const stored = await chrome.storage.local.get({ installId: "" });
+  if (stored.installId) return stored.installId;
+  const id = (crypto.randomUUID ? crypto.randomUUID() : `ext-${Date.now()}-${Math.random().toString(36).slice(2)}`).slice(0, 64);
+  await chrome.storage.local.set({ installId: id });
+  return id;
+}
+
+async function rememberError(message) {
+  await chrome.storage.local.set({ lastError: { message: String(message || "").slice(0, 300), at: Date.now() } });
+}
+
+async function rememberIdentity(identity) {
+  if (!identity || typeof identity !== "object") return;
+  const loggedIn = Boolean(identity.loggedIn);
+  const id = loggedIn && /^\d{5,20}$/.test(String(identity.id || "")) ? String(identity.id) : "";
+  const stored = await chrome.storage.local.get({ fbIdentity: null });
+  const previous = stored.fbIdentity || {};
+  const name = String(identity.name || "").slice(0, 80) || (previous.id === id ? previous.name || "" : "");
+  await chrome.storage.local.set({ fbIdentity: { loggedIn: Boolean(id), id, name, at: Date.now() } });
+}
+
+async function currentFbUserId() {
+  const stored = await chrome.storage.local.get({ fbIdentity: null });
+  return stored.fbIdentity && stored.fbIdentity.loggedIn ? stored.fbIdentity.id : "";
+}
+
+async function sendPosts(cfg, sourceUrl, posts) {
+  const fbUserId = await currentFbUserId();
+  const response = await postJson(cfg, "/api/v1/ingest", { sourceUrl, posts, fbUserId: fbUserId || undefined });
+  if (response && response.ok) {
+    if (posts.length) await chrome.storage.local.set({ lastPostAt: Date.now() });
+    const stored = await chrome.storage.local.get({ postsSent: 0 });
+    await chrome.storage.local.set({ postsSent: (stored.postsSent || 0) + posts.length });
+  } else if (response) {
+    const data = await response.json().catch(() => ({}));
+    await rememberError(`ส่งโพสต์เข้า MY-BOT ไม่สำเร็จ (${response.status}) ${data.error || ""}`.trim());
+  }
+  return response;
+}
+
+function browserName() {
+  const ua = (self.navigator && self.navigator.userAgent) || "";
+  const edge = ua.match(/Edg\/(\d+)/);
+  if (edge) return `Edge ${edge[1]}`;
+  const opera = ua.match(/OPR\/(\d+)/);
+  if (opera) return `Opera ${opera[1]}`;
+  const chrome = ua.match(/Chrome\/(\d+)/);
+  return chrome ? `Chrome ${chrome[1]}` : "Browser";
+}
+
+async function readingTabs() {
+  const tabs = await chrome.tabs
+    .query({ url: ["https://www.facebook.com/groups/*", "https://facebook.com/groups/*", "https://web.facebook.com/groups/*"] })
+    .catch(() => []);
+  return tabs.slice(0, 15).map((tab) => ({ title: String(tab.title || "").slice(0, 120), url: String(tab.url || "").split("?")[0].slice(0, 200) }));
+}
+
+let beating = false;
+
+async function heartbeat() {
+  if (beating) return;
+  const cfg = await loadConfig();
+  if (!cfg.token) return;
+  beating = true;
+  try {
+    const stored = await chrome.storage.local.get({ fbIdentity: null, lastError: null, lastPostAt: 0, postsSent: 0, profileLabel: "" });
+    const fb = stored.fbIdentity || { loggedIn: false, id: "", name: "", at: 0 };
+    const response = await postJson(cfg, "/api/v1/extension/heartbeat", {
+      installId: await installId(),
+      version: chrome.runtime.getManifest().version,
+      browser: browserName(),
+      profileLabel: String(stored.profileLabel || "").slice(0, 60),
+      enabled: Boolean(cfg.enabled),
+      fb: { loggedIn: Boolean(fb.loggedIn), id: fb.id || "", name: fb.name || "", checkedAt: fb.at || 0 },
+      tabs: await readingTabs(),
+      lastError: stored.lastError || null,
+      lastPostAt: stored.lastPostAt || 0,
+      postsSent: stored.postsSent || 0,
+    });
+    await chrome.storage.local.set({ lastHeartbeat: { at: Date.now(), status: response.status } });
+  } catch {
+    await chrome.storage.local.set({ lastHeartbeat: { at: Date.now(), status: 0 } });
+  } finally {
+    beating = false;
+  }
 }
 
 async function scrapeGroup(cfg, group) {
@@ -62,16 +151,21 @@ async function scrapeGroup(cfg, group) {
     tabId = tab.id;
     await waitComplete(tabId);
     await sleep(2500);
-    await chrome.scripting.executeScript({ target: { tabId }, files: ["selectors.js", "parser.js"] });
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["selectors.js", "parser.js", "identity.js"] });
     const [executed] = await chrome.scripting.executeScript({
       target: { tabId },
-      func: () => globalThis.MyBotParser.parseFacebookPosts(document),
+      func: () => ({
+        posts: globalThis.MyBotParser.parseFacebookPosts(document),
+        identity: globalThis.MyBotIdentity ? globalThis.MyBotIdentity.readFacebookIdentity(document) : null,
+      }),
     });
-    const posts = executed?.result || [];
-    await postJson(cfg, "/api/v1/ingest", { sourceUrl: group.url, posts });
+    const posts = executed?.result?.posts || [];
+    if (executed?.result?.identity) await rememberIdentity(executed.result.identity);
+    await sendPosts(cfg, group.url, posts);
     await postJson(cfg, "/api/v1/extension/sample", { sourceUrl: group.url, posts: (posts || []).slice(0, 8) }).catch(() => undefined);
     return { ok: true, postsFound: posts.length, message: `อ่านได้ ${posts.length} โพสต์` };
   } catch (error) {
+    await rememberError(`อ่านกลุ่ม ${group.name || group.url} ไม่สำเร็จ: ${String(error && error.message ? error.message : error)}`).catch(() => undefined);
     await postJson(cfg, "/api/v1/fetch-log", {
       sourceUrl: group.url,
       status: "error",
@@ -122,7 +216,7 @@ async function forwardManual(message) {
   const last = recentManual.get(key) || 0;
   if (Date.now() - last < 20000) return;
   recentManual.set(key, Date.now());
-  await postJson(cfg, "/api/v1/ingest", { sourceUrl: message.sourceUrl, posts: message.posts || [] });
+  await sendPosts(cfg, message.sourceUrl, message.posts || []);
   await postJson(cfg, "/api/v1/extension/sample", {
     sourceUrl: message.sourceUrl,
     posts: (message.posts || []).slice(0, 8),
@@ -157,22 +251,43 @@ async function pollTasks() {
 function armAlarms() {
   chrome.alarms.create("mybot-tick", { periodInMinutes: 1 });
   chrome.alarms.create("mybot-tasks", { periodInMinutes: 0.5 });
+  chrome.alarms.create("mybot-heartbeat", { periodInMinutes: 1 });
 }
 
 chrome.runtime.onInstalled.addListener(() => {
   armAlarms();
+  void heartbeat();
 });
 
 chrome.runtime.onStartup.addListener(() => {
   armAlarms();
+  void heartbeat();
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "mybot-tick") void cycle();
   if (alarm.name === "mybot-tasks") void pollTasks();
+  if (alarm.name === "mybot-heartbeat") void heartbeat();
+});
+
+// Facebook pages report who is logged in (identity.js reads the c_user cookie value only).
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type !== "fb-identity") return;
+  const fromFacebook = sender.tab && sender.url && globalThis.MyBotAssist.isFacebookUrl(sender.url);
+  if (!fromFacebook) return;
+  rememberIdentity(message.identity)
+    .then(() => sendResponse({ ok: true }))
+    .catch(() => sendResponse({ ok: false }));
+  return true;
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === "heartbeat-now") {
+    heartbeat()
+      .then(() => sendResponse({ ok: true }))
+      .catch(() => sendResponse({ ok: false }));
+    return true;
+  }
   if (message?.type !== "manual-posts") return;
   forwardManual(message)
     .then(() => sendResponse({ ok: true }))
