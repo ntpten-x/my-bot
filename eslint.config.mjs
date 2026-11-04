@@ -18,7 +18,14 @@ const eslintConfig = [
       "out/**",
       "build/**",
       "next-env.d.ts",
+      "scripts/verify-ui-local.js",
+      "data/**",
     ],
+  },
+  {
+    // UMD helpers shared by the extension (importScripts) and Node tests (require).
+    files: ["extension/**/*.js"],
+    rules: { "@typescript-eslint/no-require-imports": "off" },
   },
 ];
 

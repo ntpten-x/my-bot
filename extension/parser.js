@@ -14,7 +14,7 @@
     if (!href) return "";
     try {
       return new URL(href, "https://www.facebook.com").href.split("#")[0];
-    } catch (_error) {
+    } catch {
       return "";
     }
   }

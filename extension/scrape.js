@@ -11,7 +11,7 @@
     let url;
     try {
       url = new URL(value, "https://www.facebook.com");
-    } catch (_error) {
+    } catch {
       return value.toLowerCase();
     }
     const path = url.pathname;

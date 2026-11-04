@@ -56,7 +56,7 @@
     return new Date(ms).toISOString();
   }
 
-  function withClock(parts, rest, now) {
+  function withClock(parts, rest) {
     let clock = null;
     if (rest && rest.trim()) {
       clock = parseClock(rest.replace(/^(?:เวลา|at)\s*/i, ""));
