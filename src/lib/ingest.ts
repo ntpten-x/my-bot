@@ -7,6 +7,7 @@ import { canonicalSourceUrl, normalizeUrl } from "./pipeline/normalize";
 import { touchExtension } from "./extension-status";
 import { collapseIdenticalTexts, enrichPosts } from "./smart/enrich";
 import { dispatchNotification, shouldNotify, shouldNotifyExternal } from "./notify";
+import { parseFbTime } from "./fb-time";
 import { findSourceByUrl, loadCatalogFromDb, resolveCategoryIds } from "./sources";
 import { recordTiming } from "./metrics";
 import { queueExternalNotification } from "./notification-queue";
@@ -21,10 +22,20 @@ export type IncomingPost = {
   images?: string[];
 };
 
-function parseDate(value?: string | null) {
+/**
+ * Post time from the extension: ISO strings, or raw Facebook text ("3 ชม.", "เมื่อวานนี้ เวลา 14:20")
+ * read in Asia/Bangkok. Times in the future (beyond 1 hour of clock skew) or before 2004 are dropped.
+ */
+export function parseDate(value?: string | null, now = Date.now()) {
   if (!value) return null;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date;
+  const text = String(value).trim();
+  let ms = /^\d{4}-\d{2}-\d{2}/.test(text) ? Date.parse(text) : NaN;
+  if (Number.isNaN(ms)) {
+    const parsed = parseFbTime(text, now);
+    ms = parsed ? Date.parse(parsed) : NaN;
+  }
+  if (Number.isNaN(ms) || ms > now + 3600_000 || ms < Date.UTC(2004, 0, 1)) return null;
+  return new Date(ms);
 }
 
 function cleanImages(images: string[] | undefined) {

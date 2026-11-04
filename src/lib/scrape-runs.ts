@@ -79,6 +79,7 @@ export async function buildExtensionConfig(now = new Date()) {
 
 export type ScrapeRunInput = {
   sourceUrl: string;
+  groupId?: string;
   ok: boolean;
   postsFound: number;
   newPosts: number;
@@ -112,6 +113,7 @@ export async function recordScrapeRun(input: ScrapeRunInput, now = new Date(), r
       lastRunStop: stop.slice(0, 40),
       lastFetchedAt: now,
       lastExtensionAt: now,
+      ...(input.groupId && /^\d{5,20}$/.test(input.groupId) && source.type === "facebook_group" ? { fbGroupId: input.groupId } : {}),
       ...(input.ok ? { lastError: null } : { lastError: (input.message || "ดึงไม่สำเร็จ").slice(0, 500) }),
     },
   });

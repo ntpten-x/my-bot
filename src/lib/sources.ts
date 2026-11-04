@@ -1,12 +1,27 @@
 import { prisma } from "./prisma";
 import { canonicalSourceUrl } from "./pipeline/normalize";
 
+/** Group slug or numeric id from a Facebook group URL, lower-cased ("" when not a group URL). */
+export function facebookGroupKey(input: string): string {
+  const match = canonicalSourceUrl(input).match(/^https:\/\/www\.facebook\.com\/groups\/([^/?#]+)$/i);
+  return match ? decodeURIComponent(match[1]).toLowerCase() : "";
+}
+
 export async function findSourceByUrl(input: string) {
   const canonical = canonicalSourceUrl(input);
   const exact = await prisma.source.findUnique({ where: { url: canonical } });
   if (exact) return exact;
   const sources = await prisma.source.findMany();
-  return sources.find((source) => canonicalSourceUrl(source.url) === canonical) ?? null;
+  const same = sources.find((source) => canonicalSourceUrl(source.url) === canonical);
+  if (same) return same;
+  // Same Facebook group under another URL form: vanity name <-> numeric id (learned from the page),
+  // or a different letter case. Only exact group-key matches, never a guess.
+  const key = facebookGroupKey(input);
+  if (!key) return null;
+  return (
+    sources.find((source) => source.type === "facebook_group" && (facebookGroupKey(source.url) === key || source.fbGroupId === key)) ??
+    null
+  );
 }
 
 export async function loadCatalogFromDb() {

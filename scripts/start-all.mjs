@@ -28,13 +28,40 @@ const port = process.env.PORT || "8001";
 const node = process.execPath;
 const children = [];
 
+// Every console line gets a Bangkok timestamp, e.g. "2026-11-04 15:50:07 [worker] ...".
+export function stamp(date = new Date()) {
+  const local = new Date(date.getTime() + 7 * 3600_000).toISOString();
+  return `${local.slice(0, 10)} ${local.slice(11, 19)}`;
+}
+
+function pipeLines(stream, target) {
+  let buffer = "";
+  stream.setEncoding("utf8");
+  stream.on("data", (chunk) => {
+    buffer += chunk;
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() ?? "";
+    for (const line of lines) target.write(`${stamp()} ${line}\n`);
+  });
+  stream.on("end", () => {
+    if (buffer) target.write(`${stamp()} ${buffer}\n`);
+  });
+}
+
+for (const level of ["log", "error", "warn"]) {
+  const original = console[level].bind(console);
+  console[level] = (...args) => original(stamp(), ...args);
+}
+
 function run(args, extraEnv = {}) {
   const child = spawn(node, args, {
-    stdio: "inherit",
+    stdio: ["inherit", "pipe", "pipe"],
     env: { ...process.env, ...extraEnv },
     shell: false,
     windowsHide: true,
   });
+  pipeLines(child.stdout, process.stdout);
+  pipeLines(child.stderr, process.stderr);
   children.push(child);
   child.on("exit", (code) => {
     if (code && code !== 0) {

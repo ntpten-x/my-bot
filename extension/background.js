@@ -171,9 +171,10 @@ async function readPage(tabId, kind) {
           ? globalThis.MyBotParser.parseMarketplaceListings(document)
           : globalThis.MyBotParser.parseFacebookPosts(document),
       identity: globalThis.MyBotIdentity ? globalThis.MyBotIdentity.readFacebookIdentity(document) : null,
+      groupId: pageKind === "marketplace" || !globalThis.MyBotParser.readGroupId ? "" : globalThis.MyBotParser.readGroupId(document),
     }),
   });
-  return executed && executed.result ? executed.result : { posts: [], identity: null };
+  return executed && executed.result ? executed.result : { posts: [], identity: null, groupId: "" };
 }
 
 async function scrollOneScreen(tabId) {
@@ -203,6 +204,7 @@ async function reportRun(cfg, group, run) {
   try {
     const response = await postJson(cfg, "/api/v1/extension/scrape-result", {
       sourceUrl: group.url,
+      groupId: run.groupId || undefined,
       ok: run.ok,
       postsFound: run.postsFound,
       newPosts: run.newPosts,
@@ -233,9 +235,10 @@ async function scrapeGroup(cfg, group, remote) {
     scrapingTabs.add(tabId);
     await waitComplete(tabId);
     await sleep(2500);
-    await chrome.scripting.executeScript({ target: { tabId }, files: ["selectors.js", "parser.js", "identity.js"] });
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["selectors.js", "fbtime.js", "parser.js", "identity.js"] });
     const first = await readPage(tabId, kind);
     if (first.identity) await rememberIdentity(first.identity);
+    if (first.groupId) result.groupId = first.groupId;
     sample = (first.posts || []).slice(0, 8);
     let stop = Scrape.addStep(run, first.posts);
     while (!stop && result.scrolls < settings.screens) {

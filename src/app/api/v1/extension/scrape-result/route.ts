@@ -12,6 +12,7 @@ export function OPTIONS() {
 
 const schema = z.object({
   sourceUrl: z.string().url(),
+  groupId: z.string().regex(/^\d{5,20}$/).optional(),
   ok: z.boolean(),
   postsFound: z.number().int().min(0).max(1000).default(0),
   newPosts: z.number().int().min(0).max(1000).default(0),

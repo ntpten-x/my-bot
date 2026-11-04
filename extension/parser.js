@@ -2,6 +2,9 @@
   const SELECTORS =
     root.MyBotSelectors ||
     (typeof require !== "undefined" ? require("./selectors.js") : null);
+  const FBTIME =
+    root.MyBotFbTime ||
+    (typeof require !== "undefined" ? require("./fbtime.js") : null);
 
   function clean(value) {
     return String(value || "").replace(/\s+/g, " ").trim();
@@ -71,15 +74,41 @@
     return "";
   }
 
+  const ANONYMOUS = /^(?:ผู้เข้าร่วมแบบไม่ระบุตัวตน|สมาชิกที่ไม่ระบุตัวตน|Anonymous (?:participant|member))$/i;
+  const NOT_A_NAME = /^(?:facebook|ติดตาม|follow|เข้าร่วม|join|ผู้ดูแล|admin|moderator|·|\.|…)$/i;
+
+  function cleanAuthor(value) {
+    let name = clean(value)
+      .replace(/\s*[·•]\s*(?:ติดตาม|Follow|เข้าร่วม|Join).*$/i, "")
+      .replace(/\s+(?:ได้แชร์|shared|อยู่ที่|is at|is with|กับ|with)\s.*$/i, "")
+      .replace(/^(?:โพสต์ของ|Post by)\s+/i, "")
+      .trim();
+    if (!name || name.length > 80 || NOT_A_NAME.test(name)) return "";
+    if (FBTIME && FBTIME.parseFbTime(name)) return "";
+    if (/^https?:/i.test(name)) return "";
+    return name;
+  }
+
   function extractAuthor(article) {
     for (const selector of SELECTORS.author) {
-      const element = article.querySelector(selector);
-      const value = clean(element && element.textContent);
-      if (value && value.length < 80 && !/^facebook$/i.test(value)) return value;
+      const nodes = article.querySelectorAll(selector);
+      for (const element of nodes) {
+        const value = cleanAuthor(element && element.textContent);
+        if (value) return value;
+      }
+    }
+    // Profile links inside a group post (/groups/<id>/user/<uid>/ or /profile.php?id=) carry the author name.
+    const links = article.querySelectorAll('a[href*="/user/"], a[href*="profile.php"]');
+    for (const link of links) {
+      const value = cleanAuthor(link.getAttribute("aria-label") || link.textContent);
+      if (value) return value;
     }
     const label = article.getAttribute("aria-label") || "";
     const match = label.match(/(?:โพสต์ของ|Post by)\s+(.+)/i);
-    return match ? clean(match[1]) : "";
+    if (match) return cleanAuthor(match[1]);
+    const text = clean(article.textContent);
+    const anonymous = text.match(/ผู้เข้าร่วมแบบไม่ระบุตัวตน|Anonymous participant/i);
+    return anonymous && ANONYMOUS.test(anonymous[0]) ? anonymous[0] : "";
   }
 
   function extractTime(article) {
@@ -90,7 +119,51 @@
       const seconds = Number(abbr.getAttribute("data-utime"));
       if (seconds) return new Date(seconds * 1000).toISOString();
     }
+    if (!FBTIME) return null;
+    // Timestamp link: Facebook shows "3 ชม." / "Yesterday at 14:20" as the post permalink text,
+    // with the full date in its aria-label or a tooltip. Read text/attributes only.
+    const candidates = [];
+    const push = (value) => {
+      const text = clean(value);
+      if (text && text.length <= 80) candidates.push(text);
+    };
+    article.querySelectorAll("a[href]").forEach((link) => {
+      const href = link.getAttribute("href") || "";
+      if (!/\/posts\/|\/permalink\/|story_fbid|multi_permalinks|\/marketplace\/item\//.test(href)) return;
+      push(link.getAttribute("aria-label"));
+      push(link.getAttribute("title"));
+      link.querySelectorAll("[aria-label],[title]").forEach((node) => {
+        push(node.getAttribute("aria-label"));
+        push(node.getAttribute("title"));
+      });
+      push(link.textContent);
+    });
+    article.querySelectorAll("abbr[title], span[title], [data-tooltip-content]").forEach((node) => {
+      push(node.getAttribute("title") || node.getAttribute("data-tooltip-content"));
+    });
+    for (const text of candidates) {
+      const at = FBTIME.parseFbTime(text);
+      if (at) return at;
+    }
     return null;
+  }
+
+  // Numeric Facebook group id of the page being read (vanity URLs like /groups/name redirect to it).
+  function readGroupId(doc) {
+    const rootDoc = doc || (typeof document !== "undefined" ? document : null);
+    if (!rootDoc) return "";
+    const fromPath = String((rootDoc.location && rootDoc.location.pathname) || "").match(/\/groups\/(\d{5,20})(?:\/|$)/);
+    if (fromPath) return fromPath[1];
+    const meta = rootDoc.querySelector('meta[property="al:android:url"], meta[property="al:ios:url"]');
+    const fromMeta = meta && String(meta.getAttribute("content") || "").match(/group\/(\d{5,20})/);
+    if (fromMeta) return fromMeta[1];
+    const counts = {};
+    rootDoc.querySelectorAll('a[href*="/groups/"]').forEach((link) => {
+      const found = String(link.getAttribute("href") || "").match(/\/groups\/(\d{5,20})\//);
+      if (found) counts[found[1]] = (counts[found[1]] || 0) + 1;
+    });
+    const best = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0];
+    return best && counts[best] >= 3 ? best : "";
   }
 
   function extractImages(article) {
@@ -191,7 +264,7 @@
     return listings;
   }
 
-  const api = { parseFacebookPosts, parseMarketplaceListings, SELECTORS };
+  const api = { parseFacebookPosts, parseMarketplaceListings, readGroupId, SELECTORS };
   root.MyBotParser = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);

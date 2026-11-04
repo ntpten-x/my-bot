@@ -44,11 +44,15 @@ model Source {
   lastRunNew             Int       @default(0)
   lastRunScrolls         Int       @default(0)
   lastRunStop            String    @default("")
+  /// Numeric Facebook group id seen on the page (vanity URLs resolve to it).
+  fbGroupId              String?
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
   posts           Post[]
   fetchLogs       FetchLog[]
   fetchTasks      FetchTask[]
+
+  @@index([fbGroupId])
 }
 
 model Category {
