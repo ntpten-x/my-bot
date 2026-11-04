@@ -138,6 +138,27 @@ describe("extension safety policy", () => {
     }
   });
 
+  it("version 1.2 registers only the mark-sent / skip shortcuts", () => {
+    const manifest = JSON.parse(readFileSync(path.join(ext, "manifest.json"), "utf8")) as {
+      version: string;
+      commands: Record<string, { suggested_key?: { default?: string } }>;
+      permissions: string[];
+    };
+    expect(manifest.version).toBe("1.2.0");
+    expect(Object.keys(manifest.commands).sort()).toEqual(["mark-sent", "mark-skip"]);
+    expect(manifest.commands["mark-sent"].suggested_key?.default).toBe("Alt+Shift+S");
+    expect(manifest.commands["mark-skip"].suggested_key?.default).toBe("Alt+Shift+K");
+    expect(manifest.permissions).not.toContain("debugger");
+  });
+
+  it("background talks only to MY-BOT and trusts tab ids it recorded itself", () => {
+    const src = code("background.js");
+    expect(src).toMatch(/\/api\/v1\/extension\/reply-queue/);
+    expect(src).toMatch(/files: \["assist\.js", "overlay\.js"\]/);
+    expect(src).toMatch(/loadAssistTabs\(\)/);
+    expect(src).not.toMatch(/facebook\.com\/api|fetch\([^)]*facebook/i);
+  });
+
   it("background only injects for a pending request from the MY-BOT origin", () => {
     const src = code("background.js");
     expect(src).toMatch(/fromMyBotApp/);

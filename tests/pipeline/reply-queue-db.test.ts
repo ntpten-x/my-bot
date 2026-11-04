@@ -15,7 +15,7 @@ vi.mock("../../src/lib/notify", () => ({ dispatchNotification: vi.fn(async (...a
 
 import { prisma } from "../../src/lib/prisma";
 import { upsertSettings } from "../../src/lib/settings";
-import { ReplyQueueError, buildReplyQueue, finishReplyItem, openReplyItem, replyQueueState } from "../../src/lib/reply-queue";
+import { ReplyQueueError, buildReplyQueue, editReplyItem, finishReplyItem, openNextReplyItem, openReplyItem, replyAdvanceInfo, replyQueueState } from "../../src/lib/reply-queue";
 
 let seq = 0;
 async function post(sourceId: string, authorName: string, extra: Record<string, unknown> = {}) {
@@ -116,5 +116,54 @@ describe.skipIf(!fixture.enabled)("reply queue against Postgres", () => {
     await post(g.id, "b", { suggestedReply: "สนใจครับ" });
     expect((await buildReplyQueue()).created).toBe(1);
     expect(await buildReplyQueue()).toMatchObject({ created: 0 });
+  });
+
+  it("auto-advance opens the next lead only when gap and cap allow; edits and finish are safe", async () => {
+    await upsertSettings({ reply_daily_cap: "10", reply_group_daily_cap: "5", reply_gap_min_minutes: "0", reply_gap_max_minutes: "0" });
+    const g = await prisma.source.create({ data: { type: "facebook_group", name: "g", url: "https://www.facebook.com/groups/8" } });
+    await prisma.replyTemplate.createMany({ data: [{ name: "A", body: "สวัสดีคุณ {author}" }, { name: "B", body: "ทักแชทได้เลย {author}" }] });
+    const answered = await post(g.id, "ตอบไปแล้ว");
+    await post(g.id, "หนึ่ง");
+    await post(g.id, "สอง");
+    await post(g.id, "สาม");
+    await post(g.id, "สี่");
+    expect((await buildReplyQueue({ notify: false })).created).toBe(5);
+    await upsertSettings({ reply_daily_cap: "2" }); // the build fills up to the cap; opening is capped at 2 today
+    // Answered some other way after queueing -> skipped, never reopened.
+    await prisma.post.update({ where: { id: answered.id }, data: { repliedAt: new Date(), pipelineStatus: "replied" } });
+
+    const first = await openNextReplyItem();
+    expect(first.item).toBeTruthy();
+    expect(first.item!.templates.length).toBe(2);
+    expect(first.item!.templates.every((t) => !t.text.includes("{author}"))).toBe(true);
+    expect(first.item!.postId).not.toBe(answered.id);
+    expect((await prisma.replyQueueItem.findFirstOrThrow({ where: { postId: answered.id } })).status).toBe("skipped");
+
+    // Still open -> no advance.
+    expect(await openNextReplyItem()).toMatchObject({ item: null, decision: "open" });
+
+    await editReplyItem(first.item!.id, "ข้อความที่แก้แล้ว");
+    await finishReplyItem(first.item!.id, "sent", "ข้อความที่ส่งจริง");
+    await finishReplyItem(first.item!.id, "skip"); // idempotent: stays sent
+    const done = await prisma.replyQueueItem.findUniqueOrThrow({ where: { id: first.item!.id } });
+    expect(done.status).toBe("sent");
+    expect(done.text).toBe("ข้อความที่ส่งจริง");
+
+    expect((await replyAdvanceInfo()).decision).toBe("ready");
+    const second = await openNextReplyItem();
+    expect(second.item).toBeTruthy();
+    await finishReplyItem(second.item!.id, "skip");
+    // Cap of 2 opened today reached.
+    expect(await openNextReplyItem()).toMatchObject({ item: null, decision: "cap" });
+
+    // Gap timer: with a gap, the next one waits.
+    await upsertSettings({ reply_daily_cap: "10", reply_gap_min_minutes: "5", reply_gap_max_minutes: "5" });
+    const third = await openNextReplyItem();
+    expect(third.item).toBeTruthy();
+    await finishReplyItem(third.item!.id, "sent");
+    const info = await replyAdvanceInfo();
+    expect(info.decision).toBe("wait");
+    expect(info.waitMs).toBeGreaterThan(200_000);
+    expect(await openNextReplyItem()).toMatchObject({ item: null, decision: "wait" });
   });
 });

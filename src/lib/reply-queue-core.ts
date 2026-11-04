@@ -84,3 +84,31 @@ export function pickTemplate<T extends RotatableTemplate>(templates: T[], catego
   usage.set(picked.id, (usage.get(picked.id) ?? 0) + 1);
   return picked;
 }
+
+export type AdvanceInput = {
+  hasNext: boolean;
+  hasOpen: boolean;
+  openedToday: number;
+  cap: number;
+  waitMs: number;
+};
+export type AdvanceDecision =
+  | { state: "ready"; waitMs: 0 }
+  | { state: "wait"; waitMs: number }
+  | { state: "blocked"; waitMs: 0; reason: "empty" | "cap" | "open" };
+
+// Whether the next queued lead may be opened now, later (after the gap), or not today.
+// Order matters: the cap and an item still waiting for "sent/skip" win over the gap timer.
+export function advanceDecision(input: AdvanceInput): AdvanceDecision {
+  if (input.hasOpen) return { state: "blocked", waitMs: 0, reason: "open" };
+  if (input.openedToday >= input.cap) return { state: "blocked", waitMs: 0, reason: "cap" };
+  if (!input.hasNext) return { state: "blocked", waitMs: 0, reason: "empty" };
+  if (input.waitMs > 0) return { state: "wait", waitMs: input.waitMs };
+  return { state: "ready", waitMs: 0 };
+}
+
+export const ADVANCE_REASON_TH: Record<"empty" | "cap" | "open", string> = {
+  empty: "คิววันนี้หมดแล้ว",
+  cap: "ครบโควตาตอบวันนี้แล้ว",
+  open: "ยังมีรายการที่เปิดค้าง รอกด ส่งแล้ว หรือ ข้าม",
+};

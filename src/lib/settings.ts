@@ -48,6 +48,9 @@ export type AppSettings = {
   replyAuthorDays: number;
   replyGroupDailyCap: number;
   replyMinScore: number;
+  replyAutoAdvance: boolean;
+  replyAutoMarkSent: boolean;
+  replyAutoInsert: boolean;
 };
 
 function pick(db: string | undefined, env: string | undefined, fallback = "") {
@@ -115,6 +118,9 @@ export async function getSettings(): Promise<AppSettings> {
     replyAuthorDays: num(map.reply_author_days, 7, 0, 90),
     replyGroupDailyCap: num(map.reply_group_daily_cap, 5, 1, 50),
     replyMinScore: num(map.reply_min_score, 60, 0, 100),
+    replyAutoAdvance: map.reply_auto_advance !== "false",
+    replyAutoMarkSent: map.reply_auto_mark_sent === "true",
+    replyAutoInsert: map.reply_auto_insert === "true",
   };
 }
 
@@ -174,5 +180,8 @@ export function publicSettings(settings: AppSettings) {
     replyAuthorDays: settings.replyAuthorDays,
     replyGroupDailyCap: settings.replyGroupDailyCap,
     replyMinScore: settings.replyMinScore,
+    replyAutoAdvance: settings.replyAutoAdvance,
+    replyAutoMarkSent: settings.replyAutoMarkSent,
+    replyAutoInsert: settings.replyAutoInsert,
   };
 }

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MY-BOT Lead Radar",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "อ่านโพสต์กลุ่ม Facebook ที่คุณเป็นสมาชิก แล้วส่งเข้า MY-BOT บนเครื่องตัวเอง ไม่โพสต์อัตโนมัติ ไม่กดส่งคอมเมนต์ และไม่เรียก API ภายในของ Facebook — ช่วยพิมพ์ข้อความตอบให้เฉพาะตอนที่คุณกด \"ตอบลีดนี้\" แล้วคุณกดส่งเอง",
   "permissions": [
     "storage",
@@ -47,5 +47,19 @@
       ],
       "run_at": "document_start"
     }
-  ]
+  ],
+  "commands": {
+    "mark-sent": {
+      "suggested_key": {
+        "default": "Alt+Shift+S"
+      },
+      "description": "บันทึกว่าส่งแล้ว (ลีดที่เปิดอยู่ในแท็บนี้)"
+    },
+    "mark-skip": {
+      "suggested_key": {
+        "default": "Alt+Shift+K"
+      },
+      "description": "ข้ามลีดที่เปิดอยู่ในแท็บนี้"
+    }
+  }
 }

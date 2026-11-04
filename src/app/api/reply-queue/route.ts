@@ -18,6 +18,9 @@ async function settingsView() {
     authorDays: s.replyAuthorDays,
     groupDailyCap: s.replyGroupDailyCap,
     minScore: s.replyMinScore,
+    autoAdvance: s.replyAutoAdvance,
+    autoMarkSent: s.replyAutoMarkSent,
+    autoInsert: s.replyAutoInsert,
   };
 }
 
@@ -44,6 +47,9 @@ export async function PUT(request: Request) {
     reply_author_days: String(data.authorDays),
     reply_group_daily_cap: String(data.groupDailyCap),
     reply_min_score: String(data.minScore),
+    ...(data.autoAdvance === undefined ? {} : { reply_auto_advance: String(data.autoAdvance) }),
+    ...(data.autoMarkSent === undefined ? {} : { reply_auto_mark_sent: String(data.autoMarkSent) }),
+    ...(data.autoInsert === undefined ? {} : { reply_auto_insert: String(data.autoInsert) }),
   });
   return json({ settings: await settingsView() });
 }

@@ -61,7 +61,10 @@ export function LeadCard({
       setAssistNote("ยังไม่มีข้อความตอบ — สร้างข้อความสำเร็จรูปที่หน้า ข้อความสำเร็จรูป ก่อน");
       return;
     }
-    const result = await assistReply(lead.externalUrl, text);
+    const result = await assistReply(lead.externalUrl, text, {
+      postId: lead.id,
+      templates: usable.slice(0, 20).map((item) => ({ id: item.id, name: item.name, text: fill(item.body) })).filter((item) => item.text),
+    });
     setAssistNote(result.message);
     setAwaitingSent(true);
     if (usedId) void api(`/api/templates/${usedId}`, { method: "PATCH", body: JSON.stringify({ used: true }) }).catch(() => undefined);

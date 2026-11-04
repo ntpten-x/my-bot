@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { Button, Card, Input, Label } from "@/components/ui";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Button, Card, Input, Label, Textarea } from "@/components/ui";
 import { ApiError, api } from "@/components/api";
-import { assistReply } from "@/components/assist-reply";
+import { assistReply, cancelAdvance, extensionSupportsAdvance, requestAdvance, type AssistTemplate } from "@/components/assist-reply";
+import { SHORTCUT_HELP, shortcutFor } from "@/lib/reply-shortcuts";
 
 type QueueSettings = {
   enabled: boolean;
@@ -14,7 +15,12 @@ type QueueSettings = {
   authorDays: number;
   groupDailyCap: number;
   minScore: number;
+  autoAdvance: boolean;
+  autoMarkSent: boolean;
+  autoInsert: boolean;
 };
+type AdvanceInfo = { decision: "ready" | "wait" | "open" | "cap" | "empty"; waitMs: number; reason: string };
+type Countdown = { at: number; via: "extension" | "panel" };
 type QueueItem = {
   id: string;
   postId: string;
@@ -44,6 +50,11 @@ export function ReplyQueuePanel() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  const [countdown, setCountdown] = useState<Countdown | null>(null);
+  const [readyToOpen, setReadyToOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editText, setEditText] = useState("");
+  const nextButton = useRef<HTMLButtonElement>(null);
 
   const load = useCallback(async () => {
     const data = await api<QueueState>("/api/reply-queue");
@@ -54,7 +65,14 @@ export function ReplyQueuePanel() {
   useEffect(() => {
     void load().catch((err) => setError(err instanceof ApiError ? err.message : "โหลดคิวไม่สำเร็จ"));
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
+    // Pick up "sent/skip" marked from the Facebook tab and items opened by auto-advance.
+    const poll = window.setInterval(() => {
+      if (document.visibilityState === "visible") void load().catch(() => undefined);
+    }, 15000);
+    return () => {
+      window.clearInterval(timer);
+      window.clearInterval(poll);
+    };
   }, [load]);
 
   async function run(task: () => Promise<void>) {
@@ -73,29 +91,136 @@ export function ReplyQueuePanel() {
   const openItem = state?.items.find((item) => item.status === "opened");
   const nextItem = state?.items.find((item) => item.status === "queued");
   const capReached = state ? state.openedToday >= state.cap : false;
+  const prefs = state?.settings;
+  const countdownMs = countdown ? Math.max(0, countdown.at - now) : 0;
+
+  // Countdown finished. With the extension (1.2+) it opens the next post itself; without it the browser
+  // blocks tabs opened by timers, so the panel just highlights "เปิดรายการถัดไป" (or press N).
+  useEffect(() => {
+    if (!countdown || countdownMs > 0) return;
+    setCountdown(null);
+    if (countdown.via === "panel") {
+      setReadyToOpen(true);
+      setNote("ถึงเวลาเปิดรายการถัดไปแล้ว — กด N หรือปุ่ม “เปิดรายการถัดไป”");
+      nextButton.current?.focus();
+    }
+    window.setTimeout(() => void load().catch(() => undefined), countdown.via === "extension" ? 6000 : 0);
+  }, [countdown, countdownMs, load]);
 
   async function openNext() {
     if (!nextItem) return;
     await run(async () => {
-      const { item } = await api<{ item: { url: string; text: string } }>(`/api/reply-queue/${nextItem.id}/open`, { method: "POST" });
-      const result = await assistReply(item.url, item.text);
-      setNote(result.message);
+      setReadyToOpen(false);
+      setCountdown(null);
+      const { item, prefs: itemPrefs } = await api<{
+        item: { id: string; postId: string; url: string; text: string; templates?: AssistTemplate[] };
+        prefs?: { autoMarkSent?: boolean; autoInsert?: boolean };
+      }>(`/api/reply-queue/${nextItem.id}/open`, { method: "POST" });
+      const result = await assistReply(item.url, item.text, { itemId: item.id, postId: item.postId, templates: item.templates, prefs: itemPrefs });
+      setNote(result.opened ? result.message : `${result.message} (เบราว์เซอร์บล็อกแท็บใหม่ — กด “เปิดโพสต์อีกครั้ง”)`);
       await load();
     });
   }
 
   async function finish(id: string, action: "sent" | "skip") {
     await run(async () => {
-      await api(`/api/reply-queue/${id}`, { method: "POST", body: JSON.stringify({ action }) });
-      setNote(action === "sent" ? "บันทึกว่าตอบแล้ว" : "ข้ามรายการนี้แล้ว");
+      const text = editingId === id && editText.trim() ? editText : undefined;
+      const data = await api<{ advance?: AdvanceInfo }>(`/api/reply-queue/${id}`, { method: "POST", body: JSON.stringify({ action, text }) });
+      if (editingId === id) setEditingId(null);
+      const done = action === "sent" ? "บันทึกว่าตอบแล้ว" : "ข้ามรายการนี้แล้ว";
+      setNote(done);
+      await load();
+      await planAdvance(data.advance, done);
+    });
+  }
+
+  // After "sent/skip": open the next lead automatically once the gap and daily cap allow.
+  async function planAdvance(advance: AdvanceInfo | undefined, done: string) {
+    if (!advance || !prefs?.autoAdvance) return;
+    if (advance.decision !== "ready" && advance.decision !== "wait") {
+      if (advance.decision !== "open" && advance.reason) setNote(`${done} · ${advance.reason}`);
+      return;
+    }
+    if (extensionSupportsAdvance()) {
+      const reply = await requestAdvance();
+      if (reply.ok && reply.at) {
+        setCountdown({ at: reply.at, via: "extension" });
+        return;
+      }
+      if (reply.ok && reply.reason) {
+        setNote(`${done} · ${reply.reason}`);
+        return;
+      }
+    }
+    setCountdown({ at: Date.now() + Math.max(0, advance.waitMs), via: "panel" });
+  }
+
+  async function stopCountdown() {
+    if (countdown?.via === "extension") await cancelAdvance();
+    setCountdown(null);
+    setNote("ยกเลิกการเปิดรายการถัดไปอัตโนมัติแล้ว");
+  }
+
+  async function reopen(item: QueueItem) {
+    const result = await assistReply(item.url, item.text, { itemId: item.id, postId: item.postId, prefs: { autoMarkSent: prefs?.autoMarkSent, autoInsert: prefs?.autoInsert } });
+    setNote(result.message);
+  }
+
+  function startEdit(item: QueueItem) {
+    setEditingId(item.id);
+    setEditText(item.text);
+  }
+
+  async function saveEdit(id: string) {
+    const text = editText.trim();
+    if (!text) return;
+    await run(async () => {
+      await api(`/api/reply-queue/${id}`, { method: "POST", body: JSON.stringify({ action: "edit", text: editText }) });
+      setEditingId(null);
+      setNote("บันทึกข้อความแล้ว");
       await load();
     });
   }
 
-  async function reopen(item: QueueItem) {
-    const result = await assistReply(item.url, item.text);
-    setNote(result.message);
-  }
+  // Keyboard shortcuts: N open next · S sent · K skip · E edit (ignored while typing in a field).
+  const keyHandler = useRef<(event: KeyboardEvent) => void>(() => undefined);
+  keyHandler.current = (event: KeyboardEvent) => {
+    const target = event.target as HTMLElement | null;
+    const action = shortcutFor({
+      key: event.key,
+      code: event.code,
+      ctrlKey: event.ctrlKey,
+      metaKey: event.metaKey,
+      altKey: event.altKey,
+      repeat: event.repeat,
+      targetTag: target?.tagName,
+      targetEditable: Boolean(target?.isContentEditable),
+    });
+    if (!action || busy || !state) return;
+    const current = openItem ?? nextItem;
+    if (action === "next") {
+      if (!nextItem || waitMs > 0 || capReached || openItem) return;
+      event.preventDefault();
+      void openNext();
+    } else if (action === "sent") {
+      if (!openItem) return;
+      event.preventDefault();
+      void finish(openItem.id, "sent");
+    } else if (action === "skip") {
+      if (!current) return;
+      event.preventDefault();
+      void finish(current.id, "skip");
+    } else if (action === "edit") {
+      if (!current) return;
+      event.preventDefault();
+      startEdit(current);
+    }
+  };
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => keyHandler.current(event);
+    window.addEventListener("keydown", listener);
+    return () => window.removeEventListener("keydown", listener);
+  }, []);
 
   async function save() {
     if (!form) return;
@@ -138,7 +263,8 @@ export function ReplyQueuePanel() {
         <h2 className="font-semibold">คิวตอบลีด (คุณกดส่งเอง)</h2>
         <p className="mt-1 text-xs leading-5 text-muted">
           ถึงเวลาที่ตั้งไว้ ระบบจะคัดลีดที่ตรงเงื่อนไข เติมข้อความจากข้อความสำเร็จรูป (สลับกันใช้) แล้วแจ้งเข้า Discord/LINE
-          คุณกด “เปิดรายการถัดไป” ระบบจะเปิดโพสต์และใส่ข้อความในช่องคอมเมนต์ให้ — ไม่กดส่ง ไม่ส่งข้อความ และไม่คอมเมนต์แทนคุณ
+          คุณกด “เปิดรายการถัดไป” ระบบจะเปิดโพสต์พร้อมกล่อง MY-BOT ให้แก้/สลับข้อความและใส่ลงช่องคอมเมนต์ — คุณกดส่งใน Facebook เอง
+          แล้วกด “ส่งแล้ว” (ที่นี่หรือในกล่องบนโพสต์) ระบบจะเปิดรายการถัดไปให้เมื่อครบเวลาเว้นระยะ — ไม่กดส่ง ไม่ส่งข้อความ และไม่คอมเมนต์แทนคุณ
         </p>
       </div>
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
@@ -164,6 +290,18 @@ export function ReplyQueuePanel() {
             {field("authorDays", "ไม่ตอบคนเดิมซ้ำภายใน (วัน)", 0, 90)}
             {field("groupDailyCap", "ตอบได้สูงสุดต่อกลุ่มต่อวัน", 1, 50)}
             <p className="text-xs text-muted">โพสต์เดียวกันจะไม่เข้าคิวซ้ำเด็ดขาด</p>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={form.autoAdvance} onChange={(event) => setForm({ ...form, autoAdvance: event.target.checked })} />
+              กด “ส่งแล้ว/ข้าม” แล้วเปิดรายการถัดไปอัตโนมัติ (เมื่อครบเวลาเว้นระยะ)
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={form.autoInsert} onChange={(event) => setForm({ ...form, autoInsert: event.target.checked })} />
+              ใส่ข้อความลงช่องคอมเมนต์ทันทีที่เปิดโพสต์ (ไม่ต้องกดในกล่อง MY-BOT)
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={form.autoMarkSent} onChange={(event) => setForm({ ...form, autoMarkSent: event.target.checked })} />
+              เห็นคอมเมนต์ของคุณขึ้นแล้ว ให้บันทึก “ส่งแล้ว” เอง
+            </label>
           </div>
         </div>
       ) : null}
@@ -179,6 +317,8 @@ export function ReplyQueuePanel() {
             <Button
               size="sm"
               variant="pine"
+              ref={nextButton}
+              className={readyToOpen ? "ring-2 ring-clay" : undefined}
               onClick={() => void openNext()}
               disabled={busy || !nextItem || waitMs > 0 || capReached || Boolean(openItem)}
             >
@@ -192,6 +332,16 @@ export function ReplyQueuePanel() {
             {openItem ? <span className="text-xs text-clay">กด “ส่งแล้ว” หรือ “ข้าม” รายการที่เปิดอยู่ก่อน</span> : null}
             {capReached ? <span className="text-xs text-clay">ครบโควตาวันนี้แล้ว</span> : null}
           </div>
+          {countdown ? (
+            <div className="flex flex-wrap items-center gap-2 rounded-xl bg-pine/10 px-3 py-2 text-sm" role="status">
+              <span>
+                จะเปิดรายการถัดไปอัตโนมัติใน {Math.floor(countdownMs / 60000)}:{String(Math.floor((countdownMs % 60000) / 1000)).padStart(2, "0")}
+                {countdown.via === "panel" ? " (ไม่มีส่วนขยาย 1.2 — ถึงเวลาแล้วกด N)" : ""}
+              </span>
+              <Button size="sm" variant="outline" onClick={() => void stopCountdown()}>ยกเลิก</Button>
+            </div>
+          ) : null}
+          <p className="text-xs text-muted">{SHORTCUT_HELP} · ในแท็บ Facebook: Alt+Shift+S ส่งแล้ว · Alt+Shift+K ข้าม</p>
           {state.items.length ? (
             state.items.map((item) => (
               <div key={item.id} className={`rounded-xl border p-3 text-sm ${item.status === "opened" ? "border-clay/50 bg-clay/5" : "border-line"}`}>
@@ -203,16 +353,37 @@ export function ReplyQueuePanel() {
                   <span className="ml-auto">{STATUS[item.status]}</span>
                 </div>
                 <p className="mt-1 line-clamp-2 text-xs text-muted">{item.snippet}</p>
-                <p className="mt-2 whitespace-pre-wrap rounded-lg bg-paper px-2 py-1">{item.text}</p>
+                {editingId === item.id ? (
+                  <div className="mt-2 space-y-2">
+                    <Textarea
+                      autoFocus
+                      rows={4}
+                      maxLength={2000}
+                      value={editText}
+                      onChange={(event) => setEditText(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Escape") setEditingId(null);
+                      }}
+                    />
+                    <div className="flex gap-2">
+                      <Button size="sm" variant="pine" onClick={() => void saveEdit(item.id)} disabled={busy || !editText.trim()}>บันทึกข้อความ</Button>
+                      <Button size="sm" variant="outline" onClick={() => setEditingId(null)}>ยกเลิก (Esc)</Button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-2 whitespace-pre-wrap rounded-lg bg-paper px-2 py-1">{item.text}</p>
+                )}
                 {item.status === "opened" ? (
                   <div className="mt-2 flex flex-wrap gap-2">
                     <Button size="sm" variant="pine" onClick={() => void finish(item.id, "sent")} disabled={busy}>ส่งแล้ว</Button>
                     <Button size="sm" variant="outline" onClick={() => void reopen(item)} disabled={busy}>เปิดโพสต์อีกครั้ง</Button>
                     <Button size="sm" variant="outline" onClick={() => void finish(item.id, "skip")} disabled={busy}>ข้าม</Button>
+                    {editingId !== item.id ? <Button size="sm" variant="outline" onClick={() => startEdit(item)} disabled={busy}>แก้ข้อความ</Button> : null}
                   </div>
                 ) : item.status === "queued" ? (
-                  <div className="mt-2">
+                  <div className="mt-2 flex flex-wrap gap-2">
                     <Button size="sm" variant="outline" onClick={() => void finish(item.id, "skip")} disabled={busy}>ข้าม</Button>
+                    {editingId !== item.id ? <Button size="sm" variant="outline" onClick={() => startEdit(item)} disabled={busy}>แก้ข้อความ</Button> : null}
                   </div>
                 ) : null}
               </div>

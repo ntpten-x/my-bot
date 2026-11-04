@@ -6,7 +6,7 @@ import { inServiceArea } from "./service-area";
 import { renderTemplate } from "./templates";
 import { followUpDate } from "./automation";
 import { workerLog } from "./log";
-import { authorKeyOf, dueSlot, gapRemainingMs, pickTemplate, randomGapMs, selectQueue } from "./reply-queue-core";
+import { ADVANCE_REASON_TH, advanceDecision, authorKeyOf, dueSlot, gapRemainingMs, pickTemplate, randomGapMs, selectQueue } from "./reply-queue-core";
 
 const NEXT_KEY = "reply_next_allowed_at";
 const SLOT_KEY = "reply_queue_last_slot";
@@ -193,9 +193,113 @@ export async function markPostReplied(postId: string) {
   await prisma.replyQueueItem.updateMany({ where: { postId, status: { in: ["queued", "opened"] } }, data: { status: "sent", sentAt: now } });
 }
 
-export async function finishReplyItem(id: string, action: "sent" | "skip") {
+export async function finishReplyItem(id: string, action: "sent" | "skip", text?: string) {
   const item = await prisma.replyQueueItem.findUnique({ where: { id } });
   if (!item) throw new ReplyQueueError("ไม่พบรายการ", 404);
+  const finalText = text?.trim();
+  if (finalText && finalText !== item.text) await prisma.replyQueueItem.update({ where: { id }, data: { text: finalText.slice(0, 2000) } });
+  // Already closed (e.g. marked from the Facebook tab and then from the panel): nothing to do.
+  if (item.status === "sent" || item.status === "skipped") return;
   if (action === "sent") await markPostReplied(item.postId);
   else await prisma.replyQueueItem.update({ where: { id }, data: { status: "skipped" } });
 }
+
+// Owner edited the draft before inserting it.
+export async function editReplyItem(id: string, text: string) {
+  const item = await prisma.replyQueueItem.findUnique({ where: { id } });
+  if (!item) throw new ReplyQueueError("ไม่พบรายการ", 404);
+  if (item.status === "sent" || item.status === "skipped") throw new ReplyQueueError("รายการนี้ปิดไปแล้ว");
+  const value = text.trim().slice(0, 2000);
+  if (!value) throw new ReplyQueueError("ข้อความว่าง", 400);
+  await prisma.replyQueueItem.update({ where: { id }, data: { text: value } });
+  return { id, text: value };
+}
+
+export type ReplyPrefs = { autoAdvance: boolean; autoMarkSent: boolean; autoInsert: boolean };
+
+function activeWindow() {
+  const day = bangkokClock().day;
+  const yesterday = bangkokClock(new Date(Date.now() - 86_400_000)).day;
+  return { day, where: { day: { in: [day, yesterday] } } };
+}
+
+// What auto-advance should do next: open now, wait for the gap, or stop (cap, empty queue, item still open).
+export async function replyAdvanceInfo() {
+  const settings = await getSettings();
+  const { day, where } = activeWindow();
+  const [next, open, openedToday, nextAllowedAt] = await Promise.all([
+    prisma.replyQueueItem.findFirst({ where: { ...where, status: "queued", post: { repliedAt: null, dismissed: false } }, orderBy: { createdAt: "asc" }, select: { id: true } }),
+    prisma.replyQueueItem.findFirst({ where: { ...where, status: "opened" }, select: { id: true } }),
+    countOpenedToday(day),
+    readSetting(NEXT_KEY),
+  ]);
+  const waitMs = gapRemainingMs(nextAllowedAt);
+  const decision = advanceDecision({ hasNext: Boolean(next), hasOpen: Boolean(open), openedToday, cap: settings.replyDailyCap, waitMs });
+  return {
+    // "ready" | "wait" | "open" | "cap" | "empty"
+    decision: decision.state === "blocked" ? decision.reason : decision.state,
+    waitMs: decision.waitMs,
+    reason: decision.state === "blocked" ? ADVANCE_REASON_TH[decision.reason] : "",
+    nextId: next?.id ?? null,
+    openId: open?.id ?? null,
+    openedToday,
+    cap: settings.replyDailyCap,
+    prefs: { autoAdvance: settings.replyAutoAdvance, autoMarkSent: settings.replyAutoMarkSent, autoInsert: settings.replyAutoInsert } as ReplyPrefs,
+  };
+}
+
+export type ReplyTemplateOption = { id: string; name: string; text: string };
+
+// Every template that fits this post, already filled in, so the overlay can switch drafts.
+export async function replyTemplatesForPost(postId: string): Promise<ReplyTemplateOption[]> {
+  const post = await prisma.post.findUnique({
+    where: { id: postId },
+    select: {
+      authorName: true,
+      province: true,
+      categoryId: true,
+      subcategoryId: true,
+      category: { select: { name: true } },
+      subcategory: { select: { name: true } },
+      source: { select: { name: true } },
+    },
+  });
+  if (!post) return [];
+  const ids = new Set([post.categoryId, post.subcategoryId].filter(Boolean));
+  const templates = await prisma.replyTemplate.findMany({ orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }], take: 50 });
+  return templates
+    .filter((template) => !template.categoryId || ids.has(template.categoryId))
+    .slice(0, 20)
+    .map((template) => ({
+      id: template.id,
+      name: template.name,
+      text: renderTemplate(template.body, {
+        author: post.authorName,
+        category: post.category?.name,
+        subcategory: post.subcategory?.name,
+        province: post.province,
+        source: post.source?.name,
+      }).slice(0, 2000),
+    }))
+    .filter((option) => option.text);
+}
+
+// Auto-advance: opens the oldest queued lead if the cap, gap and dedupe rules allow it.
+// Leads that were already answered some other way are skipped instead of reopened.
+export async function openNextReplyItem() {
+  const info = await replyAdvanceInfo();
+  if (info.decision !== "ready" || !info.nextId) return { item: null, ...info };
+  const { where } = activeWindow();
+  await prisma.replyQueueItem.updateMany({
+    where: { ...where, status: "queued", post: { OR: [{ repliedAt: { not: null } }, { dismissed: true }] } },
+    data: { status: "skipped" },
+  });
+  try {
+    const item = await openReplyItem(info.nextId);
+    return { item: { ...item, templates: await replyTemplatesForPost(item.postId) }, ...(await replyAdvanceInfo()) };
+  } catch (err) {
+    if (err instanceof ReplyQueueError) return { item: null, ...(await replyAdvanceInfo()), reason: err.message };
+    throw err;
+  }
+}
+

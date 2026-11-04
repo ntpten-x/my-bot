@@ -82,6 +82,8 @@
     }
     if (typeof doc.execCommand === "function") {
       try {
+        // Replace what is already in the box (re-insert after editing) instead of appending.
+        if (currentText(el).trim()) doc.execCommand("selectAll", false);
         doc.execCommand("insertText", false, value);
       } catch {
         // fall through
@@ -134,7 +136,39 @@
     return { ok: false };
   }
 
-  const api = { isFacebookUrl, postKey, findCommentBox, insertReply, runAssist, MAX_TEXT };
+  // ---- Passive "did the owner send it?" check. Reads the page only; never touches Facebook's UI. ----
+  function normalize(text) {
+    return String(text || "").replace(/\s+/g, " ").trim();
+  }
+
+  function probeOf(text) {
+    return normalize(text).slice(0, 40);
+  }
+
+  // Counts rendered (non-editable) page elements that show the reply text, e.g. the owner's new comment.
+  function countPosted(doc, text) {
+    const probe = probeOf(text);
+    if (probe.length < 6) return 0;
+    let count = 0;
+    for (const el of Array.from(doc.querySelectorAll('[role="article"], [dir="auto"]'))) {
+      if (el.closest && el.closest('[contenteditable="true"], textarea, [data-mybot-overlay]')) continue;
+      if (el.isContentEditable) continue;
+      if (normalize(el.textContent).includes(probe)) count += 1;
+    }
+    return count;
+  }
+
+  // The reply looks sent when it now shows up outside the comment box (more than before inserting)
+  // and the comment box no longer holds it (Facebook clears the box after the owner presses send).
+  function looksSent(doc, text, baseline) {
+    if (countPosted(doc, text) <= (baseline || 0)) return false;
+    const probe = probeOf(text);
+    const box = findCommentBox(doc);
+    if (box && normalize(currentText(box)).includes(probe)) return false;
+    return true;
+  }
+
+  const api = { isFacebookUrl, postKey, findCommentBox, insertReply, runAssist, countPosted, looksSent, normalize, MAX_TEXT };
   root.MyBotAssist = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);
