@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { Button, Card, Input, Label, Select } from "@/components/ui";
 import { Dialog } from "@/components/dialog";
@@ -113,6 +114,10 @@ export default function SettingsPage() {
       <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
         เลือกตัวช่วยจัดหมวดได้หลายชั้น ถ้าตัวแรกใช้ไม่ได้ ระบบจะขยับไปตัวถัดไป และถ้าไม่มี AI เลยจะใช้คำจับคู่ในหมวดแทน
       </p>
+      <Link href="/settings/ai-providers" className="mt-4 block rounded-2xl border border-line bg-card p-4 text-sm shadow-sm hover:bg-paper">
+        <span className="font-semibold">ผู้ให้บริการ AI และ API key →</span>
+        <span className="mt-1 block text-muted">เพิ่ม Groq, Gemini, OpenRouter, OpenCode Zen ฯลฯ เรียงลำดับ และสลับอัตโนมัติเมื่อโควตาหมด</span>
+      </Link>
       <form onSubmit={save} className="mt-5 space-y-4">
         <Card className="space-y-3">
           <h2 className="font-semibold">ผู้ช่วยจัดหมวด</h2>

@@ -362,3 +362,39 @@ model ExtensionHeartbeat {
 
   @@index([lastSeenAt])
 }
+
+// AI providers the owner manages on /settings/ai-providers. Tried in priority order;
+// one that hits a limit cools down and the router moves to the next.
+model AiProvider {
+  id             String    @id @default(cuid())
+  name           String
+  preset         String    @default("custom")
+  kind           String    @default("openai")
+  baseUrl        String    @default("")
+  model          String    @default("")
+  apiKeyEnc      String?
+  apiKeyHint     String?
+  enabled        Boolean   @default(true)
+  priority       Int       @default(100)
+  tasks          String    @default("classify")
+  limitPerMinute Int?
+  limitPerDay    Int?
+  resetHourUtc   Int       @default(0)
+  origin         String    @default("user")
+  usageDay       String?
+  requestsToday  Int       @default(0)
+  tokensToday    Int       @default(0)
+  requestsTotal  Int       @default(0)
+  tokensTotal    Int       @default(0)
+  errorsTotal    Int       @default(0)
+  lastLatencyMs  Int?
+  lastUsedAt     DateTime?
+  lastError      String?
+  lastErrorAt    DateTime?
+  cooldownUntil  DateTime?
+  cooldownReason String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([priority])
+}

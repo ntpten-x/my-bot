@@ -4,6 +4,7 @@ import type { ClassifyInput } from "../pipeline/classify-rules";
 import type { AppSettings } from "../settings";
 import { selectReadyProviders, type ProviderName } from "./health";
 import { geminiClassify, groqClassify, ollamaClassify } from "./providers";
+import { routedClassifyAttempts } from "./provider-registry";
 
 const callers = {
   ollama: ollamaClassify,
@@ -24,11 +25,16 @@ export async function classifyLeads(
         ? []
         : [settings.aiProvider];
 
-  const selected = await selectReadyProviders(order, settings);
-  const providers = selected.ready.map((name) => ({
-    name,
-    classify: (batch: ClassifyInput[], tree: CatNode[]) => callers[name](batch, tree, settings),
-  }));
+  // "auto" uses the owner's provider table (/settings/ai-providers) with cooldown failover.
+  // An empty table, or a fixed provider choice, keeps the original env-based chain.
+  const routed = settings.aiProvider === "auto" ? await routedClassifyAttempts(settings).catch(() => null) : null;
+  const selected = routed ? { ready: [] as ProviderName[], errors: routed.errors } : await selectReadyProviders(order, settings);
+  const providers = routed
+    ? routed.providers
+    : selected.ready.map((name) => ({
+        name: name as string,
+        classify: (batch: ClassifyInput[], tree: CatNode[]) => callers[name](batch, tree, settings),
+      }));
 
   const batches: ClassifyInput[][] = [];
   for (let index = 0; index < posts.length; index += 10) batches.push(posts.slice(index, index + 10));
