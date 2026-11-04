@@ -165,7 +165,12 @@ npm run db:backfill-ai # เข้าคิวจัดหมวดโพสต�
 npm run db:clean-samples # ลบโพสต์ของแหล่งตัวอย่างที่ปิดอยู่
 ```
 
-ฐานข้อมูลเป็นไฟล์ SQLite ที่ `data/mybot.db` สคีมาใช้ Prisma จึงย้ายไป Postgres ทีหลังได้โดยเปลี่ยน `provider` กับ `DATABASE_URL` แล้วรัน migrate ใหม่
+ฐานข้อมูลอยู่บน Supabase Postgres ผ่าน Prisma ตั้ง `DATABASE_URL` (Transaction pooler 6543 + `pgbouncer=true`) กับ `DIRECT_URL` (5432) ใน `.env` ทุกตารางเปิด RLS วิธีตั้งค่าและย้ายจาก SQLite เดิม (`npm run db:migrate-from-sqlite`) อยู่ใน `docs/SETUP.th.md`
+
+```bash
+npm run db:backup      # ส่งออกทุกตารางเป็น data/backups/manual-*.json.gz
+npm run db:restore -- <ไฟล์> --replace  # กู้คืน (หยุดแอปก่อน)
+```
 
 ## ทดสอบว่าพร้อม
 
@@ -212,23 +217,25 @@ pm2 save
 
 ## สำรองฐานข้อมูล
 
-หลัง 03:00 ตามนาฬิกาไทย ถ้าวันนั้นยังไม่สำรอง ตัว worker คัดลอกฐานด้วย `VACUUM INTO` ไปที่ `data/backups/ปปปป-ดด-วว.db` และเก็บไว้ 14 วัน หน้าตั้งค่าแสดงไฟล์ล่าสุด
+หลัง 03:00 ตามนาฬิกาไทย ถ้าวันนั้นยังไม่สำรอง ตัว worker ส่งออกทุกตารางจาก Supabase ไปที่ `data/backups/ปปปป-ดด-วว.json.gz` และเก็บไว้ 14 วัน หน้าตั้งค่าแสดงไฟล์ล่าสุด
 
-กู้คืน
+กู้คืน (ข้อมูลในฐานจะถูกแทนที่ทั้งหมดด้วยไฟล์สำรอง)
 
 1. หยุด MY-BOT
-2. คัดลอกไฟล์สำรองทับ `data/mybot.db`
-3. เปิด `npm run start:prod` อีกครั้ง
+2. `npm run db:restore -- data/backups/ปปปป-ดด-วว.json.gz --replace`
+3. เปิด MY-BOT อีกครั้ง
+
+สำรองเองเมื่อไรก็ได้ด้วย `npm run db:backup` ได้ไฟล์ `data/backups/manual-....json.gz` นอกจากนี้ Supabase ยังมีสำรองของตัวเองในหน้า Database > Backups
 
 ## เมื่อมีปัญหา
 
 - พอร์ต 8001 ถูกใช้อยู่: เปลี่ยน `PORT` ใน `.env` แล้วใส่พอร์ตเดียวกันในป๊อปอัปส่วนขยาย
-- หน้าเว็บขึ้นว่าเชื่อมฐานข้อมูลไม่ได้: รัน `npm run db:migrate` อีกครั้ง
+- หน้าเว็บขึ้นว่าเชื่อมฐานข้อมูลไม่ได้: เช็กเน็ตกับรหัสผ่าน Supabase ใน `.env` แล้วรัน `npm run db:migrate` อีกครั้ง
 - ส่วนขยายส่งไม่เข้า: ตรวจว่าแอปยังเปิดอยู่ โทเคนตรงกับหน้าตั้งค่า และที่อยู่เป็น `http://localhost:8001`
 - กลุ่มไม่มีโพสต์ใหม่: ต้องล็อกอิน Facebook ใน Chrome นั้น และลิงก์ในหน้าแหล่งข้อมูลต้องเป็นกลุ่มที่คุณเข้าได้
 - Ollama ทดสอบไม่ผ่าน: เปิดแอป Ollama ก่อน ถ้าพอร์ต 11434 ใช้ไม่ได้ ให้รัน `set OLLAMA_HOST=127.0.0.1:41434` แล้วเปิด `ollama serve` ระบบจะลอง 11434 ก่อนแล้วจึง 41434
 - ค้นตามความหมายไม่เจอ: หน้าตั้งค่ากดทดสอบ embedding แล้วกดเติมโพสต์ที่ยังไม่มีเวกเตอร์ หรือรัน `npm run db:backfill-embeddings` ต้องมีโมเดล `bge-m3` (`ollama pull bge-m3`)
-- ลืมรหัสผ่าน: ลบไฟล์ `data/mybot.db` แล้วรัน `npm run db:migrate` กับ `npm run db:seed` ใหม่ ข้อมูลลีดจะหายไปด้วย
+- ลืมรหัสผ่าน: หยุดแอป เปิด Supabase > Table Editor ลบแถวในตาราง `Session` และ `Owner` แล้วเปิด `http://localhost:8001` จะเข้าหน้าตั้งรหัสใหม่ ข้อมูลลีดยังอยู่
 
 ## ข้อควรรู้
 

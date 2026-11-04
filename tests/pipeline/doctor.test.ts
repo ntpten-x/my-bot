@@ -34,6 +34,13 @@ describe("doctor", () => {
     expect(doctorExitCode(rows)).toBe(0);
   });
 
+  it("flags a leftover SQLite DATABASE_URL and a missing DIRECT_URL", () => {
+    const sqlite = evaluateDoctor(facts({ env: { databaseUrl: true, databaseKind: "sqlite", port: true, groq: false, gemini: false, discord: false } }));
+    expect(status("env-db-kind", sqlite)).toBe("FAIL");
+    const pg = evaluateDoctor(facts({ env: { databaseUrl: true, databaseKind: "postgres", directUrl: false, port: true, groq: false, gemini: false, discord: false } }));
+    expect(status("env-db-kind", pg)).toBeUndefined();
+    expect(status("env-direct", pg)).toBe("WARN");
+  });
   it("fails when Node, the database, or the extension token is missing", () => {
     const rows = evaluateDoctor(facts({ nodeMajor: 18, dbOk: false, extensionToken: false, portState: "busy" }));
     expect(status("node", rows)).toBe("FAIL");

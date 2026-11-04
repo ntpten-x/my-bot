@@ -63,9 +63,9 @@ export async function GET(request: Request) {
         ...(Array.isArray(where.AND) ? where.AND : []),
         {
           OR: needles.flatMap((token) => [
-            { text: { contains: token } },
-            { normalizedText: { contains: token.toLowerCase() } },
-            { authorName: { contains: token } },
+            { text: { contains: token, mode: "insensitive" } },
+            { normalizedText: { contains: token.toLowerCase(), mode: "insensitive" } },
+            { authorName: { contains: token, mode: "insensitive" } },
           ]),
         },
       ],

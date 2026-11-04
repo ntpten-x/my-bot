@@ -47,6 +47,25 @@ gemini="$(read_secret GEMINI_API_KEY)"
 discord="$(read_secret DISCORD_WEBHOOK_URL)"
 [ -n "$discord" ] && set_env DISCORD_WEBHOOK_URL "$discord"
 
+# Database: Supabase Postgres. Ask once when .env has no postgres DATABASE_URL yet.
+if ! grep -Eq '^DATABASE_URL="?postgres(ql)?://' .env || grep -q 'YOUR-PASSWORD' .env; then
+  echo "Supabase: Project > Connect > Connection string > Transaction pooler (port 6543)."
+  printf "Paste it (it may still contain [YOUR-PASSWORD]): "
+  read -r pooler
+  pooler="${pooler%\"}"; pooler="${pooler#\"}"
+  case "$pooler" in postgres://*|postgresql://*) ;; *) echo "Not a postgresql:// connection string"; exit 1 ;; esac
+  if printf '%s' "$pooler" | grep -q '\[YOUR-PASSWORD\]'; then
+    pw="$(read_secret 'Supabase database password')"
+    [ -n "$pw" ] || { echo "The database password is required."; exit 1; }
+    pw_enc="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$pw")"
+    pooler="$(printf '%s' "$pooler" | sed "s|\[YOUR-PASSWORD\]|$pw_enc|")"
+  fi
+  base="${pooler%%\?*}"
+  set_env DATABASE_URL "$base?pgbouncer=true&connection_limit=5"
+  set_env DIRECT_URL "$(printf '%s' "$base" | sed 's|:6543/|:5432/|')"
+  echo "Saved DATABASE_URL and DIRECT_URL to .env (not shown)."
+fi
+
 npx prisma migrate deploy
 npx tsx prisma/seed.ts
 

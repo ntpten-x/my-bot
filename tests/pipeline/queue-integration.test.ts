@@ -1,17 +1,14 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
-import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
 
 const fixture = vi.hoisted(() => {
-  const fs = require("node:fs") as typeof import("node:fs");
-  const path = require("node:path") as typeof import("node:path");
-  const os = require("node:os") as typeof import("node:os");
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mybot-integration-"));
-  process.env.DATABASE_URL = `file:${path.join(directory, "fixture.db").replaceAll("\\", "/")}`;
+  const { createRequire } = process.getBuiltinModule("node:module");
+  const path = process.getBuiltinModule("node:path");
+  const db = createRequire(path.resolve("package.json"))("./tests/helpers/pg-test-db.cjs");
+  const { enabled, schema } = db.setupTestDatabase("test_integration") as { enabled: boolean; schema: string };
   process.env.MYBOT_PROCESS = "worker";
-  return { directory };
+  return { enabled, schema, dropTestSchema: db.dropTestSchema as (prisma: unknown, schema: string) => Promise<void> };
 });
 vi.mock("../../src/lib/log", () => ({ workerLog: vi.fn(async () => undefined) }));
 vi.mock("../../src/lib/guard", () => ({ authed: vi.fn(async () => ({ error: null })) }));
@@ -55,9 +52,11 @@ const network = vi.fn(async (input: string | URL | Request, init?: RequestInit):
 });
 
 beforeAll(() => {
+  if (!fixture.enabled) return;
   execFileSync(process.execPath, [path.resolve("node_modules/prisma/build/index.js"), "migrate", "deploy"], { env: { ...process.env }, stdio: "pipe" });
-}, 30_000);
+}, 180_000);
 beforeEach(async () => {
+  if (!fixture.enabled) return;
   await prisma.post.deleteMany();
   await prisma.notification.deleteMany();
   await prisma.keyword.deleteMany();
@@ -82,17 +81,15 @@ beforeEach(async () => {
 });
 afterAll(async () => {
   vi.unstubAllGlobals();
+  if (fixture.enabled) await fixture.dropTestSchema(prisma, fixture.schema);
   await prisma.$disconnect();
-  const directory = path.resolve(fixture.directory);
-  if (!directory.startsWith(`${path.resolve(os.tmpdir())}${path.sep}`) || !path.basename(directory).startsWith("mybot-integration-")) throw new Error("Unsafe fixture cleanup");
-  fs.rmSync(directory, { recursive: true, force: true });
 });
 
 async function ingest(count = 2) {
   return ingestPosts({ sourceUrl: "https://www.facebook.com/groups/123", actor: "extension", posts: Array.from({ length: count }, (_, i) => ({ url: `https://www.facebook.com/groups/123/posts/${i + 1}`, text: `ตามหา iPad รุ่นทดสอบ ${i} มือสอง งบ 5000 บาท` })) });
 }
 
-describe("real SQLite ingest → queue → provider → completion", () => {
+describe.skipIf(!fixture.enabled)("real Postgres ingest → queue → provider → completion", () => {
   it("keeps request ingestion free of embedding calls and completes each AI job", async () => {
     process.env.MYBOT_PROCESS = "web";
     expect((await ingest()).inserted).toBe(2);

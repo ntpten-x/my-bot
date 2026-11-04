@@ -1,15 +1,14 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 
 const fixture = vi.hoisted(() => {
-  const fs = process.getBuiltinModule("node:fs");
+  const { createRequire } = process.getBuiltinModule("node:module");
   const path = process.getBuiltinModule("node:path");
-  const os = process.getBuiltinModule("node:os");
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mybot-reply-queue-"));
-  process.env.DATABASE_URL = `file:${path.join(directory, "fixture.db").replaceAll("\\", "/")}`;
+  const db = createRequire(path.resolve("package.json"))("./tests/helpers/pg-test-db.cjs");
+  const { enabled, schema } = db.setupTestDatabase("test_reply_queue") as { enabled: boolean; schema: string };
   process.env.MYBOT_PROCESS = "worker";
-  return { directory, notify: [] as unknown[][] };
+  return { enabled, schema, dropTestSchema: db.dropTestSchema as (prisma: unknown, schema: string) => Promise<void>, notify: [] as unknown[][] };
 });
 vi.mock("../../src/lib/log", () => ({ workerLog: vi.fn(async () => undefined) }));
 vi.mock("../../src/lib/notify", () => ({ dispatchNotification: vi.fn(async (...args: unknown[]) => void fixture.notify.push(args)) }));
@@ -37,10 +36,16 @@ async function post(sourceId: string, authorName: string, extra: Record<string, 
 }
 
 beforeAll(() => {
+  if (!fixture.enabled) return;
   execFileSync(process.execPath, [path.resolve("node_modules/prisma/build/index.js"), "migrate", "deploy"], { env: { ...process.env }, stdio: "pipe" });
-}, 30_000);
+}, 180_000);
+afterAll(async () => {
+  if (fixture.enabled) await fixture.dropTestSchema(prisma, fixture.schema);
+  await prisma.$disconnect();
+});
 
 beforeEach(async () => {
+  if (!fixture.enabled) return;
   fixture.notify.length = 0;
   await prisma.replyQueueItem.deleteMany();
   await prisma.post.deleteMany();
@@ -50,7 +55,7 @@ beforeEach(async () => {
   await upsertSettings({ reply_daily_cap: "20", reply_group_daily_cap: "2", reply_author_days: "7", reply_min_score: "60", reply_gap_min_minutes: "2", reply_gap_max_minutes: "5" });
 });
 
-describe("reply queue against SQLite", () => {
+describe.skipIf(!fixture.enabled)("reply queue against Postgres", () => {
   it("builds a deduped queue with rotated drafts, gates opening, and logs replied", async () => {
     const g1 = await prisma.source.create({ data: { type: "facebook_group", name: "กลุ่มแอร์", url: "https://www.facebook.com/groups/1" } });
     const g2 = await prisma.source.create({ data: { type: "facebook_group", name: "กลุ่มบ้าน", url: "https://www.facebook.com/groups/2" } });

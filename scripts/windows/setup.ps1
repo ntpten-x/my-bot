@@ -112,9 +112,28 @@ setx OLLAMA_KEEP_ALIVE "30m" | Out-Null
 Write-Host "OLLAMA_MAX_LOADED_MODELS=2"
 Write-Host "OLLAMA_KEEP_ALIVE=30m"
 
+# Database: Supabase Postgres. Ask once when .env has no postgres DATABASE_URL yet.
+$dbLine = (Get-Content -LiteralPath ".env" | Where-Object { $_ -match '^DATABASE_URL=' } | Select-Object -First 1)
+if (-not $dbLine -or $dbLine -notmatch 'postgres(ql)?://' -or $dbLine -match 'YOUR-PASSWORD') {
+  Write-Host "Supabase: Project > Connect > Connection string > Transaction pooler (port 6543)."
+  Write-Host "Paste it (it may still contain [YOUR-PASSWORD]):"
+  $pooler = (Read-Host).Trim().Trim('"')
+  if ($pooler -notmatch '^postgres(ql)?://') { throw "That is not a postgresql:// connection string." }
+  if ($pooler -match '\[YOUR-PASSWORD\]') {
+    Write-Host "Supabase database password (hidden):"
+    $pw = Read-OptionalSecret "database password"
+    if (-not $pw) { throw "The database password is required." }
+    $pooler = $pooler.Replace('[YOUR-PASSWORD]', [Uri]::EscapeDataString($pw))
+  }
+  $base = ($pooler -split '\?')[0]
+  Set-EnvKey ".env" "DATABASE_URL" ($base + "?pgbouncer=true&connection_limit=5")
+  Set-EnvKey ".env" "DIRECT_URL" ($base -replace ':6543/', ':5432/')
+  Write-Host "Saved DATABASE_URL and DIRECT_URL to .env (not shown)."
+}
+
 Write-Host "Database migrate and seed"
 npx prisma migrate deploy
-if ($LASTEXITCODE -ne 0) { throw "prisma migrate deploy failed. Close MY-BOT if the database file is locked." }
+if ($LASTEXITCODE -ne 0) { throw "prisma migrate deploy failed. Check internet access and the Supabase password in .env." }
 npx tsx prisma/seed.ts
 if ($LASTEXITCODE -ne 0) { throw "database seed failed" }
 

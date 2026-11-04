@@ -6,7 +6,7 @@ import { testEmbedding } from "./smart/embed";
 import { evaluateDoctor, type DoctorFacts } from "./doctor";
 
 function envFlags() {
-  const present = { databaseUrl: false, port: false, groq: false, gemini: false, discord: false };
+  const present: DoctorFacts["env"] = { databaseUrl: false, databaseKind: undefined, directUrl: false, port: false, groq: false, gemini: false, discord: false };
   if (!existsSync(".env")) return present;
   for (const line of readFileSync(".env", "utf8").split(/\r?\n/)) {
     const trimmed = line.trim();
@@ -18,7 +18,11 @@ function envFlags() {
       value = value.slice(1, -1);
     }
     if (!value) continue;
-    if (key === "DATABASE_URL") present.databaseUrl = true;
+    if (key === "DATABASE_URL") {
+      present.databaseUrl = true;
+      present.databaseKind = /^postgres(ql)?:/.test(value) ? "postgres" : value.startsWith("file:") ? "sqlite" : "other";
+    }
+    if (key === "DIRECT_URL") present.directUrl = true;
     if (key === "PORT") present.port = true;
     if (key === "GROQ_API_KEY") present.groq = true;
     if (key === "GEMINI_API_KEY") present.gemini = true;

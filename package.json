@@ -25,6 +25,9 @@
     "evaluate:classifier": "tsx scripts/evaluate-classifier.ts",
     "db:migrate": "prisma migrate deploy",
     "db:seed": "tsx prisma/seed.ts",
+    "db:backup": "tsx scripts/backup-db.ts",
+    "db:restore": "tsx scripts/restore-backup.ts",
+    "db:migrate-from-sqlite": "tsx scripts/migrate-sqlite-to-postgres.ts",
     "postinstall": "prisma generate"
   },
   "prisma": {

@@ -8,7 +8,7 @@ Thai notes: the product UI, seed copy, and owner-facing docs are Thai. Reply to 
 
 MY-BOT is a local, single-owner lead radar. The owner logs into Facebook in Chrome. A read-only extension sends group posts to this app. The app dedupes, scores, classifies (buyer / seller / ad), and drafts a reply the owner copies by hand.
 
-Stack: Next.js App Router, TypeScript, Tailwind, Prisma SQLite, an in-process Node worker. Default web port **8001**. AI order: Ollama, then Gemini, then Groq, then rules. Only the worker consumes the AI queue (`MYBOT_PROCESS=worker`).
+Stack: Next.js App Router, TypeScript, Tailwind, Prisma on Supabase Postgres (`DATABASE_URL` transaction pooler 6543 with `pgbouncer=true`, `DIRECT_URL` 5432 for migrations, RLS on every table), an in-process Node worker. Default web port **8001**. AI order: Ollama, then Gemini, then Groq, then rules. Only the worker consumes the AI queue (`MYBOT_PROCESS=worker`).
 
 ## Architecture
 
@@ -25,7 +25,7 @@ Stack: Next.js App Router, TypeScript, Tailwind, Prisma SQLite, an in-process No
 | `prisma/` | Schema, migrations, seed |
 | `scripts/windows/` | ASCII PowerShell for a fresh Windows PC |
 | `scripts/setup.sh` | Linux/macOS setup (`npm run setup` picks the OS script) |
-| `data/` | SQLite, logs, backups. Gitignored |
+| `data/` | Logs, JSON backups, legacy `mybot.db` (pre-Supabase). Gitignored |
 | `tests/` | Vitest |
 
 Logs: `data/mybot.log` (worker JSON lines) and `data/mybot-console.log` (launcher stdout). A failed log write must not fail a job.
@@ -68,7 +68,7 @@ Done when `npm run doctor` has no FAIL, `GET http://127.0.0.1:8001/api/v1/health
 | `npm run db:clean-samples` | Delete posts from the disabled sample source |
 | `npm run db:renormalize` | Rebuild Thai normalized text and hashes |
 
-Backup: the worker copies the database after 03:00 Asia/Bangkok once per day to `data/backups/YYYY-MM-DD.db` and keeps 14 days. Daily summary runs after the configured time (default 08:00) once per day. Stop the app before replacing `data/mybot.db`.
+Backup: the worker exports every table after 03:00 Asia/Bangkok once per day to `data/backups/YYYY-MM-DD.json.gz` and keeps 14 days. `npm run db:backup` makes a manual export; `npm run db:restore -- <file> --replace` restores (stop the app first). `npm run db:migrate-from-sqlite` is the one-time SQLite to Postgres copy (Node 22.5+). DB tests run in a throwaway `test_*` schema on `TEST_DATABASE_URL` or `DIRECT_URL` and skip without one. Never commit `.env`. Daily summary runs after the configured time (default 08:00) once per day. New migrations must stay Postgres and add `ENABLE ROW LEVEL SECURITY` for new tables.
 
 ## Update an existing machine
 
@@ -88,7 +88,7 @@ Restart the app (or the Startup launcher). Then, if older posts need it: `npm ru
 | Port 11434 excluded on Windows | `OLLAMA_HOST=127.0.0.1:41434`, restart `ollama serve`, set `OLLAMA_BASE_URL` to match |
 | Ollama swaps the chat and embed models | `OLLAMA_MAX_LOADED_MODELS=2` and `OLLAMA_KEEP_ALIVE=30m` on `ollama serve`, then restart it |
 | `npm run doctor` fails on the database | `npm run db:migrate` while the app is stopped |
-| Prisma database is locked | Stop every Node process using `data/mybot.db`, then migrate |
+| Cannot reach database (P1001/auth failed) | Check internet, the Supabase password in `.env`, and that the project is not paused |
 | Embeddings stay empty | `ollama pull bge-m3`, Settings → test embedding, then `npm run db:backfill-embeddings` |
 | Posts stay on rules | Worker must be running. `npm run db:backfill-ai` only enqueues |
 | AI job stuck `running` | Worker resets jobs older than 2 minutes. OCR runs only in the worker; a bad image does not fail classification |

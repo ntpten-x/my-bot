@@ -246,7 +246,7 @@ export default function SettingsPage() {
           </label>
           <p className="text-sm text-muted">
             สำรองฐานล่าสุด: {settings.lastBackupAt ? `${settings.lastBackupFile} (${settings.lastBackupAt})` : "ยังไม่มี — ระบบสำรองทุกวัน 03:00"}
-            . ถ้าต้องกู้คืน ให้หยุดแอปแล้วคัดลอกไฟล์นั้นทับ data/mybot.db
+            . ข้อมูลหลักอยู่บน Supabase ถ้าต้องกู้คืน ให้หยุดแอปแล้วรัน npm run db:restore -- (ไฟล์สำรอง) --replace
           </p>
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={settings.notifySound} onChange={(event) => setSettings({ ...settings, notifySound: event.target.checked })} />

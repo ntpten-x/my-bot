@@ -3,8 +3,9 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 model Owner {
@@ -107,7 +108,7 @@ model Post {
   @@index([pipelineStatus])
   @@index([province])
   @@index([score])
-  @@index([normalizedText])
+  @@index([normalizedText], type: Hash)
   @@index([sourceId, duplicateOfId, createdAt])
   @@index([embeddingConfig, embeddingRetryAt])
   @@index([followUpAt])

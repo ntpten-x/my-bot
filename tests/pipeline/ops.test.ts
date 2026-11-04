@@ -38,11 +38,13 @@ describe("rate limit and backups", () => {
         [
           { name: "2026-11-01.db", mtimeMs: old },
           { name: "2026-11-10.db", mtimeMs: recent },
+          { name: "2026-11-02.json.gz", mtimeMs: old },
+          { name: "manual-1.json.gz", mtimeMs: old },
           { name: "notes.txt", mtimeMs: old },
         ],
         now,
       ),
-    ).toEqual(["2026-11-01.db"]);
+    ).toEqual(["2026-11-01.db", "2026-11-02.json.gz"]);
   });
 });
 

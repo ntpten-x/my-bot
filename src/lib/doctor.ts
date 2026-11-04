@@ -12,6 +12,9 @@ export type DoctorFacts = {
   depsInstalled: boolean;
   env: {
     databaseUrl: boolean;
+    /** "postgres" for Supabase/Postgres, "sqlite" for an old file: URL. */
+    databaseKind?: "postgres" | "sqlite" | "other";
+    directUrl?: boolean;
     port: boolean;
     groq: boolean;
     gemini: boolean;
@@ -48,8 +51,14 @@ export function evaluateDoctor(facts: DoctorFacts): DoctorCheck[] {
   checks.push(
     facts.env.databaseUrl
       ? { id: "env-db", status: "PASS", label: "มี DATABASE_URL", hint: "" }
-      : { id: "env-db", status: "FAIL", label: "ไม่มี DATABASE_URL", hint: "คัดลอก .env.example เป็น .env" },
+      : { id: "env-db", status: "FAIL", label: "ไม่มี DATABASE_URL", hint: "ใส่ DATABASE_URL ของ Supabase ใน .env (ดู docs/SETUP.th.md)" },
   );
+  if (facts.env.databaseUrl && facts.env.databaseKind === "sqlite") {
+    checks.push({ id: "env-db-kind", status: "FAIL", label: "DATABASE_URL ยังชี้ไปที่ไฟล์ SQLite", hint: "ระบบย้ายไป Supabase แล้ว ใส่ DATABASE_URL และ DIRECT_URL ของ Supabase ใน .env (ดู docs/SETUP.th.md)" });
+  }
+  if (facts.env.databaseKind === "postgres" && facts.env.directUrl === false) {
+    checks.push({ id: "env-direct", status: "WARN", label: "ไม่มี DIRECT_URL", hint: "ใส่ DIRECT_URL (Session pooler พอร์ต 5432) ใน .env ไม่งั้น prisma migrate อาจค้างผ่าน pgbouncer" });
+  }
   checks.push(
     facts.env.port
       ? { id: "env-port", status: "PASS", label: "มี PORT", hint: "" }
@@ -73,7 +82,7 @@ export function evaluateDoctor(facts: DoctorFacts): DoctorCheck[] {
   checks.push(
     facts.dbOk
       ? { id: "db", status: "PASS", label: "ฐานข้อมูลพร้อม", hint: "" }
-      : { id: "db", status: "FAIL", label: "ฐานข้อมูลยังไม่พร้อม", hint: "รัน npm run db:migrate แล้ว npm run db:seed ถ้าไฟล์ถูกล็อก ให้ปิดแอปก่อน" },
+      : { id: "db", status: "FAIL", label: "ฐานข้อมูลยังไม่พร้อม", hint: "เช็กว่าเน็ตต่อได้และ DATABASE_URL/รหัสผ่าน Supabase ใน .env ถูกต้อง แล้วรัน npm run db:migrate และ npm run db:seed" },
   );
   if (facts.portState === "ours") {
     checks.push({ id: "port", status: "PASS", label: "พอร์ต 8001 ตอบโดย MY-BOT", hint: "" });
