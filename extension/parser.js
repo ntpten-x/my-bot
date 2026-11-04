@@ -59,6 +59,30 @@
       .replace(/\s*(?:…|\.{3})\s*(?:ดูเพิ่มเติม|See more)\s*$/i, "…");
   }
 
+  const TRUNCATED_TAIL = /(?:…|\.{3})\s*(?:(?:ดูเพิ่มเติม|See more|ดูเพิ่ม)\s*)?$|(?:ดูเพิ่มเติม|See more)\s*$/i;
+
+  function isTruncatedText(text) {
+    return TRUNCATED_TAIL.test(String(text || "").trim());
+  }
+
+  function stem(text) {
+    return String(text || "").replace(TRUNCATED_TAIL, "").replace(/\s+/g, "");
+  }
+
+  // Facebook often keeps the full message in another (visually hidden) node of the same post.
+  // Read it straight from the DOM; nothing is clicked or expanded.
+  function hiddenFullText(article, cut) {
+    const probe = stem(cut).slice(0, 40);
+    if (probe.length < 6) return "";
+    let best = "";
+    article.querySelectorAll('div[dir="auto"], span[dir="auto"], [data-ad-preview="message"], [data-ad-comet-preview="message"]').forEach((node) => {
+      const value = clean(node.textContent);
+      if (value.length <= best.length || isTruncatedText(value)) return;
+      if (stem(value).startsWith(probe) && stem(value).length > stem(cut).length) best = value;
+    });
+    return best;
+  }
+
   function extractText(article) {
     for (const selector of SELECTORS.text) {
       const chunks = [];
@@ -68,7 +92,8 @@
       });
       if (chunks.length) {
         chunks.sort((a, b) => b.length - a.length);
-        return chunks[0];
+        const text = chunks[0];
+        return isTruncatedText(text) ? hiddenFullText(article, text) || text : text;
       }
     }
     return "";
@@ -195,6 +220,7 @@
         text,
         postedAt: extractTime(article),
         images: extractImages(article),
+        truncated: isTruncatedText(text),
       });
     }
     return posts;
@@ -264,7 +290,7 @@
     return listings;
   }
 
-  const api = { parseFacebookPosts, parseMarketplaceListings, readGroupId, SELECTORS };
+  const api = { parseFacebookPosts, parseMarketplaceListings, readGroupId, isTruncatedText, SELECTORS };
   root.MyBotParser = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);

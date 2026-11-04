@@ -221,6 +221,33 @@ async function reportRun(cfg, group, run) {
   }
 }
 
+const MAX_FULL_TEXT_PER_RUN = 3;
+
+function postKey(url) {
+  return String(url || "").split("?")[0].replace(/\/+$/, "");
+}
+
+// Posts cut off at "See more": open each permalink in the same background tab and read the text
+// Facebook shows there. Navigation and reading only; nothing on the page is clicked.
+async function readFullTexts(tabId, kind, urls) {
+  const found = [];
+  for (const url of urls.slice(0, MAX_FULL_TEXT_PER_RUN)) {
+    try {
+      await chrome.tabs.update(tabId, { url });
+      await waitComplete(tabId);
+      await sleep(2500);
+      await chrome.scripting.executeScript({ target: { tabId }, files: ["selectors.js", "fbtime.js", "parser.js", "identity.js"] });
+      const page = await readPage(tabId, kind);
+      const posts = (page.posts || []).filter((post) => !post.truncated);
+      const match = posts.find((post) => postKey(post.url) === postKey(url)) || posts.sort((a, b) => b.text.length - a.text.length)[0];
+      if (match) found.push({ ...match, url });
+    } catch {
+      // Skip this one; it is tried again on a later run.
+    }
+  }
+  return found;
+}
+
 async function scrapeGroup(cfg, group, remote) {
   const Scrape = globalThis.MyBotScrape;
   const kind = sourceKind(group);
@@ -251,7 +278,8 @@ async function scrapeGroup(cfg, group, remote) {
     }
     result.stoppedBy = run.stoppedBy || "screens";
     result.postsFound = run.found;
-    const fresh = run.fresh.slice(0, settings.maxPosts).map((post) => ({
+    const picked = run.fresh.slice(0, settings.maxPosts);
+    const fresh = picked.map((post) => ({
       url: post.url,
       authorName: post.authorName || "",
       text: Scrape.cleanupText(post.text),
@@ -262,6 +290,23 @@ async function scrapeGroup(cfg, group, remote) {
       const response = await sendPosts(cfg, group.url, fresh);
       const data = response && response.ok ? await response.clone().json().catch(() => ({})) : {};
       result.newPosts = Number(data.inserted) || 0;
+    }
+    if (kind !== "marketplace") {
+      const cut = [...picked.filter((post) => post.truncated).map((post) => post.url), ...(group.refetchUrls || [])];
+      const urls = [...new Set(cut.map(String))];
+      if (urls.length) {
+        const full = await readFullTexts(tabId, kind, urls);
+        if (full.length) {
+          await sendPosts(cfg, group.url, full.map((post) => ({
+            url: post.url,
+            authorName: post.authorName || "",
+            text: Scrape.cleanupText(post.text),
+            postedAt: post.postedAt || null,
+            images: post.images || [],
+          }))).catch(() => undefined);
+          result.fullTexts = full.length;
+        }
+      }
     }
     await postJson(cfg, "/api/v1/extension/sample", { sourceUrl: group.url, posts: sample }).catch(() => undefined);
     result.message = `อ่านได้ ${run.found} โพสต์ ใหม่ ${result.newPosts} · เลื่อน ${result.scrolls} หน้าจอ`;

@@ -19,7 +19,7 @@ export default function ParserPage() {
   }, []);
 
   return (
-    <div>
+    <div className="min-w-0">
       <h1 className="text-2xl font-semibold">ทดสอบตัวอ่านโพสต์</h1>
       <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
         ส่วนขยายส่งตัวอย่างที่อ่านได้จากหน้ากลุ่มล่าสุดมาไว้ที่นี่ ถ้าเปิดกลุ่มแล้วยังว่าง แปลว่าตัวเลือกในหน้า Facebook เปลี่ยน หรือยังไม่ได้ใส่โทเคน
@@ -29,15 +29,15 @@ export default function ParserPage() {
       <div className="mt-4 space-y-4">
         {samples.map((sample) => (
           <Card key={sample.id}>
-            <div className="text-sm text-muted">
+            <div className="break-all text-sm text-muted">
               {timeAgo(sample.createdAt)} · อ่านได้ {sample.postCount} โพสต์ · {sample.sourceUrl}
             </div>
             <div className="mt-3 space-y-3">
               {sample.posts.map((post, index) => (
-                <article key={`${post.url}-${index}`} className="rounded-xl bg-paper px-3 py-2 text-sm">
+                <article key={`${post.url}-${index}`} className="min-w-0 rounded-xl bg-paper px-3 py-2 text-sm">
                   <div className="font-medium">{post.authorName || "ไม่ทราบชื่อ"}</div>
-                  <p className="mt-1 whitespace-pre-wrap leading-6">{post.text || "(ไม่มีข้อความ)"}</p>
-                  <div className="mt-1 text-xs text-muted">
+                  <p className="mt-1 whitespace-pre-wrap break-words leading-6">{post.text || "(ไม่มีข้อความ)"}</p>
+                  <div className="mt-1 break-all text-xs text-muted">
                     {post.postedAt || "ไม่มีเวลา"} · รูป {post.imageCount}
                     {post.url ? ` · ${post.url}` : ""}
                   </div>

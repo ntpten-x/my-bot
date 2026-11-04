@@ -37,17 +37,47 @@ export type LooseAiItem = {
 const DEVICE = /ipad|iphone|ไอแพด|ไอโฟน|แท็บเล็ต|tablet|มือถือ|samsung|การ์ดจอ|โน้ตบุ๊ก|โน๊ตบุ๊ค|คอมพิวเตอร์|โทรศัพท์/i;
 const FOOD_VENDOR = /คิวว่าง|เริ่มส่ง|เมนู|อาหาร|ของกิน|ยำ|ลูกชิ้น|สั่งอาหาร|ร้านอาหาร|ข้าวมันไก่|ส้มตำ|ก๋วยเตี๋ยว|กับข้าว/;
 
+// Game accounts, top-ups and rank boosting. "รหัส" alone is not enough: shop codes look like "รหัสMS240685".
+const GAME_BOOST = /ดันรหัส|ดันแรง[ค์ก]?|ปั้มแรง[ค์ก]?|รับดัน|ตัวแทนดัน|บูสแรง|boost/i;
+const GAME_TOPUP = /เติมเพชร|เติมเกม|เติม\s?uc|เติมยูซี|robux|โรบัค|\bbux\b|เติมคูปอง/i;
+const GAME_ID = /ขายรหัส(?!\s?MS)|หารหัส|รหัสเกม|ไอดีเกม|รหัสหญิง|รหัสชาย|ไข่เยอะ|ของพร้อมเล่น|พร้อมเล่น|ไอดีเกม|\bid\s?เกม/i;
+const GAME_NAME = /\brov\b|free\s?fire|ฟีฟาย|pubg|พับจี|roblox|โรบล็อก|valorant|วาโล|genshin|mlbb|garena|การีน่า|pet\s?sim|grow a garden|blox\s?fruit|เกม/i;
+/** Shop catalogue codes such as "MS240685" (food sellers in the owner's groups). */
+export const SHOP_CODE = /(?:^|[^A-Za-z])MS\s?\d{6}(?!\d)/i;
+
 export function foodOverride(text: string) {
-  return FOOD_VENDOR.test(text) && !DEVICE.test(text);
+  return FOOD_VENDOR.test(text) && !DEVICE.test(text) && !gameRule(text);
+}
+
+/** Game post and its sub-category, or null. */
+export function gameRule(text: string): { subcategorySlug: string | null } | null {
+  if (GAME_BOOST.test(text)) return { subcategorySlug: "game-boost" };
+  if (GAME_TOPUP.test(text)) return { subcategorySlug: "game-topup" };
+  if (GAME_ID.test(text)) return { subcategorySlug: "game-id" };
+  // A game name alone ("โน้ตบุ๊กเล่นเกม") does not beat a device.
+  if (GAME_NAME.test(text) && !DEVICE.test(text)) return { subcategorySlug: null };
+  return null;
+}
+
+/** Rules that win over keyword scoring and over the AI: games, shop codes, food vendors. */
+export function forcedCategory(text: string, catalog: CatNode[]): { categorySlug: string; subcategorySlug: string | null } | null {
+  const has = (slug: string, parent: string | null = null) =>
+    catalog.some((node) => node.slug === slug && (node.parentSlug ?? null) === parent);
+  const game = gameRule(text);
+  if (game && has("games")) {
+    return { categorySlug: "games", subcategorySlug: game.subcategorySlug && has(game.subcategorySlug, "games") ? game.subcategorySlug : null };
+  }
+  if (SHOP_CODE.test(text) && !DEVICE.test(text) && has("food")) return { categorySlug: "food", subcategorySlug: null };
+  if (foodOverride(text) && has("food")) return { categorySlug: "food", subcategorySlug: null };
+  return null;
 }
 
 export function classifyByRules(text: string, catalog: CatNode[]): {
   categorySlug: string;
   subcategorySlug: string | null;
 } {
-  if (foodOverride(text) && catalog.some((node) => node.slug === "food" && !node.parentSlug)) {
-    return { categorySlug: "food", subcategorySlug: null };
-  }
+  const forced = forcedCategory(text, catalog);
+  if (forced) return forced;
   if (DEVICE.test(text) && catalog.some((node) => node.slug === "it" && !node.parentSlug)) {
     return { categorySlug: "it", subcategorySlug: null };
   }
@@ -112,14 +142,15 @@ export function sanitizeAiItem(item: LooseAiItem, post: ClassifyInput, catalog: 
     categorySlug = fallback.categorySlug;
     subcategorySlug = fallback.subcategorySlug;
   }
-  if (foodOverride(post.text) && catalog.some((node) => node.slug === "food" && !node.parentSlug)) {
-    categorySlug = "food";
-    subcategorySlug = null;
+  const forced = forcedCategory(post.text, catalog);
+  if (forced) {
+    categorySlug = forced.categorySlug;
+    subcategorySlug = forced.subcategorySlug ?? (categorySlug === categorySlugFromAi(item) ? subcategorySlug : null);
   }
   const isAd = Boolean(item.isAd) || fallback.isAd;
   let intent: Intent;
   if (isAd || fallback.intent === "ad") intent = "ad";
-  else if (STRONG_SELLER.test(post.text) && !STRONG_BUYER.test(post.text)) intent = "seller";
+  else if ((STRONG_SELLER.test(post.text) || SHOP_CODE.test(post.text)) && !STRONG_BUYER.test(post.text)) intent = "seller";
   else if (item.intent === "buyer" || item.intent === "seller" || item.intent === "ad") intent = item.intent;
   else intent = fallback.intent;
   const province = normalizeProvinceName(item.province) || fallback.province;
@@ -139,4 +170,8 @@ export function sanitizeAiItem(item: LooseAiItem, post: ClassifyInput, catalog: 
     hasBudget: typeof item.hasBudget === "boolean" ? item.hasBudget : fallback.hasBudget,
     specificity: typeof item.specificity === "number" ? Math.max(0, Math.min(1, item.specificity)) : fallback.specificity,
   };
+}
+
+function categorySlugFromAi(item: LooseAiItem) {
+  return item.categorySlug ?? "";
 }

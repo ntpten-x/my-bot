@@ -10,6 +10,23 @@ import { queueExternalNotification } from "../notification-queue";
 import { workerLog } from "../log";
 import { applyAutomationRules } from "../automation";
 import { inServiceArea } from "../service-area";
+import { scoreAd } from "../pipeline/ad-filter";
+import { ruleItem, type AiItem } from "../pipeline/classify-rules";
+import { syncDuplicateLabels } from "../smart/duplicate-labels";
+import { setOwnerExamples } from "./prompt";
+
+/** Ad score at which a post is plainly an ad: rules label it and the model is not called. */
+export const OBVIOUS_AD_SCORE = 4;
+
+async function loadOwnerExamples() {
+  const rows = await prisma.post.findMany({
+    where: { aiProvider: "owner", categoryId: { not: null } },
+    orderBy: { updatedAt: "desc" },
+    take: 6,
+    select: { text: true, category: { select: { slug: true } }, subcategory: { select: { slug: true } } },
+  });
+  setOwnerExamples(rows.map((row) => ({ text: row.text, label: [row.category?.slug, row.subcategory?.slug].filter(Boolean).join("/") })));
+}
 
 export const STUCK_JOB_MS = 2 * 60 * 1000;
 export const MAX_AI_ATTEMPTS = 10;
@@ -81,9 +98,7 @@ export async function processAiQueue() {
     if (!jobs.length) return 0;
     claimed = jobs;
     const started = Date.now();
-    for (const job of jobs) {
-      await prisma.aiJob.update({ where: { id: job.id }, data: { queueWaitMs: Math.min(2_147_483_647, Math.max(0, started - job.createdAt.getTime())) } });
-    }
+    await Promise.all(jobs.map(job => prisma.aiJob.update({ where: { id: job.id }, data: { queueWaitMs: Math.min(2_147_483_647, Math.max(0, started - job.createdAt.getTime())) } })));
     heartbeat = setInterval(() => {
       void prisma.aiJob.updateMany({ where: { id: { in: claimed.map(job => job.id) }, status: "running" }, data: { updatedAt: new Date() } }).catch(() => undefined);
     }, 30_000);
@@ -93,9 +108,15 @@ export async function processAiQueue() {
       claimed = [];
       return jobs.length;
     }
-    const { rows, catalog } = await loadCatalogFromDb();
+    const [{ rows, catalog }] = await Promise.all([loadCatalogFromDb(), loadOwnerExamples().catch(() => undefined)]);
     const inputs = [];
+    const adItems: AiItem[] = [];
     for (const job of jobs) {
+      // Plain ads skip the model: rules are enough and it saves several seconds per batch.
+      if (job.post.source?.type !== "facebook_marketplace" && scoreAd(job.post.text).score >= OBVIOUS_AD_SCORE) {
+        adItems.push({ ...ruleItem({ id: job.postId, text: job.post.text }, catalog), isAd: true, intent: "ad" });
+        continue;
+      }
       let ocrText = job.post.ocrText;
       if (settings.ocrEnabled && !ocrText) {
         try {
@@ -118,14 +139,15 @@ export async function processAiQueue() {
         await prisma.aiCache.upsert({ where: { cacheKey: key }, update: { provider: hit.provider, result: JSON.stringify(hit.item) }, create: { cacheKey: key, provider: hit.provider, result: JSON.stringify(hit.item) } });
       },
     });
-    const successful = outcome.results.filter(item => outcome.providersById[item.id] && outcome.providersById[item.id] !== "rules");
+    for (const item of adItems) outcome.providersById[item.id] = "rules:ad";
+    const successful = [...outcome.results.filter(item => outcome.providersById[item.id] && outcome.providersById[item.id] !== "rules"), ...adItems];
     const marketplaceIds = new Set(jobs.filter(job => job.post.source?.type === "facebook_marketplace").map(job => job.postId));
-    for (const item of successful) {
+    await Promise.all(successful.map(item => {
       const ids = resolveCategoryIds(rows, item.categorySlug, item.subcategorySlug);
       // Marketplace listings stay "seller" (and not ads) whatever the model says.
       if (marketplaceIds.has(item.id)) Object.assign(item, { intent: "seller", isAd: false });
-      await prisma.post.update({ where: { id: item.id }, data: { categoryId: ids.categoryId, subcategoryId: ids.subcategoryId, intent: item.intent, province: item.province, isAd: item.isAd, suggestedReply: item.suggestedReply, aiProvider: outcome.providersById[item.id] } });
-    }
+      return prisma.post.update({ where: { id: item.id }, data: { categoryId: ids.categoryId, subcategoryId: ids.subcategoryId, intent: item.intent, province: item.province, isAd: item.isAd, suggestedReply: item.suggestedReply, aiProvider: outcome.providersById[item.id] } });
+    }));
     // Scoring must not block completion on an embedding provider.
     await enrichPosts(successful.map(item => item.id), successful, settings, { embed: false });
     const successIds = new Set(successful.map(item => item.id));
@@ -140,6 +162,7 @@ export async function processAiQueue() {
       } else await retry(job, errorText, delay, latencyMs);
     }
     claimed = [];
+    await syncDuplicateLabels().catch(error => workerLog({ level: "error", message: "คัดลอกหมวดให้โพสต์ซ้ำไม่สำเร็จ", error: String(error).slice(0, 300) }));
     await applyAutomationRules([...successIds]).catch(error => workerLog({ level: "error", message: "ใช้กฎอัตโนมัติไม่สำเร็จ", error: String(error).slice(0, 300) }));
     const ready = await prisma.post.findMany({ where: { id: { in: [...successIds] }, duplicateOfId: null, dismissed: false }, include: { category: true, subcategory: true, source: true } });
     for (const post of ready) {

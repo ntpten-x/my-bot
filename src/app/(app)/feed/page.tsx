@@ -59,7 +59,14 @@ function readUrl(): { filters: Filters; page: number } {
   const params = new URLSearchParams(window.location.search);
   const page = Math.max(1, Number(params.get("page")) || 1);
   const sort = params.get("sort");
-  return { filters: { ...INITIAL, q: params.get("q") ?? "", sort: sort === "score" || sort === "captured" ? sort : "new" }, page };
+  const filters = { ...INITIAL } as Record<string, unknown>;
+  // Every filter lives in the address bar, so reload, back, and shared links keep the same view.
+  for (const [key, fallback] of Object.entries(INITIAL)) {
+    const value = params.get(key);
+    if (value === null) continue;
+    filters[key] = typeof fallback === "boolean" ? value === "1" : value;
+  }
+  return { filters: { ...(filters as Filters), sort: sort === "score" || sort === "captured" ? sort : "new" }, page };
 }
 
 function pageList(page: number, pages: number): (number | "...")[] {
@@ -157,8 +164,11 @@ export default function FeedPage() {
     if (!ready) return;
     const url = new URL(window.location.href);
     url.searchParams.set("page", String(page));
-    if (filters.sort !== "new") url.searchParams.set("sort", filters.sort); else url.searchParams.delete("sort");
-    if (filters.q) url.searchParams.set("q", filters.q); else url.searchParams.delete("q");
+    for (const [key, fallback] of Object.entries(INITIAL)) {
+      const value = (filters as Record<string, unknown>)[key];
+      if (value === fallback || value === undefined) url.searchParams.delete(key);
+      else url.searchParams.set(key, typeof value === "boolean" ? (value ? "1" : "0") : String(value));
+    }
     window.history.replaceState(null, "", url.toString());
     void load(page, filters);
   }, [ready, page, filters, load]);

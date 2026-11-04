@@ -6,14 +6,21 @@ import { postInclude, serializePost } from "@/lib/serialize";
 import { heartbeatIsStale, sourceIsStale } from "@/lib/extension-health";
 import { aiQueueStats } from "@/lib/ai/stats";
 import { EXTENSION_SOURCE_TYPES } from "@/lib/scrape-plan";
+import { memo } from "@/lib/memo";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   const { error } = await authed();
   if (error) return error;
+  // Dashboard numbers may be up to 30 s old; this saves ~1.4 s of Supabase round trips per load.
+  return json(await memo("stats", 30_000, loadStats));
+}
+
+async function loadStats() {
   const start = bangkokStart(0);
-  const [postsToday, unread, buyers, pipeline, enabledSources, errorSources, grouped, recent, logs] =
+  // One wave: every query starts at once (the pool runs up to 5 at a time).
+  const [postsToday, unread, buyers, pipeline, enabledSources, errorSources, grouped, recent, logs, categories, seen, facebookSources, aiQueue] =
     await Promise.all([
       prisma.post.count({ where: { createdAt: { gte: start } } }),
       prisma.post.count({ where: { isRead: false, isAd: false, forbiddenHit: false } }),
@@ -31,10 +38,14 @@ export async function GET() {
         orderBy: { createdAt: "desc" },
         take: 6,
         include: postInclude,
+        relationLoadStrategy: "join",
       }),
-      prisma.fetchLog.findMany({ orderBy: { createdAt: "desc" }, take: 6, include: { source: true } }),
+      prisma.fetchLog.findMany({ orderBy: { createdAt: "desc" }, take: 6, include: { source: true }, relationLoadStrategy: "join" }),
+      prisma.category.findMany({ select: { id: true, name: true } }),
+      prisma.setting.findUnique({ where: { key: "extension_last_seen" } }),
+      prisma.source.findMany({ where: { type: { in: [...EXTENSION_SOURCE_TYPES] } }, orderBy: { name: "asc" } }),
+      aiQueueStats(),
     ]);
-  const categories = await prisma.category.findMany();
   const byCategory = grouped
     .map((row) => ({
       id: row.categoryId,
@@ -42,18 +53,13 @@ export async function GET() {
       count: row._count._all,
     }))
     .sort((a, b) => b.count - a.count);
-  const [seen, facebookSources, aiQueue] = await Promise.all([
-    prisma.setting.findUnique({ where: { key: "extension_last_seen" } }),
-    prisma.source.findMany({ where: { type: { in: [...EXTENSION_SOURCE_TYPES] } }, orderBy: { name: "asc" } }),
-    aiQueueStats(),
-  ]);
   const lastSeen = seen?.value ? new Date(seen.value) : null;
   const validSeen = lastSeen && !Number.isNaN(lastSeen.getTime()) ? lastSeen : null;
   const enabledFacebook = facebookSources.filter((source) => source.enabled);
   const aged = enabledFacebook.some((source) => Date.now() - source.createdAt.getTime() >= 30 * 60 * 1000);
   const extensionStale =
     aged && (heartbeatIsStale(validSeen) || enabledFacebook.some((source) => sourceIsStale(source)));
-  return json({
+  return {
     postsToday,
     aiQueue,
     unread,
@@ -82,5 +88,5 @@ export async function GET() {
         stale: sourceIsStale(source),
       })),
     },
-  });
+  };
 }

@@ -13,6 +13,8 @@ import { recordTiming } from "./metrics";
 import { queueExternalNotification } from "./notification-queue";
 import { applyAutomationRules } from "./automation";
 import { inServiceArea } from "./service-area";
+import { isExpansionOf } from "./pipeline/truncation";
+import { syncDuplicateLabels } from "./smart/duplicate-labels";
 
 export type IncomingPost = {
   url: string;
@@ -87,9 +89,28 @@ export async function ingestPosts(input: {
             { sourceId: source.id, externalUrl: { in: prepared.map((item) => item.url) } },
           ],
         },
-        select: { contentHash: true, externalUrl: true },
+        select: { id: true, contentHash: true, externalUrl: true, text: true },
       })
     : [];
+
+  // Expanded text for a post we stored cut off at "See more": update it in place and classify again.
+  let expanded = 0;
+  const byUrl = new Map(existing.map((row) => [row.externalUrl, row]));
+  for (const item of prepared) {
+    const old = byUrl.get(item.url);
+    if (!old || !isExpansionOf(old.text, item.raw.text)) continue;
+    await prisma.post.update({
+      where: { id: old.id },
+      data: {
+        text: item.raw.text.slice(0, 8000),
+        normalizedText: item.lead.normalizedText.slice(0, 8000),
+        aiProvider: "rules",
+      },
+    });
+    old.text = item.raw.text;
+    await enqueueAiJobs([old.id]);
+    expanded += 1;
+  }
 
   const seenHash = new Set(existing.map((item) => item.contentHash));
   const seenUrl = new Set(existing.map((item) => item.externalUrl));
@@ -140,6 +161,7 @@ export async function ingestPosts(input: {
   const aiProvider = "rules";
   if (createdIds.length) {
     await collapseIdenticalTexts(fresh.map((item) => item.lead.normalizedText));
+    await syncDuplicateLabels().catch((error) => console.error("[dup-labels]", error));
   }
   const uniqueIds = createdIds.length
     ? (
@@ -189,6 +211,7 @@ export async function ingestPosts(input: {
   return {
     ok: true as const,
     inserted: uniqueIds.length,
+    expanded,
     duplicates,
     source: canonicalSourceUrl(source.url),
   };

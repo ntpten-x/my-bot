@@ -46,6 +46,7 @@ export async function buildReplyQueue(options: { notify?: boolean } = {}) {
       replyItem: { is: null },
     },
     include: { source: { select: { name: true } }, category: { select: { name: true } }, subcategory: { select: { name: true } } },
+    relationLoadStrategy: "join",
     orderBy: [{ score: "desc" }, { createdAt: "desc" }],
     take: 300,
   });
@@ -125,17 +126,15 @@ export async function maybeBuildScheduledReplyQueue() {
 }
 
 export async function replyQueueState() {
-  const settings = await getSettings();
   const day = bangkokClock().day;
   const yesterday = bangkokClock(new Date(Date.now() - 86_400_000)).day;
-  const items = await prisma.replyQueueItem.findMany({
+  const [settings, items, nextAllowedAt, openedToday] = await Promise.all([getSettings(), prisma.replyQueueItem.findMany({
     where: { OR: [{ day }, { day: yesterday, status: { in: ["queued", "opened"] } }] },
     include: { post: { select: { externalUrl: true, authorName: true, text: true, score: true, province: true, source: { select: { name: true } } } } },
+    relationLoadStrategy: "join",
     orderBy: [{ createdAt: "asc" }],
     take: 200,
-  });
-  const nextAllowedAt = await readSetting(NEXT_KEY);
-  const openedToday = await countOpenedToday(day);
+  }), readSetting(NEXT_KEY), countOpenedToday(day)]);
   return {
     items: items.map((item) => ({
       id: item.id,

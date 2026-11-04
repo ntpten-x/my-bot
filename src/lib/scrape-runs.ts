@@ -1,4 +1,5 @@
 import { prisma } from "./prisma";
+import { isTruncatedText } from "./pipeline/truncation";
 import { getSettings } from "./settings";
 import { findSourceByUrl } from "./sources";
 import {
@@ -30,21 +31,23 @@ export async function buildExtensionConfig(now = new Date()) {
   const due = sortDue(sources.filter((source) => isDue(source, now.getTime())));
   const ordered = [...due, ...sources.filter((source) => !due.includes(source))];
   // Known post keys for the sources the extension is likely to open this cycle, so it can stop scrolling early.
-  const hints = new Map<string, { keys: string[]; lastSeenAt: string | null }>();
+  const hints = new Map<string, { keys: string[]; lastSeenAt: string | null; refetch: string[] }>();
   const since = new Date(now.getTime() - Math.max(24, settings.maxPostAgeHours) * 3600_000);
   for (const source of due.slice(0, settings.maxGroupsPerCycle + 2)) {
     const rows = await prisma.post.findMany({
       where: { sourceId: source.id, createdAt: { gte: since } },
       orderBy: { createdAt: "desc" },
       take: 80,
-      select: { externalUrl: true, postedAt: true, createdAt: true },
+      select: { externalUrl: true, postedAt: true, createdAt: true, text: true },
     });
     const keys = [...new Set(rows.map((row) => postKeyFromUrl(row.externalUrl)).filter(Boolean))];
     const newest = rows.reduce<Date | null>((max, row) => {
       const at = row.postedAt ?? null;
       return at && (!max || at > max) ? at : max;
     }, null);
-    hints.set(source.id, { keys, lastSeenAt: newest?.toISOString() ?? null });
+    // Posts stored cut off at "See more": the extension opens up to 3 permalinks to read the full text.
+    const refetch = rows.filter((row) => isTruncatedText(row.text)).slice(0, 3).map((row) => row.externalUrl);
+    hints.set(source.id, { keys, lastSeenAt: newest?.toISOString() ?? null, refetch });
   }
   return {
     groups: ordered.map((source) => {
@@ -64,6 +67,7 @@ export async function buildExtensionConfig(now = new Date()) {
         lastFetchedAt: source.lastFetchedAt?.toISOString() ?? null,
         knownKeys: hint?.keys ?? [],
         lastSeenAt: hint?.lastSeenAt ?? null,
+        refetchUrls: hint?.refetch ?? [],
       };
     }),
     maxGroupsPerCycle: settings.maxGroupsPerCycle,

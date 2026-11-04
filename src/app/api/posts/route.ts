@@ -74,7 +74,7 @@ export async function GET(request: Request) {
     if (!semantic) {
       const [total, posts] = await Promise.all([
         prisma.post.count({ where: keywordWhere }),
-        prisma.post.findMany({ where: keywordWhere, include: postInclude, orderBy: [{ isAd: "asc" }, { score: "desc" }, { createdAt: "desc" }, { id: "asc" }], skip: (page - 1) * pageSize, take: pageSize }),
+        prisma.post.findMany({ where: keywordWhere, include: postInclude, relationLoadStrategy: "join", orderBy: [{ isAd: "asc" }, { score: "desc" }, { createdAt: "desc" }, { id: "asc" }], skip: (page - 1) * pageSize, take: pageSize }),
       ]);
       return json({ posts: await withAlsoIn(posts.map(serializePost)), total, page, pageSize, semantic: false, searchScope: "ค้นด้วยคำจากโพสต์ทั้งหมดที่ตรงตัวกรอง" });
     }
@@ -102,13 +102,13 @@ export async function GET(request: Request) {
     const ranked = await semanticRank(q, await getSettings(), pool);
     // If the model is unavailable, return the complete paginated keyword search.
     if (ranked.warning) {
-      const posts = await prisma.post.findMany({ where: keywordWhere, include: postInclude, orderBy: [{ score: "desc" }, { createdAt: "desc" }, { id: "asc" }], skip: (page - 1) * pageSize, take: pageSize });
+      const posts = await prisma.post.findMany({ where: keywordWhere, include: postInclude, relationLoadStrategy: "join", orderBy: [{ score: "desc" }, { createdAt: "desc" }, { id: "asc" }], skip: (page - 1) * pageSize, take: pageSize });
       return json({ posts: await withAlsoIn(posts.map(serializePost)), total: keywordTotal, page, pageSize, semantic: false, searchScope: "โมเดลค้นตามความหมายไม่พร้อม จึงค้นด้วยคำจากโพสต์ทั้งหมดที่ตรงตัวกรอง" });
     }
     const keywordIds = new Set(keywordPosts.map(post => post.id));
     const ordered = rankHybrid(q, pool.filter(post => ranked.scores.has(post.id) || keywordIds.has(post.id)), ranked.scores);
     const slice = ordered.slice((page - 1) * pageSize, page * pageSize);
-    const full = await prisma.post.findMany({ where: { id: { in: slice.map(post => post.id) } }, include: postInclude });
+    const full = await prisma.post.findMany({ where: { id: { in: slice.map(post => post.id) } }, include: postInclude, relationLoadStrategy: "join" });
     const byFullId = new Map(full.map(post => [post.id, post]));
     return json({
       posts: await withAlsoIn(slice.flatMap(post => { const row = byFullId.get(post.id); return row ? [serializePost(row)] : []; })),
@@ -134,7 +134,7 @@ export async function GET(request: Request) {
     prisma.post.count({ where }),
     prisma.post.findMany({
       where,
-      include: postInclude,
+      include: postInclude, relationLoadStrategy: "join",
       orderBy: sort,
       skip: (page - 1) * pageSize,
       take: pageSize,

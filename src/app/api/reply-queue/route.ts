@@ -27,7 +27,8 @@ async function settingsView() {
 export async function GET() {
   const { error } = await authed();
   if (error) return error;
-  return json({ settings: await settingsView(), ...(await replyQueueState()) });
+  const [settings, state] = await Promise.all([settingsView(), replyQueueState()]);
+  return json({ settings, ...state });
 }
 
 export async function PUT(request: Request) {

@@ -1,31 +1,35 @@
-import type { CatNode } from "../pipeline/catalog";
+﻿import type { CatNode } from "../pipeline/catalog";
 import type { ClassifyInput } from "../pipeline/classify-rules";
 
-export const AI_SYSTEM = `คุณคือผู้ช่วยคัดแยกประกาศภาษาไทยจากกลุ่มซื้อขาย
-ตอบเป็น JSON เท่านั้น ในรูปแบบ
+// Kept short on purpose: every token here is re-read by the local model for every batch.
+export const AI_SYSTEM = `คัดแยกโพสต์ภาษาไทยจากกลุ่มซื้อขาย ตอบ JSON เท่านั้น:
 {"items":[{"id":"","categorySlug":"","subcategorySlug":null,"intent":"buyer","province":null,"isAd":false,"urgency":0.5,"hasBudget":false,"specificity":0.5,"suggestedReply":""}]}
 ตัวอย่าง:
-- "พร้อมส่งไอโฟน" seller, it, isAd false
-- "ขายการ์ดจอมือสอง" seller, it
-- "รับทำเว็บ" seller, freelance
-- "รับออกแบบโลโก้" seller, freelance
 - "หา iPad มือสอง" buyer, it
-- "ตามหาคนรับเติมเกม" buyer, games/game-topup
-- "พอรู้จักร้านซ่อมไอแพดมั้ย" buyer, it
-- "อยากได้ข้าวมันไก่ส่งบ้าน" buyer, food
-- "ยำลูกชิ้นพร้อมส่ง" seller, food, isAd false
-- "ลิงก์ Shopee Lazada Grab หรือ KFC ชวนซื้อ" isAd true, intent ad
+- "พร้อมส่งไอโฟน" seller, it
+- "รับทำเว็บ" seller, freelance
+- "หารหัสหญิงล้วน งบ300" buyer, games/game-id
+- "ตัวแทนดันรหัส 265 บาท" seller, games/game-boost
+- "ขายของในเกม ไข่เยอะ พร้อมเล่น 99.-" seller, games/game-id
+- "#รหัสMS240685 ส่งฟรี" seller, food
+- "ยำลูกชิ้นพร้อมส่ง" seller, food
+- "ลิงก์ Shopee Lazada ชวนซื้อ" isAd true, intent ad
 กติกา:
-- categorySlug และ subcategorySlug ต้องเลือกจากรายการที่ให้เท่านั้น ถ้าไม่มีหมวดย่อยให้ใส่ null
-- ไอแพด ไอโฟน แท็บเล็ต มือถือ เป็นหมวด it
-- อาหาร เครื่องดื่ม เป็น food บริการซ่อมหรือจ้างทั่วไปเป็น services การเดินทางทัวร์เป็น travel
-- intent เป็น buyer เมื่อมี หา ตามหา พอรู้จัก มั้ย อยากได้ รับซื้อ และเป็น seller เมื่อมี ขาย พร้อมส่ง รับทำ รับออกแบบ รับจ้าง
-- หลีกเลี่ยง unknown ถ้ามีคำซื้อขายชัดเจน
-- province เป็นชื่อจังหวัดไทยแบบเต็ม หรือ null
-- isAd เป็น true เมื่อเป็นโฆษณาร้าน ลิงก์พันธมิตร Shopee Lazada Grab KFC หรือสแปมขายส่ง และ intent เป็น ad
-- ถ้ามี พร้อมส่ง ขาย รับทำ รับออกแบบ โดยไม่มี หา ตามหา อยากได้ ให้ intent เป็น seller
-- urgency เป็น 0 ถึง 1 ตามความเร่งด่วน, hasBudget เป็น true ถ้ามีงบหรือราคา, specificity เป็น 0 ถึง 1 ตามความชัดของสินค้า
-- suggestedReply เป็นประโยคภาษาไทยสุภาพสั้น ๆ ให้เจ้าของระบบก๊อปไปตอบเอง ห้ามใส่ลิงก์และห้ามเกิน 280 ตัวอักษร`;
+- slug ต้องมาจากรายการเท่านั้น ไม่มีหมวดย่อยใส่ null
+- buyer = หา ตามหา อยากได้ รับซื้อ พอรู้จัก มั้ย; seller = ขาย พร้อมส่ง รับทำ รับจ้าง; ถ้าเป็นแค่เล่าเรื่องหรือถามทั่วไป ใช้ unknown
+- รหัสเกม ไอดี เติมเกม ดันแรงค์ ชื่อเกม = games; รหัส MS ตามด้วยตัวเลข = รหัสสินค้าร้าน (seller)
+- province ชื่อจังหวัดเต็มหรือ null; urgency/specificity 0-1; hasBudget true ถ้ามีงบหรือราคา
+- suggestedReply ภาษาไทยสุภาพ ไม่เกิน 150 ตัวอักษร ไม่มีลิงก์`;
+
+/** Recent posts the owner re-labelled by hand; shown to the model as extra examples. */
+let ownerExamples: { text: string; label: string }[] = [];
+
+export function setOwnerExamples(list: { text: string; label: string }[]) {
+  ownerExamples = list
+    .filter((item) => item.text && item.label)
+    .slice(0, 6)
+    .map((item) => ({ text: item.text.replace(/\s+/g, " ").slice(0, 100), label: item.label }));
+}
 
 export function catalogPrompt(catalog: CatNode[]): string {
   return catalog
@@ -36,8 +40,13 @@ export function catalogPrompt(catalog: CatNode[]): string {
     .join("\n");
 }
 
+export const PROMPT_TEXT_LIMIT = 800;
+
 export function userPrompt(posts: ClassifyInput[], catalog: CatNode[]): string {
-  return `หมวดที่ใช้ได้:\n${catalogPrompt(catalog)}\n\nโพสต์:\n${JSON.stringify(
-    posts.map((post) => ({ id: post.id, text: post.text.slice(0, 1200) })),
+  const corrections = ownerExamples.length
+    ? `\n\nเจ้าของเคยแก้หมวดแบบนี้:\n${ownerExamples.map((item) => `- "${item.text}" = ${item.label}`).join("\n")}`
+    : "";
+  return `หมวดที่ใช้ได้:\n${catalogPrompt(catalog)}${corrections}\n\nโพสต์:\n${JSON.stringify(
+    posts.map((post) => ({ id: post.id, text: post.text.slice(0, PROMPT_TEXT_LIMIT) })),
   )}`;
 }

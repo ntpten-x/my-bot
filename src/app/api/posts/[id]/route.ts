@@ -41,6 +41,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     data.repliedAt = new Date();
     await prisma.replyQueueItem.updateMany({ where: { postId: id, status: { in: ["queued", "opened"] } }, data: { status: "sent", sentAt: new Date() } });
   }
+  // The owner fixed the label by hand: AI never overwrites it and it becomes a prompt example.
+  if (rest.categoryId !== undefined || rest.subcategoryId !== undefined) data.aiProvider = "owner";
   if (followUpAt !== undefined) data.followUpAt = followUpAt ? new Date(followUpAt) : null;
   try {
     const post = await prisma.post.update({ where: { id }, data: data as Prisma.PostUncheckedUpdateInput, include: postInclude });

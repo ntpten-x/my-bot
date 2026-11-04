@@ -8,6 +8,9 @@ import { SESSION_COOKIE } from "./auth-cookie";
 export { SESSION_COOKIE };
 const WINDOW_MS = 10 * 60 * 1000;
 const attempts = new Map<string, { count: number; reset: number }>();
+// Every API call checks the session; the DB is ~170 ms away, so keep a verified session for a minute.
+const SESSION_CACHE_MS = 60_000;
+const sessionCache = new Map<string, { until: number; session: { id: string; ownerId: string; token: string; expiresAt: Date; createdAt: Date } }>();
 
 export function cookieOptions() {
   return {
@@ -58,8 +61,15 @@ export async function getSession() {
   const jar = await cookies();
   const token = jar.get(SESSION_COOKIE)?.value;
   if (!token) return null;
+  const cached = sessionCache.get(token);
+  if (cached && cached.until > Date.now() && cached.session.expiresAt.getTime() >= Date.now()) return cached.session;
+  sessionCache.delete(token);
   const session = await prisma.session.findUnique({ where: { token } });
   if (!session) return null;
+  if (session.expiresAt.getTime() >= Date.now()) {
+    if (sessionCache.size > 200) sessionCache.clear();
+    sessionCache.set(token, { until: Date.now() + SESSION_CACHE_MS, session });
+  }
   if (session.expiresAt.getTime() < Date.now()) {
     await prisma.session.delete({ where: { id: session.id } }).catch(() => undefined);
     return null;
@@ -70,7 +80,10 @@ export async function getSession() {
 export async function destroySession() {
   const jar = await cookies();
   const token = jar.get(SESSION_COOKIE)?.value;
-  if (token) await prisma.session.deleteMany({ where: { token } });
+  if (token) {
+    sessionCache.delete(token);
+    await prisma.session.deleteMany({ where: { token } });
+  }
 }
 
 export async function requireExtensionToken(header: string | null) {

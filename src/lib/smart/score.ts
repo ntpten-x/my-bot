@@ -1,4 +1,8 @@
+import { detectIntent } from "../pipeline/intent";
+
 export const HOT_SCORE = 80;
+/** Highest score when the model says "buyer" but the text itself shows no clear looking-for signal. */
+export const UNCLEAR_BUYER_CAP = 55;
 
 export type ScoreSignals = {
   urgency: number;
@@ -69,6 +73,11 @@ export function scoreLead(input: ScoreInput): { score: number; reason: string } 
   score += preference;
   if (preference >= 5) bits.push("ตรงกับที่คุณสนใจ");
   if (preference <= -5) bits.push("คล้ายโพสต์ที่คุณข้าม");
+
+  if (input.intent === "buyer" && detectIntent(input.text) !== "buyer" && score > UNCLEAR_BUYER_CAP) {
+    score = UNCLEAR_BUYER_CAP;
+    bits.push("ยังไม่ชัดว่ากำลังหา");
+  }
 
   return {
     score: Math.max(0, Math.min(100, score)),

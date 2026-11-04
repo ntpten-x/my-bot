@@ -25,6 +25,8 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
   await context.params;
   const noteId = new URL(request.url).searchParams.get("noteId");
   if (!noteId) return json({ error: "ไม่พบโน้ต" }, 400);
-  await prisma.note.delete({ where: { id: noteId } }).catch(() => undefined);
+  // deleteMany: a missing record is a 404, not a logged Prisma P2025 error.
+  const removed = await prisma.note.deleteMany({ where: { id: noteId } });
+  if (!removed.count) return json({ error: "ไม่พบรายการนี้ อาจถูกลบไปแล้ว" }, 404);
   return json({ ok: true });
 }
