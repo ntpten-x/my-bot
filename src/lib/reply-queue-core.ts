@@ -66,15 +66,69 @@ export function selectQueue(
   return chosen;
 }
 
-export type RotatableTemplate = { id: string; categoryId: string | null; useCount: number; sortOrder: number };
+export type RotatableTemplate = {
+  id: string;
+  categoryId: string | null;
+  useCount: number;
+  sortOrder: number;
+  productId?: string | null;
+  /** Comma-separated source ids; "" = every group. */
+  sourceIds?: string;
+};
 
-// Rotates templates: the least-used matching template goes next, counting picks made in this batch.
-export function pickTemplate<T extends RotatableTemplate>(templates: T[], categoryIds: (string | null | undefined)[], usage: Map<string, number>) {
-  const ids = new Set(categoryIds.filter(Boolean));
-  const usable = templates.filter((item) => !item.categoryId || ids.has(item.categoryId));
-  if (!usable.length) return null;
-  const specific = usable.filter((item) => item.categoryId);
-  const pool = specific.length ? specific : usable;
+export type TemplateScope = { productId?: string | null; sourceId?: string | null };
+
+export const templateSources = (value: string | undefined | null) => String(value ?? "").split(",").map((item) => item.trim()).filter(Boolean);
+
+/**
+ * How specific a template is for this post, or -1 when it does not apply.
+ * group (4) + product (2) + sub-category (1.5) / category (1); 0 = "ใช้ได้ทั้งหมด".
+ */
+export function templateScore(template: RotatableTemplate, categoryIds: (string | null | undefined)[], scope: TemplateScope = {}) {
+  const subcategoryId = categoryIds[1];
+  let score = 0;
+  if (template.categoryId) {
+    if (subcategoryId && template.categoryId === subcategoryId) score += 1.5;
+    else if (categoryIds.includes(template.categoryId)) score += 1;
+    else return -1;
+  }
+  if (template.productId) {
+    if (template.productId !== scope.productId) return -1;
+    score += 2;
+  }
+  const sources = templateSources(template.sourceIds);
+  if (sources.length) {
+    if (!scope.sourceId || !sources.includes(scope.sourceId)) return -1;
+    score += 4;
+  }
+  return score;
+}
+
+/** Thai label of the set a template comes from (shown on the card). */
+export function scopeLabel(template: RotatableTemplate, names: { product?: string | null; category?: string | null } = {}) {
+  const parts: string[] = [];
+  if (templateSources(template.sourceIds).length) parts.push("กลุ่มนี้");
+  if (template.productId) parts.push(names.product || "เกม/สินค้า");
+  if (template.categoryId) parts.push(names.category || "หมวด");
+  return parts.length ? parts.join(" + ") : "ทั่วไป";
+}
+
+/** Templates that apply to the post, most specific first (then least used). */
+export function rankTemplates<T extends RotatableTemplate>(templates: T[], categoryIds: (string | null | undefined)[], scope: TemplateScope = {}) {
+  return templates
+    .map((item) => ({ item, score: templateScore(item, categoryIds, scope) }))
+    .filter((row) => row.score >= 0)
+    .sort((a, b) => b.score - a.score || a.item.useCount - b.item.useCount || a.item.sortOrder - b.item.sortOrder)
+    .map((row) => row.item);
+}
+
+// Rotates templates inside the most specific matching set (group+product > product > category > all):
+// the least-used template of that set goes next, counting picks made in this batch.
+export function pickTemplate<T extends RotatableTemplate>(templates: T[], categoryIds: (string | null | undefined)[], usage: Map<string, number>, scope: TemplateScope = {}) {
+  const scored = templates.map((item) => ({ item, score: templateScore(item, categoryIds, scope) })).filter((row) => row.score >= 0);
+  if (!scored.length) return null;
+  const best = Math.max(...scored.map((row) => row.score));
+  const pool = scored.filter((row) => row.score === best).map((row) => row.item);
   const ranked = [...pool].sort((a, b) => {
     const ua = a.useCount + (usage.get(a.id) ?? 0);
     const ub = b.useCount + (usage.get(b.id) ?? 0);

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { authorKeyOf, dueSlot, gapRemainingMs, parseTimes, pickTemplate, randomGapMs, selectQueue } from "../../src/lib/reply-queue-core";
+import { rankTemplates, scopeLabel, templateScore } from "../../src/lib/reply-queue-core";
+import { renderTemplate } from "../../src/lib/templates";
 import { replyQueueSettingsSchema } from "../../src/lib/reply-queue-schema";
 
 describe("reply queue schedule", () => {
@@ -113,5 +115,48 @@ describe("reply queue settings", () => {
     expect(replyQueueSettingsSchema.safeParse({ ...ok, dailyCap: 0 }).success).toBe(false);
     expect(replyQueueSettingsSchema.safeParse({ ...ok, dailyCap: 500 }).success).toBe(false);
     expect(replyQueueSettingsSchema.safeParse({ ...ok, gapMinMinutes: -1 }).success).toBe(false);
+  });
+});
+
+describe("template sets (group / product scope)", () => {
+  const t = (id: string, extra: Partial<{ categoryId: string | null; productId: string | null; sourceIds: string; useCount: number }> = {}) =>
+    ({ id, categoryId: null, productId: null, sourceIds: "", useCount: 0, sortOrder: 0, ...extra });
+  const templates = [
+    t("all"),
+    t("cat", { categoryId: "game" }),
+    t("rb1", { productId: "roblox", useCount: 3 }),
+    t("rb2", { productId: "roblox", useCount: 1 }),
+    t("rbGroup", { productId: "roblox", sourceIds: "g1,g2" }),
+    t("rov", { productId: "rov" }),
+  ];
+
+  it("prefers group+product over product over category over all", () => {
+    expect(pickTemplate(templates, ["game", null], new Map(), { productId: "roblox", sourceId: "g1" })?.id).toBe("rbGroup");
+    expect(pickTemplate(templates, ["game", null], new Map(), { productId: "roblox", sourceId: "g9" })?.id).toBe("rb2");
+    expect(pickTemplate(templates, ["game", null], new Map(), { productId: null, sourceId: "g1" })?.id).toBe("cat");
+    expect(pickTemplate(templates, ["food", null], new Map(), {})?.id).toBe("all");
+  });
+
+  it("rotates least-used inside the chosen set without repeats", () => {
+    const usage = new Map<string, number>();
+    const picks = [1, 2, 3, 4].map(() => pickTemplate(templates, ["game", null], usage, { productId: "roblox" })?.id);
+    expect(picks).toEqual(["rb2", "rb2", "rb1", "rb2"]);
+    expect(picks.every((id) => id === "rb1" || id === "rb2")).toBe(true);
+  });
+
+  it("excludes other products and other groups; ranks the rest by specificity", () => {
+    const ranked = rankTemplates(templates, ["game", null], { productId: "roblox", sourceId: "g9" }).map((x) => x.id);
+    expect(ranked).toEqual(["rb2", "rb1", "cat", "all"]);
+    expect(templateScore(t("x", { sourceIds: "g1" }), [null, null], {})).toBe(-1);
+    expect(scopeLabel(templates[4], { product: "Roblox" })).toBe("กลุ่มนี้ + Roblox");
+    expect(scopeLabel(templates[0])).toBe("ทั่วไป");
+  });
+
+  it("legacy call without scope still works (Warz template stays global)", () => {
+    expect(pickTemplate([t("warz")], ["game", null], new Map())?.id).toBe("warz");
+  });
+
+  it("fills {เกม} and {สินค้า}", () => {
+    expect(renderTemplate("ขาย {เกม} / {สินค้า}", { product: "Roblox" })).toBe("ขาย Roblox / Roblox");
   });
 });

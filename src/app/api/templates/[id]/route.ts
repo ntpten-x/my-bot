@@ -18,7 +18,13 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   }
   const parsed = patchSchema.safeParse(raw);
   if (!parsed.success) return json({ error: "ข้อมูลไม่ถูกต้อง" }, 400);
-  const data = { ...parsed.data, ...(parsed.data.categoryId !== undefined ? { categoryId: parsed.data.categoryId || null } : {}) };
+  const { sourceIds, ...rest } = parsed.data;
+  const data = {
+    ...rest,
+    ...(rest.categoryId !== undefined ? { categoryId: rest.categoryId || null } : {}),
+    ...(rest.productId !== undefined ? { productId: rest.productId || null } : {}),
+    ...(sourceIds !== undefined ? { sourceIds: sourceIds.join(",") } : {}),
+  };
   const template = await prisma.replyTemplate.update({ where: { id }, data }).catch(() => null);
   return template ? json({ template }) : json({ error: "ไม่พบข้อความ" }, 404);
 }

@@ -4,10 +4,12 @@ export type TemplateContext = {
   province?: string | null;
   author?: string | null;
   source?: string | null;
+  /** Game/product name, e.g. Roblox. */
+  product?: string | null;
 };
 
 // Placeholders work in Thai or English: {หมวด} {category} {หมวดย่อย} {จังหวัด} {province} {ชื่อ} {author} {กลุ่ม} {group}
-export const TEMPLATE_VARIABLES = ["{ชื่อ}", "{หมวด}", "{หมวดย่อย}", "{จังหวัด}", "{กลุ่ม}"] as const;
+export const TEMPLATE_VARIABLES = ["{ชื่อ}", "{หมวด}", "{หมวดย่อย}", "{จังหวัด}", "{กลุ่ม}", "{เกม}", "{สินค้า}"] as const;
 
 export function renderTemplate(body: string, context: TemplateContext) {
   const values: Record<string, string> = {
@@ -21,6 +23,10 @@ export function renderTemplate(body: string, context: TemplateContext) {
     author: context.author || "",
     "กลุ่ม": context.source || "",
     group: context.source || "",
+    "เกม": context.product || "",
+    "สินค้า": context.product || "",
+    game: context.product || "",
+    product: context.product || "",
   };
   return body
     .replace(/\{([^{}\s]{1,20})\}/g, (whole, key: string) => (key in values ? values[key] : whole))

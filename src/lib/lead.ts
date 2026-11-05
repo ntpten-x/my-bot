@@ -71,6 +71,8 @@ export type ReplyTemplateRow = {
   name: string;
   body: string;
   categoryId: string | null;
+  productId: string | null;
+  sourceIds: string;
   sortOrder: number;
   useCount: number;
 };

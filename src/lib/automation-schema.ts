@@ -1,11 +1,16 @@
 import { z } from "zod";
 
-export const MAX_TEMPLATES = 50;
+/** Overall cap; a game can hold many sets (e.g. Roblox ข้อความ 1–9). */
+export const MAX_TEMPLATES = 300;
+/** Per scope (same category + product + groups). */
+export const MAX_TEMPLATES_PER_SCOPE = 50;
 
 export const templateSchema = z.object({
   name: z.string().trim().min(1).max(60),
   body: z.string().trim().min(1).max(2000),
   categoryId: z.string().nullable().optional(),
+  productId: z.string().nullable().optional(),
+  sourceIds: z.array(z.string().min(1)).max(100).optional(),
   sortOrder: z.number().int().min(0).max(999).optional(),
 });
 

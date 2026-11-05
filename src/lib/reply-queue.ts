@@ -6,7 +6,7 @@ import { inServiceArea } from "./service-area";
 import { renderTemplate } from "./templates";
 import { followUpDate } from "./automation";
 import { workerLog } from "./log";
-import { ADVANCE_REASON_TH, advanceDecision, authorKeyOf, dueSlot, gapRemainingMs, pickTemplate, randomGapMs, selectQueue } from "./reply-queue-core";
+import { ADVANCE_REASON_TH, advanceDecision, authorKeyOf, dueSlot, gapRemainingMs, pickTemplate, randomGapMs, rankTemplates, selectQueue } from "./reply-queue-core";
 
 const NEXT_KEY = "reply_next_allowed_at";
 const SLOT_KEY = "reply_queue_last_slot";
@@ -45,7 +45,7 @@ export async function buildReplyQueue(options: { notify?: boolean } = {}) {
       pipelineStatus: { in: ["none", "following"] },
       replyItem: { is: null },
     },
-    include: { source: { select: { name: true } }, category: { select: { name: true } }, subcategory: { select: { name: true } } },
+    include: { source: { select: { name: true } }, category: { select: { name: true } }, subcategory: { select: { name: true } }, product: { select: { name: true } } },
     relationLoadStrategy: "join",
     orderBy: [{ score: "desc" }, { createdAt: "desc" }],
     take: 300,
@@ -74,7 +74,7 @@ export async function buildReplyQueue(options: { notify?: boolean } = {}) {
   const created: { id: string; author: string; source: string }[] = [];
   for (const choice of picked) {
     const post = byId.get(choice.id)!;
-    const template = pickTemplate(templates, [post.categoryId, post.subcategoryId], usage);
+    const template = pickTemplate(templates, [post.categoryId, post.subcategoryId], usage, { productId: post.productId, sourceId: post.sourceId });
     const text = template
       ? renderTemplate(template.body, {
           author: post.authorName,
@@ -82,6 +82,7 @@ export async function buildReplyQueue(options: { notify?: boolean } = {}) {
           subcategory: post.subcategory?.name,
           province: post.province,
           source: post.source?.name,
+          product: post.product?.name,
         })
       : post.suggestedReply.trim();
     if (!text) continue;
@@ -258,16 +259,18 @@ export async function replyTemplatesForPost(postId: string): Promise<ReplyTempla
       province: true,
       categoryId: true,
       subcategoryId: true,
+      productId: true,
+      sourceId: true,
       category: { select: { name: true } },
       subcategory: { select: { name: true } },
       source: { select: { name: true } },
+      product: { select: { name: true } },
     },
   });
   if (!post) return [];
-  const ids = new Set([post.categoryId, post.subcategoryId].filter(Boolean));
-  const templates = await prisma.replyTemplate.findMany({ orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }], take: 50 });
-  return templates
-    .filter((template) => !template.categoryId || ids.has(template.categoryId))
+  const templates = await prisma.replyTemplate.findMany({ orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] });
+  // Most specific set first (group+product > product > category > all).
+  return rankTemplates(templates, [post.categoryId, post.subcategoryId], { productId: post.productId, sourceId: post.sourceId })
     .slice(0, 20)
     .map((template) => ({
       id: template.id,
@@ -278,6 +281,7 @@ export async function replyTemplatesForPost(postId: string): Promise<ReplyTempla
         subcategory: post.subcategory?.name,
         province: post.province,
         source: post.source?.name,
+        product: post.product?.name,
       }).slice(0, 2000),
     }))
     .filter((option) => option.text);

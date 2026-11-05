@@ -64,7 +64,7 @@ export async function applyAutomationRules(postIds: string[]) {
   if (!rules.length) return 0;
   const posts = await prisma.post.findMany({
     where: { id: { in: postIds }, duplicateOfId: null },
-    include: { category: true, subcategory: true, source: true },
+    include: { category: true, subcategory: true, source: true, product: { select: { name: true } } },
   });
   if (!posts.length) return 0;
   const templateIds = [...new Set(rules.map((rule) => rule.templateId).filter((id): id is string => Boolean(id)))];
@@ -96,6 +96,7 @@ export async function applyAutomationRules(postIds: string[]) {
           province: post.province,
           author: post.authorName,
           source: post.source?.name,
+          product: post.product?.name,
         });
       }
       if (Object.keys(data).length) await prisma.post.update({ where: { id: post.id }, data });

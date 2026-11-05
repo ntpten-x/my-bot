@@ -90,6 +90,7 @@ model Product {
   updatedAt    DateTime @updatedAt
   posts        Post[]
   sources      Source[] @relation("SourceDefaultProduct")
+  templates    ReplyTemplate[]
 
   @@index([categorySlug, sortOrder])
 }
@@ -304,6 +305,11 @@ model ReplyTemplate {
   name       String
   body       String
   categoryId String?
+  /// Game/product scope (level 3); null = any product.
+  productId  String?
+  product    Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  /// Comma-separated Source ids; "" = every group.
+  sourceIds  String   @default("")
   sortOrder  Int      @default(0)
   useCount   Int      @default(0)
   createdAt  DateTime @default(now())

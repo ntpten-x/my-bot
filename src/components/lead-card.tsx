@@ -9,7 +9,7 @@ import type { Lead } from "@/lib/lead";
 import { renderTemplate } from "@/lib/templates";
 import { useTemplates } from "@/components/templates-store";
 import { assistReply } from "@/components/assist-reply";
-import { pickTemplate } from "@/lib/reply-queue-core";
+import { pickTemplate, rankTemplates, scopeLabel } from "@/lib/reply-queue-core";
 
 type CatOption = { id: string; name: string; parentId: string | null };
 let categoriesPromise: Promise<CatOption[]> | null = null;
@@ -63,7 +63,14 @@ export function LeadCard({
   const [fixCat, setFixCat] = useState("");
   const [fixIntent, setFixIntent] = useState<string>(lead.intent);
   const templates = useTemplates();
-  const usable = templates.filter((item) => !item.categoryId || item.categoryId === lead.category?.id || item.categoryId === lead.subcategory?.id);
+  const catIds = [lead.category?.id, lead.subcategory?.id];
+  const scope = { productId: lead.product?.id ?? null, sourceId: lead.source?.id ?? null };
+  // Most specific set first: group+product > product > category > all.
+  const usable = rankTemplates(templates, catIds, scope);
+  const bestSet = pickTemplate(usable, catIds, new Map(), scope);
+  const setLabel = bestSet
+    ? scopeLabel(bestSet, { product: lead.product?.name, category: bestSet.categoryId === lead.subcategory?.id ? lead.subcategory?.name : lead.category?.name })
+    : "";
 
   function fill(body: string) {
     return renderTemplate(body, {
@@ -72,6 +79,7 @@ export function LeadCard({
       province: lead.province,
       author: lead.authorName,
       source: lead.source?.name,
+      product: lead.product?.name,
     });
   }
 
@@ -80,7 +88,7 @@ export function LeadCard({
     let text = templateText || lead.suggestedReply.trim();
     let usedId: string | null = null;
     if (!text) {
-      const template = pickTemplate(usable, [lead.category?.id, lead.subcategory?.id], new Map());
+      const template = pickTemplate(usable, catIds, new Map(), scope);
       if (template) {
         text = fill(template.body);
         usedId = template.id;
@@ -103,13 +111,7 @@ export function LeadCard({
   async function applyTemplate(id: string) {
     const template = templates.find((item) => item.id === id);
     if (!template) return;
-    const text = renderTemplate(template.body, {
-      category: lead.category?.name,
-      subcategory: lead.subcategory?.name,
-      province: lead.province,
-      author: lead.authorName,
-      source: lead.source?.name,
-    });
+    const text = fill(template.body);
     setTemplateText(text);
     await navigator.clipboard.writeText(text).catch(() => undefined);
     void api(`/api/templates/${id}`, { method: "PATCH", body: JSON.stringify({ used: true }) }).catch(() => undefined);
@@ -283,8 +285,9 @@ export function LeadCard({
             value=""
             onChange={(event) => void applyTemplate(event.target.value)}
             aria-label="ข้อความสำเร็จรูป"
+            title={setLabel ? `ชุดที่ใช้: ${setLabel}` : undefined}
           >
-            <option value="">ข้อความสำเร็จรูป…</option>
+            <option value="">{setLabel ? `ชุด: ${setLabel} (${usable.length})` : "ข้อความสำเร็จรูป…"}</option>
             {usable.map((item) => (
               <option key={item.id} value={item.id}>{item.name}</option>
             ))}
