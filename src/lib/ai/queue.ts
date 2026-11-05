@@ -87,14 +87,23 @@ export async function processAiQueue() {
     if (settings.aiProvider !== "rules") {
       await prisma.aiJob.updateMany({ where: { status: "skipped" }, data: { status: "pending", nextAttemptAt: new Date() } });
     }
-    const jobs = await prisma.$transaction(async tx => {
-      const rows = await tx.aiJob.findMany({
-        where: { status: "pending", nextAttemptAt: { lte: new Date() } },
-        orderBy: [{ nextAttemptAt: "asc" }, { id: "asc" }], take: 10, include: { post: { include: { source: { select: { type: true } } } } },
-      });
-      if (rows.length) await tx.aiJob.updateMany({ where: { id: { in: rows.map(row => row.id) }, status: "pending" }, data: { status: "running" } });
-      return rows;
-    });
+    // Atomic claim: two instances (local + Render) never take the same job.
+    const claimedIds = await prisma.$queryRaw<{ id: string }[]>`
+      UPDATE "AiJob" SET "status" = 'running', "updatedAt" = now()
+      WHERE "id" IN (
+        SELECT "id" FROM "AiJob"
+        WHERE "status" = 'pending' AND "nextAttemptAt" <= ${new Date()}
+        ORDER BY "nextAttemptAt" ASC, "id" ASC
+        LIMIT 10
+        FOR UPDATE SKIP LOCKED
+      )
+      RETURNING "id"`;
+    const jobs = claimedIds.length
+      ? await prisma.aiJob.findMany({
+        where: { id: { in: claimedIds.map(row => row.id) } },
+        orderBy: [{ nextAttemptAt: "asc" }, { id: "asc" }], include: { post: { include: { source: { select: { type: true } } } } },
+      })
+      : [];
     if (!jobs.length) return 0;
     claimed = jobs;
     const started = Date.now();

@@ -237,6 +237,19 @@ export default function OverviewPage() {
                           ข้อผิดพลาดล่าสุด ({install.lastErrorAt ? timeAgo(install.lastErrorAt) : "-"}): {install.lastError}
                         </p>
                       ) : null}
+                      {install.outboxSize ? <p className="mt-1 text-xs text-amber-800">โพสต์รอส่งใหม่ (เซิร์ฟเวอร์ติดต่อไม่ได้ตอนนั้น): {install.outboxSize} ชุด</p> : null}
+                      {install.errorLog?.length ? (
+                        <details className="mt-1 text-xs">
+                          <summary className="cursor-pointer text-muted">บันทึกข้อผิดพลาดของส่วนขยาย · 24 ชม. {install.errorCount24h} ครั้ง</summary>
+                          <ul className="mt-1 list-disc pl-5">
+                            {install.errorLog.map((entry) => (
+                              <li key={`${entry.at}-${entry.message}`}>
+                                {entry.at ? timeAgo(new Date(entry.at).toISOString()) : "-"} · {entry.message}{entry.count > 1 ? ` (×${entry.count})` : ""}
+                              </li>
+                            ))}
+                          </ul>
+                        </details>
+                      ) : null}
                     </div>
                   ))}
                 </div>

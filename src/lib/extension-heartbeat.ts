@@ -4,7 +4,7 @@ import { upsertSettings } from "./settings";
 import { touchExtension } from "./extension-status";
 
 // Version this MY-BOT build expects from extension/manifest.json (tests keep the two in sync).
-export const EXPECTED_EXTENSION_VERSION = "1.6.0";
+export const EXPECTED_EXTENSION_VERSION = "1.7.0";
 
 const FB_ID = /^\d{5,20}$/;
 
@@ -39,6 +39,16 @@ export const heartbeatSchema = z.object({
     .optional(),
   lastPostAt: z.number().nonnegative().default(0),
   postsSent: z.number().int().nonnegative().default(0),
+  errors: z
+    .object({
+      count24h: z.number().int().nonnegative().default(0),
+      log: z
+        .array(z.object({ at: z.number().nonnegative().default(0), message: z.string().max(300).default(""), count: z.number().int().positive().default(1) }))
+        .max(20)
+        .default([]),
+    })
+    .optional(),
+  outboxSize: z.number().int().nonnegative().max(100000).default(0),
 });
 
 export type HeartbeatInput = z.infer<typeof heartbeatSchema>;
@@ -63,6 +73,9 @@ export function normalizeHeartbeat(input: HeartbeatInput) {
     lastErrorAt: epochToDate(input.lastError?.at),
     lastPostAt: epochToDate(input.lastPostAt),
     postsSent: input.postsSent,
+    errorCount24h: input.errors?.count24h ?? 0,
+    errorLogJson: JSON.stringify((input.errors?.log ?? []).map((entry) => ({ at: entry.at, message: entry.message.slice(0, 200), count: entry.count }))),
+    outboxSize: input.outboxSize ?? 0,
   };
 }
 

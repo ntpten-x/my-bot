@@ -31,6 +31,11 @@ type Settings = {
   smtpPassSet: boolean;
   notifySound: boolean;
   notifyMinScore: number;
+  watchEnabled: boolean;
+  watchNoPostsHours: number;
+  watchExtOfflineMinutes: number;
+  watchAlertEveryHours: number;
+  watchParseSpikePct: number;
   summaryTime: string;
   embedModel: string;
   geminiEmbedModel: string;
@@ -217,6 +222,31 @@ export default function SettingsPage() {
               setCopied(true);
             }}>{copied ? "คัดลอกแล้ว" : "คัดลอกโทเคน"}</Button>
             <Button type="button" variant="danger" onClick={() => setConfirmToken(true)}>สร้างโทเคนใหม่</Button>
+          </div>
+        </Card>
+        <Card className="space-y-3">
+          <h2 className="font-semibold">เฝ้าระวังระบบ (แจ้งเตือนเมื่อระบบผิดปกติ)</h2>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={settings.watchEnabled ?? true} onChange={(event) => setSettings({ ...settings, watchEnabled: event.target.checked })} />
+            ส่งแจ้งเตือนภายนอกเมื่อพบปัญหา (หน้าภาพรวมแสดงสีแดงเสมอ)
+          </label>
+          <div className="grid gap-3 md:grid-cols-2">
+            <div>
+              <Label>ไม่มีโพสต์ใหม่เกิน (ชั่วโมง) ทั้งที่ส่วนขยายออนไลน์</Label>
+              <Input type="number" min={1} max={48} value={settings.watchNoPostsHours ?? 6} onChange={(event) => setSettings({ ...settings, watchNoPostsHours: Number(event.target.value) })} />
+            </div>
+            <div>
+              <Label>ส่วนขยายออฟไลน์เกิน (นาที)</Label>
+              <Input type="number" min={5} max={720} value={settings.watchExtOfflineMinutes ?? 30} onChange={(event) => setSettings({ ...settings, watchExtOfflineMinutes: Number(event.target.value) })} />
+            </div>
+            <div>
+              <Label>คุณภาพการอ่านโพสต์ตกลง (% ที่ขาดข้อความ/ชื่อเพิ่มขึ้น)</Label>
+              <Input type="number" min={10} max={100} value={settings.watchParseSpikePct ?? 30} onChange={(event) => setSettings({ ...settings, watchParseSpikePct: Number(event.target.value) })} />
+            </div>
+            <div>
+              <Label>แจ้งเตือนเรื่องเดิมซ้ำได้ทุก (ชั่วโมง)</Label>
+              <Input type="number" min={1} max={48} value={settings.watchAlertEveryHours ?? 6} onChange={(event) => setSettings({ ...settings, watchAlertEveryHours: Number(event.target.value) })} />
+            </div>
           </div>
         </Card>
         <Card className="space-y-3">

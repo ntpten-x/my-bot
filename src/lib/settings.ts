@@ -54,6 +54,11 @@ export type AppSettings = {
   replyAutoAdvance: boolean;
   replyAutoMarkSent: boolean;
   replyAutoInsert: boolean;
+  watchEnabled: boolean;
+  watchNoPostsHours: number;
+  watchExtOfflineMinutes: number;
+  watchAlertEveryHours: number;
+  watchParseSpikePct: number;
 };
 
 function pick(db: string | undefined, env: string | undefined, fallback = "") {
@@ -127,6 +132,11 @@ export async function getSettings(): Promise<AppSettings> {
     replyAutoAdvance: map.reply_auto_advance !== "false",
     replyAutoMarkSent: map.reply_auto_mark_sent === "true",
     replyAutoInsert: map.reply_auto_insert === "true",
+    watchEnabled: map.watch_enabled !== "false",
+    watchNoPostsHours: num(map.watch_no_posts_hours, 6, 1, 48),
+    watchExtOfflineMinutes: num(map.watch_ext_offline_minutes, 30, 5, 720),
+    watchAlertEveryHours: num(map.watch_alert_every_hours, 6, 1, 48),
+    watchParseSpikePct: num(map.watch_parse_spike_pct, 30, 10, 100),
   };
 }
 
@@ -192,5 +202,10 @@ export function publicSettings(settings: AppSettings) {
     replyAutoAdvance: settings.replyAutoAdvance,
     replyAutoMarkSent: settings.replyAutoMarkSent,
     replyAutoInsert: settings.replyAutoInsert,
+    watchEnabled: settings.watchEnabled,
+    watchNoPostsHours: settings.watchNoPostsHours,
+    watchExtOfflineMinutes: settings.watchExtOfflineMinutes,
+    watchAlertEveryHours: settings.watchAlertEveryHours,
+    watchParseSpikePct: settings.watchParseSpikePct,
   };
 }

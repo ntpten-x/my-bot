@@ -359,6 +359,9 @@ model ExtensionHeartbeat {
   lastErrorAt  DateTime?
   lastPostAt   DateTime?
   postsSent    Int       @default(0)
+  errorCount24h Int      @default(0)
+  errorLogJson String    @default("[]")
+  outboxSize   Int       @default(0)
   lastSeenAt   DateTime  @default(now())
   createdAt    DateTime  @default(now())
 
@@ -448,4 +451,19 @@ model ScrapeRun {
   usedWindow   Boolean  @default(false)
 
   @@index([sourceId, createdAt])
+}
+// Leader lease: local and Render share this DB; only the holder runs background jobs.
+model Lease {
+  name      String   @id
+  holder    String
+  expiresAt DateTime
+  updatedAt DateTime @updatedAt
+}
+
+// Idempotency keys: an alert or summary with the same key is sent once.
+model SentKey {
+  key       String   @id
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
 }

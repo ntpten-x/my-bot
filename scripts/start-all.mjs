@@ -27,6 +27,8 @@ const prod = process.argv.includes("--prod");
 const port = process.env.PORT || "8001";
 const node = process.execPath;
 const children = [];
+let stopping = false;
+const restartDelay = new Map();
 
 // Every console line gets a Bangkok timestamp, e.g. "2026-11-04 15:50:07 [worker] ...".
 export function stamp(date = new Date()) {
@@ -63,10 +65,17 @@ function run(args, extraEnv = {}) {
   pipeLines(child.stdout, process.stdout);
   pipeLines(child.stderr, process.stderr);
   children.push(child);
-  child.on("exit", (code) => {
-    if (code && code !== 0) {
-      console.error(`[start-all] กระบวนการจบด้วยรหัส ${code}: ${args.join(" ")}`);
-    }
+  const startedAt = Date.now();
+  child.on("exit", (code, signal) => {
+    children.splice(children.indexOf(child), 1);
+    if (stopping) return;
+    console.error(`[start-all] กระบวนการจบ (รหัส ${code ?? signal}): ${args.join(" ")}`);
+    // Keep the system up: restart a crashed child with backoff (reset after a healthy minute).
+    const key = args.join(" ");
+    const delay = Date.now() - startedAt > 60_000 ? 3000 : Math.min(60_000, (restartDelay.get(key) || 3000) * 2);
+    restartDelay.set(key, delay);
+    console.error(`[start-all] เริ่มใหม่ใน ${Math.round(delay / 1000)} วินาที`);
+    setTimeout(() => { if (!stopping) run(args, extraEnv); }, delay);
   });
   return child;
 }
@@ -76,8 +85,18 @@ else run(["node_modules/next/dist/bin/next", "dev", "-p", port]);
 run(["node_modules/tsx/dist/cli.mjs", "src/worker/index.ts"], { MYBOT_PROCESS: "worker" });
 
 function shutdown() {
-  for (const child of children) child.kill();
-  process.exit(0);
+  if (stopping) return;
+  stopping = true;
+  for (const child of children) child.kill("SIGTERM");
+  // Let the worker release its lease and disconnect, then exit anyway.
+  const deadline = Date.now() + 12_000;
+  const wait = setInterval(() => {
+    if (!children.length || Date.now() > deadline) {
+      clearInterval(wait);
+      for (const child of children) child.kill("SIGKILL");
+      process.exit(0);
+    }
+  }, 200);
 }
 
 process.on("SIGINT", shutdown);

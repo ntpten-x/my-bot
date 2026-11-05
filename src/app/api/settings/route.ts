@@ -41,6 +41,11 @@ const putSchema = z.object({
   smtpPass: z.string().optional(),
   notifySound: z.boolean().optional(),
   notifyMinScore: z.number().int().min(0).max(100).optional(),
+  watchEnabled: z.boolean().optional(),
+  watchNoPostsHours: z.number().int().min(1).max(48).optional(),
+  watchExtOfflineMinutes: z.number().int().min(5).max(720).optional(),
+  watchAlertEveryHours: z.number().int().min(1).max(48).optional(),
+  watchParseSpikePct: z.number().int().min(10).max(100).optional(),
   summaryTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   embedModel: z.string().optional(),
   geminiEmbedModel: z.string().optional(),
@@ -82,6 +87,11 @@ export async function PUT(request: Request) {
   if (body.updateSmtpPass) entries.smtp_pass = body.smtpPass?.trim() ?? "";
   set("notify_sound", body.notifySound);
   set("notify_min_score", body.notifyMinScore);
+  set("watch_enabled", body.watchEnabled);
+  set("watch_no_posts_hours", body.watchNoPostsHours);
+  set("watch_ext_offline_minutes", body.watchExtOfflineMinutes);
+  set("watch_alert_every_hours", body.watchAlertEveryHours);
+  set("watch_parse_spike_pct", body.watchParseSpikePct);
   set("summary_time", body.summaryTime);
   set("embed_model", body.embedModel?.trim());
   set("gemini_embed_model", body.geminiEmbedModel?.trim());

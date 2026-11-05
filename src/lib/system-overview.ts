@@ -12,6 +12,7 @@ import { EXTENSION_SOURCE_TYPES, PRIORITY_LABEL, maxIntervalFor, normalizePriori
 import { STOP_REASON_LABEL } from "./scrape-runs";
 import { coverageBySource } from "./coverage-data";
 import type { Coverage } from "./coverage";
+import { parseWatchState } from "./watchdog";
 import {
   ageMs,
   bangkokLabel,
@@ -79,6 +80,9 @@ export type InstallRow = {
   lastErrorAt: string | null;
   lastPostAt: string | null;
   postsSent: number;
+  errorCount24h: number;
+  errorLog: { at: number; message: string; count: number }[];
+  outboxSize: number;
 };
 
 function secretsOf(settings: AppSettings) {
@@ -176,6 +180,9 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
     "notify_last_discord",
     "notify_last_line",
     "notify_last_email",
+    "watchdog_state",
+    "watchdog_checked_at",
+    "worker_leader",
   ];
   const [map, accounts, installs, facebookSources, postsToday, leadsToday, lastFbPost, fbErrors24h, aiQueue, failed24h, doneJobs, ollama, groq, gemini] =
     await Promise.all([
@@ -335,6 +342,11 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
     lastErrorAt: row.lastErrorAt?.toISOString() ?? null,
     lastPostAt: row.lastPostAt?.toISOString() ?? null,
     postsSent: row.postsSent,
+    errorCount24h: row.errorCount24h ?? 0,
+    errorLog: parseJson<{ at: number; message: string; count: number }[]>(row.errorLogJson ?? "[]", [])
+      .slice(0, 10)
+      .map((entry) => ({ at: Number(entry.at) || 0, message: clean(String(entry.message || "")), count: Number(entry.count) || 1 })),
+    outboxSize: row.outboxSize ?? 0,
   }));
 
   // ---------- Per-source scrape stats ----------
@@ -552,7 +564,32 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
     },
   ];
 
+  // ---------- One status board (watchdog runs on the leader worker every 5 minutes) ----------
+  const watch = parseWatchState(map.watchdog_state);
+  const boardChecks: Check[] = Object.entries(watch).map(([key, item]) => ({
+    key: `watch_${key}`,
+    label: item.label,
+    level: item.level,
+    value: clean(item.message),
+    detail: item.level === "ok" ? `ตรวจล่าสุด ${thaiAgo(ageMs(map.watchdog_checked_at, now))}` : `เป็นแบบนี้มา ${thaiAgo(ageMs(item.since, now))} · ปกติล่าสุด ${item.lastOkAt ? thaiAgo(ageMs(item.lastOkAt, now)) : "ไม่เคย"}`,
+    hint: item.level === "ok" ? undefined : item.hint || undefined,
+  }));
+  const checkedAge = ageMs(map.watchdog_checked_at, now);
+  if (!boardChecks.length || (checkedAge ?? Infinity) > 20 * 60_000) {
+    boardChecks.unshift({
+      key: "watch_fresh",
+      label: "ตัวเฝ้าระวัง",
+      level: "warn",
+      value: map.watchdog_checked_at ? `ไม่ได้ตรวจมา ${thaiAgo(checkedAge)}` : "ยังไม่เคยตรวจ",
+      hint: "ตัวเฝ้าระวังทำงานใน worker ทุก 5 นาที ถ้าค้าง ให้รีสตาร์ต MY-BOT",
+    });
+  }
+  if (map.worker_leader) {
+    boardChecks.push({ key: "watch_leader", label: "เครื่องที่รันงานเบื้องหลัง", level: "ok", value: map.worker_leader.split(":")[0], detail: "local และ Render ใช้ฐานข้อมูลเดียวกัน — รันคิว/แจ้งเตือนเพียงเครื่องเดียวเพื่อไม่ให้ซ้ำ" });
+  }
+
   const sections = [
+    section("board", "สถานะรวม", boardChecks),
     section("facebook", "บัญชี Facebook", fbChecks),
     section("extension", "ส่วนขยาย (Extension)", extChecks),
     section("scrape", "รอบอ่านแต่ละแหล่ง", scrapeChecks),

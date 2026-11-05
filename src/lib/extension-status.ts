@@ -1,3 +1,4 @@
+import { claimOnce } from "./lease";
 import { prisma } from "./prisma";
 import { upsertSettings } from "./settings";
 import { heartbeatIsStale, sourceIsStale } from "./extension-health";
@@ -50,6 +51,7 @@ export async function checkExtensionSilence() {
   const previous = await prisma.setting.findUnique({ where: { key: "extension_silence_alert_at" } });
   if (previous?.value && now - new Date(previous.value).getTime() < 30 * 60 * 1000) return;
 
+  if (!(await claimOnce(`ext-silence:${Math.floor(now / (30 * 60 * 1000))}`))) return;
   const names = staleSources.map((source) => source.name).join(", ");
   const text = heartbeatStale
     ? "ส่วนขยายไม่ได้ติดต่อแอปเกิน 30 นาที ทั้งที่ยังมีกลุ่ม Facebook เปิดอยู่ ตรวจว่า Chrome เปิดส่วนขยายและโทเคนตรงกัน"

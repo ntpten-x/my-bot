@@ -1,3 +1,4 @@
+import { claimOnce } from "../lease";
 import { prisma } from "../prisma";
 import { getSettings } from "../settings";
 import { upsertSettings } from "../settings";
@@ -66,6 +67,11 @@ export async function maybeSendScheduledSummary() {
   const clock = bangkokClock();
   const last = await prisma.setting.findUnique({ where: { key: "summary_last_day" } });
   if (!shouldSendSummary(clock.time, settings.summaryTime, last?.value ?? null, clock.day)) return;
+  // Sent once per day across instances, even if two workers pass the check together.
+  if (!(await claimOnce(`summary:${clock.day}`))) {
+    await upsertSettings({ summary_last_day: clock.day });
+    return;
+  }
   const start = bangkokStart(1);
   const end = bangkokStart(0);
   await composeDailySummary(bangkokClock(start).day, start, end);

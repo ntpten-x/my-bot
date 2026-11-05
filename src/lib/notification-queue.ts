@@ -15,12 +15,18 @@ export async function queueExternalNotification(postId: string, title: string) {
 export async function processNotificationQueue(limit = 10) {
   if (process.env.MYBOT_PROCESS !== "worker") return 0;
   const settings = await getSettings();
+  await prisma.notification.updateMany({
+    where: { channel: "external_sending", createdAt: { lt: new Date(Date.now() - 5 * 60_000) } },
+    data: { channel: "external_pending" },
+  });
   const jobs = await prisma.notification.findMany({
     where: { channel: "external_pending", createdAt: { lte: new Date() } },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }], take: limit,
     include: { post: { include: { category: true, subcategory: true, source: true } } },
   });
   for (const job of jobs) {
+    const claimed = await prisma.notification.updateMany({ where: { id: job.id, channel: "external_pending" }, data: { channel: "external_sending", createdAt: new Date() } });
+    if (!claimed.count) continue;
     const post = job.post;
     const fromRule = job.title.startsWith(RULE_PREFIX);
     const outsideArea = !fromRule && settings.serviceAreaNotifyOnly && post && !inServiceArea(post.province, settings.serviceProvinces);

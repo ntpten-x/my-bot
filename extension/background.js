@@ -90,12 +90,38 @@ function waitComplete(tabId) {
   });
 }
 
-async function postJson(cfg, path, body) {
-  return fetch(`${base(cfg)}${path}`, {
+// Network calls never hang: each try has a timeout, and a sleeping/restarting server gets retried with backoff.
+const RETRY_STATUS = new Set([408, 429, 502, 503, 504]);
+async function fetchRetry(url, options = {}, { timeoutMs = 45000, retries = 2 } = {}) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, { ...options, signal: controller.signal });
+      if (!RETRY_STATUS.has(response.status) || attempt === retries) return response;
+      lastError = new Error(`MY-BOT ตอบกลับ ${response.status}`);
+    } catch (error) {
+      lastError = error && error.name === "AbortError" ? new Error("MY-BOT ไม่ตอบภายในเวลาที่กำหนด") : error;
+      if (attempt === retries) throw lastError;
+    } finally {
+      clearTimeout(timer);
+    }
+    await sleep(2000 * 3 ** attempt + Math.random() * 1000);
+  }
+  throw lastError || new Error("ติดต่อ MY-BOT ไม่ได้");
+}
+
+async function postJson(cfg, path, body, opts) {
+  return fetchRetry(`${base(cfg)}${path}`, {
     method: "POST",
     headers: headers(cfg.token),
     body: JSON.stringify(body),
-  });
+  }, opts);
+}
+
+async function getJson(cfg, path, opts = { timeoutMs: 30000, retries: 1 }) {
+  return fetchRetry(`${base(cfg)}${path}`, { headers: headers(cfg.token) }, opts);
 }
 
 // ---- Status for the "ภาพรวมระบบ" page (read-only facts about this browser) ----
@@ -107,8 +133,72 @@ async function installId() {
   return id;
 }
 
+// Error log for the overview page: last 20 distinct messages (repeats counted) and hourly counts for 24 h.
 async function rememberError(message) {
-  await chrome.storage.local.set({ lastError: { message: String(message || "").slice(0, 300), at: Date.now() } });
+  const text = String(message || "").slice(0, 300);
+  const now = Date.now();
+  const stored = await chrome.storage.local.get({ errorLog: [], errorHours: {} });
+  const log = Array.isArray(stored.errorLog) ? stored.errorLog : [];
+  const same = log.findIndex((entry) => entry.message === text);
+  if (same >= 0) {
+    const [entry] = log.splice(same, 1);
+    log.unshift({ message: text, at: now, count: (entry.count || 1) + 1 });
+  } else log.unshift({ message: text, at: now, count: 1 });
+  const hours = {};
+  const hour = Math.floor(now / 3600000);
+  for (const [key, count] of Object.entries(stored.errorHours || {})) if (hour - Number(key) < 24) hours[key] = count;
+  hours[hour] = (hours[hour] || 0) + 1;
+  await chrome.storage.local.set({ lastError: { message: text, at: now }, errorLog: log.slice(0, 20), errorHours: hours });
+}
+
+async function errorSummary() {
+  const stored = await chrome.storage.local.get({ errorLog: [], errorHours: {} });
+  const hour = Math.floor(Date.now() / 3600000);
+  const count24h = Object.entries(stored.errorHours || {}).reduce((sum, [key, count]) => (hour - Number(key) < 24 ? sum + (Number(count) || 0) : sum), 0);
+  const log = (Array.isArray(stored.errorLog) ? stored.errorLog : []).slice(0, 20).map((entry) => ({ at: Number(entry.at) || 0, message: String(entry.message || "").slice(0, 300), count: Math.max(1, Number(entry.count) || 1) }));
+  return { count24h, log };
+}
+
+// ---- Outbox: posts that could not reach MY-BOT wait here (chrome.storage) and are re-sent later ----
+const OUTBOX_MAX = 200;
+const OUTBOX_MAX_AGE_MS = 72 * 3600000;
+async function loadOutbox() {
+  const stored = await chrome.storage.local.get({ outbox: [] });
+  const now = Date.now();
+  return (Array.isArray(stored.outbox) ? stored.outbox : []).filter((item) => item && now - (item.at || 0) < OUTBOX_MAX_AGE_MS);
+}
+
+async function queueOutbox(item) {
+  const outbox = await loadOutbox();
+  outbox.push({ ...item, at: Date.now() });
+  await chrome.storage.local.set({ outbox: outbox.slice(-OUTBOX_MAX) });
+}
+
+let flushing = false;
+async function flushOutbox(cfg) {
+  if (flushing || !cfg.token) return;
+  flushing = true;
+  try {
+    let outbox = await loadOutbox();
+    for (let sent = 0; outbox.length && sent < 10; sent += 1) {
+      const item = outbox[0];
+      const response = await postJson(cfg, "/api/v1/ingest", { sourceUrl: item.sourceUrl, posts: item.posts, fbUserId: item.fbUserId || undefined }, { timeoutMs: 45000, retries: 0 }).catch(() => null);
+      if (!response || RETRY_STATUS.has(response.status) || response.status >= 500) break;
+      // Sent, or rejected for good (4xx): either way it leaves the outbox.
+      if (response.ok) await countSent(item.posts.length);
+      outbox = (await loadOutbox()).filter((entry) => !(entry.at === item.at && entry.sourceUrl === item.sourceUrl));
+      await chrome.storage.local.set({ outbox });
+    }
+    if (!outbox.length) await chrome.storage.local.set({ outbox: [] });
+  } finally {
+    flushing = false;
+  }
+}
+
+async function countSent(count) {
+  if (count) await chrome.storage.local.set({ lastPostAt: Date.now() });
+  const stored = await chrome.storage.local.get({ postsSent: 0 });
+  await chrome.storage.local.set({ postsSent: (stored.postsSent || 0) + count });
 }
 
 async function rememberIdentity(identity) {
@@ -127,14 +217,21 @@ async function currentFbUserId() {
 }
 
 async function sendPosts(cfg, sourceUrl, posts) {
+  if (!posts.length) return null;
   const fbUserId = await currentFbUserId();
-  const response = await postJson(cfg, "/api/v1/ingest", { sourceUrl, posts, fbUserId: fbUserId || undefined });
-  if (response && response.ok) {
-    if (posts.length) await chrome.storage.local.set({ lastPostAt: Date.now() });
-    const stored = await chrome.storage.local.get({ postsSent: 0 });
-    await chrome.storage.local.set({ postsSent: (stored.postsSent || 0) + posts.length });
-  } else if (response) {
-    const data = await response.json().catch(() => ({}));
+  let response = null;
+  try {
+    response = await postJson(cfg, "/api/v1/ingest", { sourceUrl, posts, fbUserId: fbUserId || undefined });
+  } catch (error) {
+    await queueOutbox({ sourceUrl, posts, fbUserId });
+    await rememberError(`ส่งโพสต์ไม่สำเร็จ เก็บไว้ส่งใหม่ ${posts.length} โพสต์: ${String(error && error.message ? error.message : error).slice(0, 120)}`);
+    return null;
+  }
+  if (response.ok) {
+    await countSent(posts.length);
+  } else {
+    if (response.status >= 500 || RETRY_STATUS.has(response.status)) await queueOutbox({ sourceUrl, posts, fbUserId });
+    const data = await response.clone().json().catch(() => ({}));
     await rememberError(`ส่งโพสต์เข้า MY-BOT ไม่สำเร็จ (${response.status}) ${data.error || ""}`.trim());
   }
   return response;
@@ -175,6 +272,7 @@ async function heartbeat() {
   beating = true;
   try {
     const stored = await chrome.storage.local.get({ fbIdentity: null, lastError: null, lastPostAt: 0, postsSent: 0, profileLabel: "" });
+    const outbox = await loadOutbox();
     const fb = stored.fbIdentity || { loggedIn: false, id: "", name: "", at: 0 };
     const response = await postJson(cfg, "/api/v1/extension/heartbeat", {
       installId: await installId(),
@@ -187,8 +285,11 @@ async function heartbeat() {
       lastError: stored.lastError || null,
       lastPostAt: stored.lastPostAt || 0,
       postsSent: stored.postsSent || 0,
-    });
+      errors: await errorSummary(),
+      outboxSize: outbox.length,
+    }, { timeoutMs: 30000, retries: 1 });
     await chrome.storage.local.set({ lastHeartbeat: { at: Date.now(), status: response.status } });
+    if (response.ok && outbox.length) await flushOutbox(cfg);
   } catch {
     await chrome.storage.local.set({ lastHeartbeat: { at: Date.now(), status: 0 } });
   } finally {
@@ -340,14 +441,46 @@ async function injectReaders(tabId) {
 }
 
 // A background tab by default; a small unfocused window when background tabs do not render the feed.
+// Readers are remembered in session storage so a service-worker restart can close the ones it left open.
+const BOOT_ID = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const READER_MAX_AGE_MS = 15 * 60 * 1000;
+async function trackReader(reader, add) {
+  const stored = await chrome.storage.session.get({ readers: {} });
+  const readers = stored.readers || {};
+  const key = String(reader.windowId !== undefined ? `w${reader.windowId}` : `t${reader.tabId}`);
+  if (add) readers[key] = { tabId: reader.tabId, windowId: reader.windowId, boot: BOOT_ID, at: Date.now() };
+  else delete readers[key];
+  await chrome.storage.session.set({ readers });
+}
+
+async function closeOrphanReaders() {
+  const stored = await chrome.storage.session.get({ readers: {} });
+  const readers = stored.readers || {};
+  let changed = false;
+  for (const [key, reader] of Object.entries(readers)) {
+    const orphan = reader.boot !== BOOT_ID || (!cycling && Date.now() - (reader.at || 0) > READER_MAX_AGE_MS);
+    if (!orphan) continue;
+    if (reader.windowId !== undefined && reader.windowId !== null) await chrome.windows.remove(reader.windowId).catch(() => undefined);
+    else if (reader.tabId !== undefined && reader.tabId !== null) await chrome.tabs.remove(reader.tabId).catch(() => undefined);
+    scrapingTabs.delete(reader.tabId);
+    delete readers[key];
+    changed = true;
+  }
+  if (changed) await chrome.storage.session.set({ readers });
+}
+
 async function openReader(url, useWindow) {
+  let reader;
   if (useWindow) {
     const win = await chrome.windows.create({ url, focused: false, state: "normal", width: 560, height: 900, left: 0, top: 0 });
     const tab = win.tabs && win.tabs[0];
-    return { tabId: tab ? tab.id : undefined, windowId: win.id };
+    reader = { tabId: tab ? tab.id : undefined, windowId: win.id };
+  } else {
+    const tab = await chrome.tabs.create({ url, active: false });
+    reader = { tabId: tab.id, windowId: undefined };
   }
-  const tab = await chrome.tabs.create({ url, active: false });
-  return { tabId: tab.id, windowId: undefined };
+  await trackReader(reader, true).catch(() => undefined);
+  return reader;
 }
 
 async function closeReader(reader) {
@@ -355,6 +488,7 @@ async function closeReader(reader) {
   if (reader.windowId !== undefined) await chrome.windows.remove(reader.windowId).catch(() => undefined);
   else if (reader.tabId !== undefined) await chrome.tabs.remove(reader.tabId).catch(() => undefined);
   scrapingTabs.delete(reader.tabId);
+  await trackReader(reader, false).catch(() => undefined);
 }
 
 // Scroll and read one feed until the stop rule fires. Returns the run (see scrape.js).
@@ -461,13 +595,33 @@ async function scrapeGroup(cfg, group, remote, options) {
 let cycling = false;
 const RUN_LOCK_MS = 12 * 60 * 1000;
 
+// One run at a time. The lock is also saved (with this worker's boot id and an expiry) so the popup
+// and a restarted service worker can see it; a lock from an older boot is dead and is ignored.
+async function takeRunLock(kind) {
+  if (cycling) return false;
+  cycling = true;
+  const stored = await chrome.storage.session.get({ runLock: null }).catch(() => ({ runLock: null }));
+  const lock = stored.runLock;
+  if (lock && lock.boot === BOOT_ID && lock.until > Date.now()) {
+    cycling = false;
+    return false;
+  }
+  await chrome.storage.session.set({ runLock: { boot: BOOT_ID, kind, until: Date.now() + RUN_LOCK_MS } }).catch(() => undefined);
+  return true;
+}
+
+async function releaseRunLock() {
+  cycling = false;
+  await chrome.storage.session.remove("runLock").catch(() => undefined);
+}
+
 async function cycle() {
   if (cycling) return;
   const cfg = await loadConfig();
   if (!cfg.enabled || !cfg.token) return;
-  cycling = true;
+  if (!(await takeRunLock("cycle"))) return;
   try {
-    const response = await fetch(`${base(cfg)}/api/v1/extension-config`, { headers: headers(cfg.token) });
+    const response = await getJson(cfg, "/api/v1/extension-config");
     if (!response.ok) return;
     const remote = await response.json();
     const now = Date.now();
@@ -487,10 +641,11 @@ async function cycle() {
       await chrome.storage.local.set({ schedules });
       if (batch.indexOf(group) < batch.length - 1) await sleep(4000 + Math.random() * 6000);
     }
-  } catch {
+  } catch (error) {
     // เปิดแอปไม่ติดหรือเน็ตหลุด — รอรอบถัดไป
+    await rememberError(`รอบอ่านอัตโนมัติไม่สำเร็จ: ${String(error && error.message ? error.message : error).slice(0, 160)}`).catch(() => undefined);
   } finally {
-    cycling = false;
+    await releaseRunLock();
   }
 }
 
@@ -505,6 +660,7 @@ async function forwardManual(message, sender) {
   const last = recentManual.get(key) || 0;
   if (Date.now() - last < 20000) return;
   recentManual.set(key, Date.now());
+  for (const [url, at] of recentManual) if (Date.now() - at > 60000) recentManual.delete(url);
   await sendPosts(cfg, message.sourceUrl, message.posts || []);
   await postJson(cfg, "/api/v1/extension/sample", {
     sourceUrl: message.sourceUrl,
@@ -516,9 +672,9 @@ async function pollTasks() {
   if (cycling) return;
   const cfg = await loadConfig();
   if (!cfg.token) return;
-  cycling = true;
+  if (!(await takeRunLock("tasks"))) return;
   try {
-    const response = await fetch(`${base(cfg)}/api/v1/extension/tasks`, { headers: headers(cfg.token) });
+    const response = await getJson(cfg, "/api/v1/extension/tasks", { timeoutMs: 20000, retries: 0 });
     if (!response.ok) return;
     const data = await response.json();
     for (const task of data.tasks || []) {
@@ -533,7 +689,7 @@ async function pollTasks() {
   } catch {
     // แอปปิดอยู่
   } finally {
-    cycling = false;
+    await releaseRunLock();
   }
 }
 
@@ -558,8 +714,16 @@ chrome.runtime.onStartup.addListener(() => {
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "mybot-tick") void cycle();
   if (alarm.name === "mybot-tasks") void pollTasks();
-  if (alarm.name === "mybot-heartbeat") void heartbeat();
+  if (alarm.name === "mybot-heartbeat") {
+    void heartbeat();
+    void closeOrphanReaders().catch(() => undefined);
+  }
 });
+
+// A fresh service worker (after Chrome stopped the old one) closes readers the old one left open
+// and makes sure the alarms exist.
+void closeOrphanReaders().catch(() => undefined);
+void chrome.alarms.getAll().then((alarms) => { if (alarms.length < 3) armAlarms(); }).catch(() => undefined);
 
 // Facebook pages report who is logged in (identity.js reads the c_user cookie value only).
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -643,7 +807,7 @@ async function setAssistTab(tabId, value) {
 async function replyApi(cfg, body) {
   if (!cfg.token) return { ok: false, error: "ยังไม่ได้ใส่โทเคนในส่วนขยาย (กดไอคอน MY-BOT แล้วใส่โทเคน)" };
   try {
-    const response = await fetch(`${base(cfg)}/api/v1/extension/reply-queue`, { method: "POST", headers: headers(cfg.token), body: JSON.stringify(body) });
+    const response = await postJson(cfg, "/api/v1/extension/reply-queue", body, { timeoutMs: 30000, retries: 0 });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) return { ok: false, error: data.error || `MY-BOT ตอบกลับ ${response.status}` };
     return { ok: true, ...data };
