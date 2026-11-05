@@ -20,6 +20,7 @@ async function probeOnce(name: string, settings: AppSettings): Promise<{ ok: boo
   if (name === "rules") return { ok: true, message: "ตัวคัดด้วยคีย์เวิร์ดพร้อมใช้งานเสมอ ไม่ต้องต่อเน็ต" };
   try {
     if (name === "ollama") {
+      if (process.env.OLLAMA_DISABLED === "1") return { ok: false, message: "ปิด Ollama ไว้ (OLLAMA_DISABLED=1)" };
       const ollamaBase = await resolveOllamaBaseUrl(settings.ollamaBaseUrl);
       const response = await fetch(`${ollamaBase}/api/tags`, { signal: AbortSignal.timeout(1500) });
       if (!response.ok) return { ok: false, message: `Ollama ใช้ไม่ได้: ${await errorText(response)}` };

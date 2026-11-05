@@ -3,6 +3,7 @@ import { ollamaEmbedModels } from "../smart/embed";
 import { workerLog } from "../log";
 
 export async function warmOllamaModels(settings: { ollamaBaseUrl: string; ollamaModel: string; embedModel: string }) {
+  if (process.env.OLLAMA_DISABLED === "1") return;
   const base = await resolveOllamaBaseUrl(settings.ollamaBaseUrl);
   let chat = false;
   try {
