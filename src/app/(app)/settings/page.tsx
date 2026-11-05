@@ -36,6 +36,9 @@ type Settings = {
   watchExtOfflineMinutes: number;
   watchAlertEveryHours: number;
   watchParseSpikePct: number;
+  quietPauseOnFacebook?: boolean;
+  quietWindow?: string;
+  quietPauseWhenLocked?: boolean;
   summaryTime: string;
   embedModel: string;
   geminiEmbedModel: string;
@@ -222,6 +225,22 @@ export default function SettingsPage() {
               setCopied(true);
             }}>{copied ? "คัดลอกแล้ว" : "คัดลอกโทเคน"}</Button>
             <Button type="button" variant="danger" onClick={() => setConfirmToken(true)}>สร้างโทเคนใหม่</Button>
+          </div>
+        </Card>
+        <Card className="space-y-3">
+          <h2 className="font-semibold">ดึงข้อมูลเบื้องหลัง (โหมดเงียบ)</h2>
+          <p className="text-sm text-muted">เมื่อจับคู่ส่วนขยายและเข้าสู่ระบบ Facebook แล้ว ระบบจะอ่านโพสต์เองอยู่เบื้องหลัง ในหน้าต่าง Chrome แยกหนึ่งหน้าต่างที่ถูกย่อไว้ (minimized) ตลอด ไม่เปิดแท็บในหน้าต่างที่คุณใช้อยู่ ไม่แย่งโฟกัส และไม่เด้งขึ้นมาบนจอ ถ้าปิดหน้าต่างนั้นไป ระบบจะสร้างใหม่แบบย่อไว้ในรอบถัดไป และจะปิดเองเมื่อว่างนานเกิน 20 นาที พักได้จากปุ่มในส่วนขยาย หรือตั้งเงื่อนไขพักด้านล่าง</p>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={settings.quietPauseOnFacebook ?? true} onChange={(event) => setSettings({ ...settings, quietPauseOnFacebook: event.target.checked })} />
+            พักขณะที่คุณกำลังเปิด Facebook อยู่ในหน้าต่างของคุณเอง
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={settings.quietPauseWhenLocked ?? false} onChange={(event) => setSettings({ ...settings, quietPauseWhenLocked: event.target.checked })} />
+            พักเมื่อหน้าจอคอมพิวเตอร์ล็อกอยู่
+          </label>
+          <div>
+            <Label>ช่วงเวลาพัก (เช่น เวลาเล่นเกม) รูปแบบ 19:00-23:00 คั่นหลายช่วงด้วย , เว้นว่าง = ไม่พัก</Label>
+            <Input placeholder="19:00-23:00" value={settings.quietWindow ?? ""} onChange={(event) => setSettings({ ...settings, quietWindow: event.target.value })} />
           </div>
         </Card>
         <Card className="space-y-3">

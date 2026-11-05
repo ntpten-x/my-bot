@@ -79,6 +79,7 @@ export async function buildExtensionConfig(now = new Date()) {
     maxAgeHours: settings.maxPostAgeHours,
     maxPostsPerRun: settings.maxPostsPerRun,
     serverScheduling: true,
+    quiet: { pauseOnFacebook: settings.quietPauseOnFacebook, window: settings.quietWindow, pauseWhenLocked: settings.quietPauseWhenLocked },
     mode: "read-only" as const,
   };
 }
@@ -146,7 +147,7 @@ export async function recordScrapeRun(input: ScrapeRunInput, now = new Date(), r
       usedWindow: Boolean(cov.usedWindow),
     },
   });
-  const flags = [cov.hitLimit && !cov.reachedKnownPost ? "⚠ ถึงขีดจำกัดก่อนเจอโพสต์เก่า" : "", cov.stalls ? `โหลดค้าง ${cov.stalls} ครั้ง` : "", cov.usedWindow ? "ใช้หน้าต่างแยก" : ""].filter(Boolean).join(" · ");
+  const flags = [cov.hitLimit && !cov.reachedKnownPost ? "⚠ ถึงขีดจำกัดก่อนเจอโพสต์เก่า" : "", cov.stalls ? `โหลดค้าง ${cov.stalls} ครั้ง` : "", cov.usedWindow ? "ใช้หน้าต่างแยก (รุ่นเก่า)" : ""].filter(Boolean).join(" · ");
   const prefix = mode === "audit" ? `ตรวจความครบ: เจอโพสต์ที่ยังไม่มีในระบบ ${input.newPosts} โพสต์ · ` : `รอบอ่าน (${MODE_LABEL[mode]}): `;
   await prisma.fetchLog.create({
     data: {

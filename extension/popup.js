@@ -35,11 +35,12 @@ function showPairState(cfg) {
   pairState.appendChild(pill);
 }
 
-chrome.storage.local.get({ apiBase: DEFAULT_BASE, token: "", enabled: false }, (cfg) => {
+chrome.storage.local.get({ apiBase: DEFAULT_BASE, token: "", paused: false, quiet: null }, (cfg) => {
   apiBase.value = cfg.apiBase;
   token.value = String(cfg.token || "").startsWith("mbd_") ? "" : cfg.token;
-  enabled.checked = Boolean(cfg.enabled);
+  enabled.checked = !cfg.paused;
   showPairState(cfg);
+  if (cfg.quiet && cfg.quiet.reason && Date.now() - cfg.quiet.at < 5 * 60 * 1000) status.textContent = "พักชั่วคราว: " + cfg.quiet.reason;
 });
 
 async function ensurePermission(base) {
@@ -63,7 +64,7 @@ document.getElementById("pair").addEventListener("click", async () => {
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.token) return void (status.textContent = data.error || "จับคู่ไม่สำเร็จ (HTTP " + response.status + ")");
     enabled.checked = true; // paired: start reading automatically (read-only)
-    const cfg = { apiBase: parsed.base, token: data.token, enabled: true };
+    const cfg = { apiBase: parsed.base, token: data.token, paused: false };
     await chrome.storage.local.set(cfg);
     code.value = "";
     token.value = "";
@@ -87,7 +88,7 @@ document.getElementById("save").addEventListener("click", async () => {
     nextToken = stored.apiBase === parsed.base ? stored.token : "";
     status.textContent = "โทเคนแบบเดิมใช้ได้เฉพาะ localhost — กรุณาจับคู่ด้วยรหัสแทน";
   }
-  const cfg = { apiBase: parsed.base, token: nextToken, enabled: enabled.checked };
+  const cfg = { apiBase: parsed.base, token: nextToken, paused: !enabled.checked };
   await chrome.storage.local.set(cfg);
   showPairState(cfg);
   if (!status.textContent.startsWith("โทเคนแบบเดิม")) status.textContent = "บันทึกแล้ว";

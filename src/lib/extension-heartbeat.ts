@@ -4,7 +4,7 @@ import { upsertSettings } from "./settings";
 import { touchExtension } from "./extension-status";
 
 // Version this MY-BOT build expects from extension/manifest.json (tests keep the two in sync).
-export const EXPECTED_EXTENSION_VERSION = "1.7.0";
+export const EXPECTED_EXTENSION_VERSION = "1.8.0";
 
 const FB_ID = /^\d{5,20}$/;
 

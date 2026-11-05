@@ -59,6 +59,9 @@ export type AppSettings = {
   watchExtOfflineMinutes: number;
   watchAlertEveryHours: number;
   watchParseSpikePct: number;
+  quietPauseOnFacebook: boolean;
+  quietWindow: string;
+  quietPauseWhenLocked: boolean;
 };
 
 function pick(db: string | undefined, env: string | undefined, fallback = "") {
@@ -137,6 +140,9 @@ export async function getSettings(): Promise<AppSettings> {
     watchExtOfflineMinutes: num(map.watch_ext_offline_minutes, 30, 5, 720),
     watchAlertEveryHours: num(map.watch_alert_every_hours, 6, 1, 48),
     watchParseSpikePct: num(map.watch_parse_spike_pct, 30, 10, 100),
+    quietPauseOnFacebook: map.quiet_pause_on_facebook !== "false",
+    quietWindow: String(map.quiet_window ?? "").slice(0, 200),
+    quietPauseWhenLocked: map.quiet_pause_when_locked === "true",
   };
 }
 
@@ -207,5 +213,8 @@ export function publicSettings(settings: AppSettings) {
     watchExtOfflineMinutes: settings.watchExtOfflineMinutes,
     watchAlertEveryHours: settings.watchAlertEveryHours,
     watchParseSpikePct: settings.watchParseSpikePct,
+    quietPauseOnFacebook: settings.quietPauseOnFacebook,
+    quietWindow: settings.quietWindow,
+    quietPauseWhenLocked: settings.quietPauseWhenLocked,
   };
 }

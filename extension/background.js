@@ -1,9 +1,10 @@
-importScripts("assist.js", "identity.js", "scrape.js");
+importScripts("assist.js", "identity.js", "scrape.js", "quiet.js");
 
 const DEFAULTS = {
   apiBase: "http://localhost:8001",
   token: "",
-  enabled: false,
+  // Paired = reading starts on its own; "paused" is the owner's pause switch in the popup.
+  paused: false,
   schedules: {},
 };
 
@@ -279,7 +280,7 @@ async function heartbeat() {
       version: chrome.runtime.getManifest().version,
       browser: browserName(),
       profileLabel: String(stored.profileLabel || "").slice(0, 60),
-      enabled: Boolean(cfg.enabled),
+      enabled: !cfg.paused,
       fb: { loggedIn: Boolean(fb.loggedIn), id: fb.id || "", name: fb.name || "", checkedAt: fb.at || 0 },
       tabs: await readingTabs(),
       lastError: stored.lastError || null,
@@ -440,26 +441,88 @@ async function injectReaders(tabId) {
   await chrome.scripting.executeScript({ target: { tabId }, files: ["selectors.js", "fbtime.js", "parser.js", "identity.js"] });
 }
 
-// A background tab by default; a small unfocused window when background tabs do not render the feed.
-// Readers are remembered in session storage so a service-worker restart can close the ones it left open.
+// All reading happens in ONE dedicated Chrome window created minimized and never focused, so nothing
+// appears in the owner's own windows. It is reused (one tab, sent back to about:blank when idle),
+// recreated minimized if the owner closes it, and closed after a long idle spell.
+// Older builds tracked tabs/windows in session storage; those leftovers are closed on boot.
 const BOOT_ID = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const READER_MAX_AGE_MS = 15 * 60 * 1000;
-async function trackReader(reader, add) {
-  const stored = await chrome.storage.session.get({ readers: {} });
-  const readers = stored.readers || {};
-  const key = String(reader.windowId !== undefined ? `w${reader.windowId}` : `t${reader.tabId}`);
-  if (add) readers[key] = { tabId: reader.tabId, windowId: reader.windowId, boot: BOOT_ID, at: Date.now() };
-  else delete readers[key];
-  await chrome.storage.session.set({ readers });
+const SCRAPE_IDLE_CLOSE_MS = 20 * 60 * 1000;
+let scrapeWindowRef = null;
+
+async function loadScrapeWindow() {
+  if (scrapeWindowRef) return scrapeWindowRef;
+  const stored = await chrome.storage.session.get({ scrapeWindow: null }).catch(() => ({ scrapeWindow: null }));
+  scrapeWindowRef = stored.scrapeWindow || null;
+  return scrapeWindowRef;
+}
+
+async function saveScrapeWindow(ref) {
+  scrapeWindowRef = ref;
+  if (ref) await chrome.storage.session.set({ scrapeWindow: ref }).catch(() => undefined);
+  else await chrome.storage.session.remove("scrapeWindow").catch(() => undefined);
+}
+
+function isScrapeWindowTab(tab) {
+  return Boolean(tab && scrapeWindowRef && tab.windowId === scrapeWindowRef.windowId);
+}
+
+// Returns { windowId, tabId } of the minimized reader window, creating it (minimized, unfocused) if needed.
+async function ensureScrapeWindow() {
+  const ref = await loadScrapeWindow();
+  if (ref) {
+    const win = await chrome.windows.get(ref.windowId, { populate: true }).catch(() => null);
+    if (win && win.tabs && win.tabs.length) {
+      const keep = win.tabs.find((tab) => tab.id === ref.tabId) || win.tabs[0];
+      for (const tab of win.tabs) if (tab.id !== keep.id) await chrome.tabs.remove(tab.id).catch(() => undefined);
+      // Never bring it forward: only push it back down if it is open but not what the owner is looking at.
+      if (win.state !== "minimized" && !win.focused) await chrome.windows.update(win.id, { state: "minimized" }).catch(() => undefined);
+      const next = { windowId: win.id, tabId: keep.id, usedAt: Date.now() };
+      await saveScrapeWindow(next);
+      return next;
+    }
+  }
+  const win = await chrome.windows.create({ url: "about:blank", state: "minimized", focused: false });
+  const tab = win.tabs && win.tabs[0];
+  const next = { windowId: win.id, tabId: tab ? tab.id : undefined, usedAt: Date.now() };
+  if (next.tabId === undefined) {
+    const tabs = await chrome.tabs.query({ windowId: win.id }).catch(() => []);
+    next.tabId = tabs[0] && tabs[0].id;
+  }
+  await saveScrapeWindow(next);
+  return next;
+}
+
+chrome.windows.onRemoved.addListener((windowId) => {
+  void loadScrapeWindow().then((ref) => { if (ref && ref.windowId === windowId) return saveScrapeWindow(null); });
+});
+
+async function closeIdleScrapeWindow() {
+  const ref = await loadScrapeWindow();
+  if (!ref || cycling) return;
+  if (Date.now() - (ref.usedAt || 0) < SCRAPE_IDLE_CLOSE_MS) {
+    // Keep the window but make sure its tab is not sitting on a Facebook page.
+    const tab = await chrome.tabs.get(ref.tabId).catch(() => null);
+    if (tab && tab.url && tab.url !== "about:blank") await chrome.tabs.update(ref.tabId, { url: "about:blank" }).catch(() => undefined);
+    return;
+  }
+  await chrome.windows.remove(ref.windowId).catch(() => undefined);
+  await saveScrapeWindow(null);
 }
 
 async function closeOrphanReaders() {
+  await closeIdleScrapeWindow().catch(() => undefined);
   const stored = await chrome.storage.session.get({ readers: {} });
   const readers = stored.readers || {};
   let changed = false;
   for (const [key, reader] of Object.entries(readers)) {
     const orphan = reader.boot !== BOOT_ID || (!cycling && Date.now() - (reader.at || 0) > READER_MAX_AGE_MS);
     if (!orphan) continue;
+    if (scrapeWindowRef && (reader.windowId === scrapeWindowRef.windowId || reader.tabId === scrapeWindowRef.tabId)) {
+      delete readers[key];
+      changed = true;
+      continue;
+    }
     if (reader.windowId !== undefined && reader.windowId !== null) await chrome.windows.remove(reader.windowId).catch(() => undefined);
     else if (reader.tabId !== undefined && reader.tabId !== null) await chrome.tabs.remove(reader.tabId).catch(() => undefined);
     scrapingTabs.delete(reader.tabId);
@@ -469,26 +532,23 @@ async function closeOrphanReaders() {
   if (changed) await chrome.storage.session.set({ readers });
 }
 
-async function openReader(url, useWindow) {
-  let reader;
-  if (useWindow) {
-    const win = await chrome.windows.create({ url, focused: false, state: "normal", width: 560, height: 900, left: 0, top: 0 });
-    const tab = win.tabs && win.tabs[0];
-    reader = { tabId: tab ? tab.id : undefined, windowId: win.id };
-  } else {
-    const tab = await chrome.tabs.create({ url, active: false });
-    reader = { tabId: tab.id, windowId: undefined };
-  }
-  await trackReader(reader, true).catch(() => undefined);
+// Loads a feed in the minimized reader window's tab (never in the owner's windows, never focused).
+async function openReader(url) {
+  const ref = await ensureScrapeWindow();
+  const reader = { tabId: ref.tabId, windowId: ref.windowId };
+  scrapingTabs.add(reader.tabId);
+  await chrome.tabs.update(reader.tabId, { url });
+  await sleep(400);
   return reader;
 }
 
+// Sends the tab back to about:blank (frees Facebook's memory) but keeps the minimized window for reuse.
 async function closeReader(reader) {
   if (!reader) return;
-  if (reader.windowId !== undefined) await chrome.windows.remove(reader.windowId).catch(() => undefined);
-  else if (reader.tabId !== undefined) await chrome.tabs.remove(reader.tabId).catch(() => undefined);
+  if (reader.tabId !== undefined) await chrome.tabs.update(reader.tabId, { url: "about:blank" }).catch(() => undefined);
   scrapingTabs.delete(reader.tabId);
-  await trackReader(reader, false).catch(() => undefined);
+  const ref = await loadScrapeWindow();
+  if (ref) await saveScrapeWindow({ ...ref, usedAt: Date.now() });
 }
 
 // Scroll and read one feed until the stop rule fires. Returns the run (see scrape.js).
@@ -534,27 +594,26 @@ async function scrapeGroup(cfg, group, remote, options) {
   const Scrape = globalThis.MyBotScrape;
   const kind = sourceKind(group);
   const settings = await scrapeSettingsFor(remote);
-  const stored = await chrome.storage.local.get({ sweeps: {}, dedicatedWindow: true });
+  const stored = await chrome.storage.local.get({ sweeps: {} });
   const plan = Scrape.planRun({ group, settings, lastSweepAt: stored.sweeps[group.id], audit: Boolean(options && options.audit) });
   const result = { ok: true, postsFound: 0, newPosts: 0, scrolls: 0, stoppedBy: "", message: "", nextRunAt: null, mode: plan.mode, stats: null };
   let reader;
   try {
     const url = Scrape.scrapeUrl(group.url, kind);
-    reader = await openReader(url, false);
-    scrapingTabs.add(reader.tabId);
+    reader = await openReader(url);
     let run = await readFeed(reader, kind, plan, group.knownKeys || [], result);
-    // The background tab did not render more than one screen: read again in a small unfocused window.
-    if (stored.dedicatedWindow && run.found <= 2 && run.stalls >= 2 && run.stoppedBy !== "seen") {
-      await closeReader(reader);
-      reader = await openReader(url, true);
-      scrapingTabs.add(reader.tabId);
+    // A minimized window can be throttled by Chrome. Never un-minimize: reload once and read again with
+    // patience; if it still stalls, later cycles use smaller batches and the catch-up sweeps fill the gap.
+    if (run.found <= 2 && run.stalls >= 2 && run.stoppedBy !== "seen") {
+      await chrome.tabs.reload(reader.tabId).catch(() => undefined);
+      await sleep(2500);
       const again = await readFeed(reader, kind, plan, group.knownKeys || [], result);
       again.stalls += run.stalls;
-      again.usedWindow = true;
       if (again.found >= run.found) run = again;
+      if (run.found <= 2) await chrome.storage.local.set({ throttledAt: Date.now() }).catch(() => undefined);
     }
     const stats = Scrape.runStats(run);
-    result.stats = { ...stats, usedWindow: Boolean(run.usedWindow) };
+    result.stats = { ...stats, usedWindow: false };
     result.scrolls = stats.scrolls;
     result.stoppedBy = run.stoppedBy || "end";
     result.postsFound = run.found;
@@ -618,19 +677,29 @@ async function releaseRunLock() {
 async function cycle() {
   if (cycling) return;
   const cfg = await loadConfig();
-  if (!cfg.enabled || !cfg.token) return;
+  if (cfg.paused || !cfg.token) return;
+  // Facebook logged out (seen in the last 30 min): wait; a later cycle probes again.
+  const fbState = await chrome.storage.local.get({ fbIdentity: null });
+  const fb = fbState.fbIdentity;
+  if (fb && fb.loggedIn === false && Date.now() - (fb.at || 0) < 30 * 60 * 1000) return void (await setQuiet("ยังไม่ได้เข้าสู่ระบบ Facebook"));
   if (!(await takeRunLock("cycle"))) return;
   try {
     const response = await getJson(cfg, "/api/v1/extension-config");
     if (!response.ok) return;
     const remote = await response.json();
+    const reason = await quietReason(remote.quiet);
+    await setQuiet(reason);
+    if (reason) return;
     const now = Date.now();
     const schedules = { ...cfg.schedules };
     // The server decides what is due (priority + adaptive interval); the local schedule is only a short lock.
     const due = (remote.groups || []).filter(
       (group) => (!remote.serverScheduling || group.due !== false) && (!schedules[group.id] || now >= schedules[group.id]),
     );
-    const batch = due.slice(0, remote.maxGroupsPerCycle || 5);
+    // Chrome throttled the minimized window recently: read fewer groups per cycle.
+    const { throttledAt } = await chrome.storage.local.get({ throttledAt: 0 });
+    const limit = remote.maxGroupsPerCycle || 5;
+    const batch = due.slice(0, Date.now() - throttledAt < 30 * 60 * 1000 ? Math.min(limit, 2) : limit);
     for (const group of batch) {
       schedules[group.id] = Date.now() + RUN_LOCK_MS;
       await chrome.storage.local.set({ schedules });
@@ -639,7 +708,10 @@ async function cycle() {
       const jitter = Math.random() * Math.min(remote.jitterMinutes ?? 5, interval * 0.25);
       schedules[group.id] = result.nextRunAt ? Math.min(result.nextRunAt, Date.now() + 180 * 60 * 1000) : Date.now() + (interval + jitter) * 60 * 1000;
       await chrome.storage.local.set({ schedules });
-      if (batch.indexOf(group) < batch.length - 1) await sleep(4000 + Math.random() * 6000);
+      if (batch.indexOf(group) < batch.length - 1) {
+        await sleep(4000 + Math.random() * 6000);
+        if (await quietReason(remote.quiet)) break;
+      }
     }
   } catch (error) {
     // เปิดแอปไม่ติดหรือเน็ตหลุด — รอรอบถัดไป
@@ -651,9 +723,38 @@ async function cycle() {
 
 const recentManual = new Map();
 
+// ---- Quiet mode (settings on the MY-BOT site) ----
+async function setQuiet(reason) {
+  await chrome.storage.local.set({ quiet: reason ? { reason, at: Date.now() } : null }).catch(() => undefined);
+}
+
+function isFacebookTab(tab) {
+  try {
+    return /(^|\.)facebook\.com$/i.test(new URL(String(tab.url || "")).hostname);
+  } catch {
+    return false;
+  }
+}
+
+async function quietReason(quiet) {
+  if (!quiet) return "";
+  if (quiet.window && globalThis.MyBotQuiet.inQuietWindow(quiet.window)) return "อยู่ในช่วงเวลาพัก";
+  if (quiet.pauseWhenLocked && chrome.idle) {
+    const state = await chrome.idle.queryState(60).catch(() => "active");
+    if (state === "locked") return "หน้าจอล็อกอยู่";
+  }
+  if (quiet.pauseOnFacebook) {
+    await loadScrapeWindow();
+    const win = await chrome.windows.getLastFocused({ populate: true }).catch(() => null);
+    const own = win && win.focused && (!scrapeWindowRef || win.id !== scrapeWindowRef.windowId);
+    if (own && (win.tabs || []).some((tab) => tab.active && isFacebookTab(tab))) return "คุณกำลังใช้ Facebook อยู่";
+  }
+  return "";
+}
+
 async function forwardManual(message, sender) {
   // Pages opened by the background scrape report through scrapeGroup, not here.
-  if (sender && sender.tab && scrapingTabs.has(sender.tab.id)) return;
+  if (sender && sender.tab && (scrapingTabs.has(sender.tab.id) || isScrapeWindowTab(sender.tab))) return;
   const cfg = await loadConfig();
   if (!cfg.token) return;
   const key = message.sourceUrl;
@@ -699,7 +800,13 @@ function armAlarms() {
   chrome.alarms.create("mybot-heartbeat", { periodInMinutes: 1 });
 }
 
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener((details) => {
+  // 1.8.0: reading starts by itself once paired; the old opt-in switch is replaced by "paused".
+  if (details && details.reason === "update") {
+    void chrome.storage.local.get({ migrated180: false }).then((s) => {
+      if (!s.migrated180) return chrome.storage.local.set({ paused: false, migrated180: true }).then(() => chrome.storage.local.remove(["enabled", "dedicatedWindow"]));
+    }).catch(() => undefined);
+  }
   void syncCustomBridge();
   armAlarms();
   void heartbeat();

@@ -304,7 +304,7 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
       level: enabledFb.length ? (activeInstalls.some((row) => row.enabled) || !newest ? "ok" : "bad") : "off",
       value: `${enabledFb.length} กลุ่ม/Marketplace ที่เปิดไว้ · แท็บ Facebook ที่เปิดอยู่ ${openTabs.length} แท็บ`,
       detail: enabledFb.length ? enabledFb.slice(0, 8).map((source) => source.name).join(", ") : "ยังไม่ได้เพิ่มกลุ่ม Facebook หรือ Marketplace",
-      hint: newest && !activeInstalls.some((row) => row.enabled) && enabledFb.length ? "ติ๊ก “เปิดใช้งาน” ในป๊อปอัปของส่วนขยาย" : undefined,
+      hint: newest && !activeInstalls.some((row) => row.enabled) && enabledFb.length ? "ส่วนขยายถูกพักไว้ — ติ๊ก “ดึงข้อมูลอัตโนมัติเบื้องหลัง” ในป๊อปอัปของส่วนขยาย" : "อ่านเองอยู่เบื้องหลังในหน้าต่าง Chrome แยกที่ย่อไว้ (minimized) ไม่เปิดแท็บในหน้าต่างของคุณและไม่แย่งโฟกัส — ปิดได้ ระบบจะสร้างใหม่แบบย่อไว้เอง",
     },
     {
       key: "ext-last-post",

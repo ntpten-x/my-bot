@@ -46,6 +46,9 @@ const putSchema = z.object({
   watchExtOfflineMinutes: z.number().int().min(5).max(720).optional(),
   watchAlertEveryHours: z.number().int().min(1).max(48).optional(),
   watchParseSpikePct: z.number().int().min(10).max(100).optional(),
+  quietPauseOnFacebook: z.boolean().optional(),
+  quietWindow: z.string().max(200).regex(/^(\s*\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}\s*)?(,\s*\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}\s*)*$/, "รูปแบบเวลาเช่น 19:00-23:00").optional(),
+  quietPauseWhenLocked: z.boolean().optional(),
   summaryTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   embedModel: z.string().optional(),
   geminiEmbedModel: z.string().optional(),
@@ -92,6 +95,9 @@ export async function PUT(request: Request) {
   set("watch_ext_offline_minutes", body.watchExtOfflineMinutes);
   set("watch_alert_every_hours", body.watchAlertEveryHours);
   set("watch_parse_spike_pct", body.watchParseSpikePct);
+  set("quiet_pause_on_facebook", body.quietPauseOnFacebook);
+  set("quiet_window", body.quietWindow);
+  set("quiet_pause_when_locked", body.quietPauseWhenLocked);
   set("summary_time", body.summaryTime);
   set("embed_model", body.embedModel?.trim());
   set("gemini_embed_model", body.geminiEmbedModel?.trim());
