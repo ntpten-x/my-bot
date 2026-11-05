@@ -1,6 +1,6 @@
-export type IntentLabel = "buyer" | "seller" | "ad" | "unknown";
+export type IntentLabel = "buyer" | "seller" | "ad" | "chat" | "unknown";
 export function classificationMetrics(rows: { expected: IntentLabel; predicted: IntentLabel }[]) {
-  const labels: IntentLabel[] = ["buyer", "seller", "ad", "unknown"];
+  const labels: IntentLabel[] = ["buyer", "seller", "ad", "chat", "unknown"];
   return {
     count: rows.length,
     accuracy: rows.length ? rows.filter(row => row.expected === row.predicted).length / rows.length : null,

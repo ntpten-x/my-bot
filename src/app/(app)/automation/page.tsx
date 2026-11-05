@@ -152,6 +152,7 @@ export default function AutomationPage() {
               <option value="">ทุกเจตนา</option>
               <option value="buyer">กำลังหา (ลูกค้า)</option>
               <option value="seller">กำลังขาย</option>
+              <option value="chat">พูดคุย/ถามทั่วไป</option>
               <option value="unknown">ไม่ชัด</option>
             </Select>
           </div>

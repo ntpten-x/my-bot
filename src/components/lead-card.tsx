@@ -11,6 +11,18 @@ import { useTemplates } from "@/components/templates-store";
 import { assistReply } from "@/components/assist-reply";
 import { pickTemplate } from "@/lib/reply-queue-core";
 
+type CatOption = { id: string; name: string; parentId: string | null };
+let categoriesPromise: Promise<CatOption[]> | null = null;
+function loadCategories() {
+  categoriesPromise ??= api<{ categories: CatOption[] }>("/api/categories")
+    .then((data) => data.categories)
+    .catch(() => {
+      categoriesPromise = null;
+      return [];
+    });
+  return categoriesPromise;
+}
+
 function bangkokDate(iso: string) {
   return new Intl.DateTimeFormat("th-TH", { timeZone: "Asia/Bangkok", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
 }
@@ -32,6 +44,10 @@ export function LeadCard({
   const [templateText, setTemplateText] = useState("");
   const [assistNote, setAssistNote] = useState("");
   const [awaitingSent, setAwaitingSent] = useState(false);
+  const [fixOpen, setFixOpen] = useState(false);
+  const [cats, setCats] = useState<CatOption[]>([]);
+  const [fixCat, setFixCat] = useState("");
+  const [fixIntent, setFixIntent] = useState<string>(lead.intent);
   const templates = useTemplates();
   const usable = templates.filter((item) => !item.categoryId || item.categoryId === lead.category?.id || item.categoryId === lead.subcategory?.id);
 
@@ -97,6 +113,28 @@ export function LeadCard({
         body: JSON.stringify({ action }),
       });
       onChange(data.post);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openFix() {
+    setFixOpen((open) => !open);
+    setFixIntent(lead.intent);
+    setFixCat(lead.category ? `${lead.category.id}|${lead.subcategory?.id ?? ""}` : "");
+    if (!cats.length) setCats(await loadCategories());
+  }
+
+  async function saveFix() {
+    const [categoryId, subcategoryId] = fixCat.split("|");
+    setBusy(true);
+    try {
+      const data = await api<{ post: Lead }>(`/api/posts/${lead.id}/relabel`, {
+        method: "POST",
+        body: JSON.stringify({ categoryId: categoryId || null, subcategoryId: subcategoryId || null, intent: fixIntent }),
+      });
+      onChange(data.post);
+      setFixOpen(false);
     } finally {
       setBusy(false);
     }
@@ -242,6 +280,9 @@ export function LeadCard({
           {lead.isRead ? "ยังไม่อ่าน" : "อ่านแล้ว"}
         </Button>
         <Button size="sm" variant="outline" onClick={() => feedback("dismiss")} disabled={busy}>ไม่สนใจ</Button>
+        <Button size="sm" variant="outline" onClick={() => void openFix()} disabled={busy} title="หมวดหรือเจตนาไม่ถูก เลือกค่าที่ถูก">
+          หมวดผิด
+        </Button>
         <Button size="sm" variant="pine" onClick={() => (lead.isSaved ? patch({ isSaved: false, pipelineStatus: "none" }) : feedback("save"))} disabled={busy}>
           {lead.isSaved ? "เอาออกจากไปป์ไลน์" : "เก็บเข้าไปป์ไลน์"}
         </Button>
@@ -271,6 +312,32 @@ export function LeadCard({
           ))}
         </select>
       </div>
+      {fixOpen ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-line p-2 text-xs">
+          <span className="text-muted">หมวดที่ถูก</span>
+          <select className="h-8 rounded-lg border border-line bg-card px-2" value={fixCat} onChange={(event) => setFixCat(event.target.value)}>
+            <option value="">ไม่มีหมวด</option>
+            {cats
+              .filter((item) => !item.parentId)
+              .flatMap((parent) => [
+                <option key={parent.id} value={`${parent.id}|`}>{parent.name}</option>,
+                ...cats
+                  .filter((child) => child.parentId === parent.id)
+                  .map((child) => (
+                    <option key={child.id} value={`${parent.id}|${child.id}`}>— {parent.name} / {child.name}</option>
+                  )),
+              ])}
+          </select>
+          <span className="text-muted">เจตนา</span>
+          <select className="h-8 rounded-lg border border-line bg-card px-2" value={fixIntent} onChange={(event) => setFixIntent(event.target.value)}>
+            {Object.entries(INTENT_LABEL).map(([id, label]) => (
+              <option key={id} value={id}>{label}</option>
+            ))}
+          </select>
+          <Button size="sm" variant="pine" onClick={() => void saveFix()} disabled={busy}>บันทึกหมวดที่ถูก</Button>
+          <Button size="sm" variant="outline" onClick={() => setFixOpen(false)}>ยกเลิก</Button>
+        </div>
+      ) : null}
       {showNotes ? (
         <div className="mt-4 border-t border-line pt-3">
           {lead.notes.map((item) => (

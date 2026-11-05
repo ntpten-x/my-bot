@@ -122,6 +122,7 @@ model Post {
   notes            Note[]
   notifications    Notification[]
   feedback         Feedback[]
+  labelFixes       LabelCorrection[]
 
   @@unique([sourceId, externalUrl])
   @@index([createdAt])
@@ -484,6 +485,25 @@ model PostTombstone {
 
   @@index([sourceId, externalUrl])
   @@index([createdAt])
+}
+
+/// Owner pressed "หมวดผิด" and picked the right label: ground truth for per-group accuracy.
+model LabelCorrection {
+  id              String   @id @default(cuid())
+  postId          String
+  post            Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  sourceId        String
+  fromCategory    String   @default("")
+  fromSubcategory String   @default("")
+  fromIntent      String   @default("")
+  fromProvider    String   @default("")
+  toCategory      String   @default("")
+  toSubcategory   String   @default("")
+  toIntent        String   @default("")
+  createdAt       DateTime @default(now())
+
+  @@index([sourceId, createdAt])
+  @@index([postId])
 }
 
 model SentKey {

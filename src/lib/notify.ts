@@ -19,6 +19,7 @@ type LeadNotice = {
 const INTENT_LABEL: Record<string, string> = {
   buyer: "กำลังหา",
   seller: "กำลังขาย",
+  chat: "พูดคุย/ถามทั่วไป",
   unknown: "ไม่ชัด",
 };
 

@@ -15,7 +15,7 @@ export const ruleSchema = z.object({
   categoryId: z.string().nullable().optional(),
   keywords: z.string().max(500).optional(),
   provinces: z.string().max(1500).optional(),
-  intent: z.enum(["", "buyer", "seller", "unknown"]).optional(),
+  intent: z.enum(["", "buyer", "seller", "chat", "unknown"]).optional(),
   minScore: z.number().int().min(0).max(100).optional(),
   actionNotify: z.boolean().optional(),
   actionSave: z.boolean().optional(),

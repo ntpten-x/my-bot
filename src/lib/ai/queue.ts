@@ -14,6 +14,7 @@ import { scoreAd } from "../pipeline/ad-filter";
 import { ruleItem, type AiItem } from "../pipeline/classify-rules";
 import { syncDuplicateLabels } from "../smart/duplicate-labels";
 import { setOwnerExamples } from "./prompt";
+import { loadGroupHints } from "../group-profiles";
 
 /** Ad score at which a post is plainly an ad: rules label it and the model is not called. */
 export const OBVIOUS_AD_SCORE = 4;
@@ -117,13 +118,17 @@ export async function processAiQueue() {
       claimed = [];
       return jobs.length;
     }
-    const [{ rows, catalog }] = await Promise.all([loadCatalogFromDb(), loadOwnerExamples().catch(() => undefined)]);
+    const [{ rows, catalog }, hints] = await Promise.all([
+      loadCatalogFromDb(),
+      loadGroupHints(jobs.map(job => job.post.sourceId)).catch(() => new Map()),
+      loadOwnerExamples().catch(() => undefined),
+    ]);
     const inputs = [];
     const adItems: AiItem[] = [];
     for (const job of jobs) {
       // Plain ads skip the model: rules are enough and it saves several seconds per batch.
       if (job.post.source?.type !== "facebook_marketplace" && scoreAd(job.post.text).score >= OBVIOUS_AD_SCORE) {
-        adItems.push({ ...ruleItem({ id: job.postId, text: job.post.text }, catalog), isAd: true, intent: "ad" });
+        adItems.push({ ...ruleItem({ id: job.postId, text: job.post.text, groupHint: hints.get(job.post.sourceId) ?? null }, catalog), isAd: true, intent: "ad" });
         continue;
       }
       let ocrText = job.post.ocrText;
@@ -136,7 +141,7 @@ export async function processAiQueue() {
           await workerLog({ level: "error", jobId: job.id, postId: job.postId, message: "OCR ล้มเหลว จะจัดหมวดต่อโดยไม่มีข้อความจากรูป" });
         }
       }
-      inputs.push({ id: job.postId, text: ocrText ? `${job.post.text}\n${ocrText}` : job.post.text, contentHash: ocrText ? `${job.post.contentHash}:ocr` : job.post.contentHash });
+      inputs.push({ id: job.postId, text: ocrText ? `${job.post.text}\n${ocrText}` : job.post.text, contentHash: ocrText ? `${job.post.contentHash}:ocr` : job.post.contentHash, groupHint: hints.get(job.post.sourceId) ?? null });
     }
     const outcome = await classifyLeads(inputs, catalog, settings, {
       async get(key) {

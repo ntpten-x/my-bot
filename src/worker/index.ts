@@ -19,6 +19,7 @@ import { maybeBuildScheduledReplyQueue } from "../lib/reply-queue";
 import { acquireLease, releaseLease, pruneSentKeys, INSTANCE_ID, WORKER_LEASE, WORKER_LEASE_MS } from "../lib/lease";
 import { runWatchdog } from "../lib/watchdog";
 import { maybeRunRetention } from "../lib/retention";
+import { maybeReclassify } from "../lib/reclassify";
 
 process.env.MYBOT_PROCESS = "worker";
 
@@ -126,6 +127,7 @@ async function tick() {
     await maybeSendScheduledSummary();
     await maybeBackupDatabase();
     await maybeRunRetention().catch(() => undefined);
+    await maybeReclassify().catch(() => undefined);
     await collapseTruncatedCaptures();
     await processFollowUps().catch((error) => workerLog({ level: "error", message: "เตือนตามลีดไม่สำเร็จ", error: String(error).slice(0, 300) }));
     await maybeBuildScheduledReplyQueue().catch((error) => workerLog({ level: "error", message: "สร้างคิวตอบลีดไม่สำเร็จ", error: String(error).slice(0, 300) }));

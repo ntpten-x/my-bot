@@ -13,6 +13,7 @@ import { STOP_REASON_LABEL, readerHealth } from "./scrape-runs";
 import { coverageBySource } from "./coverage-data";
 import type { Coverage } from "./coverage";
 import { parseWatchState } from "./watchdog";
+import { classificationStats } from "./classification-stats";
 import {
   ageMs,
   bangkokLabel,
@@ -599,6 +600,30 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
   if (map.worker_leader) {
     boardChecks.push({ key: "watch_leader", label: "เครื่องที่รันงานเบื้องหลัง", level: "ok", value: map.worker_leader.split(":")[0], detail: "local และ Render ใช้ฐานข้อมูลเดียวกัน — รันคิว/แจ้งเตือนเพียงเครื่องเดียวเพื่อไม่ให้ซ้ำ" });
   }
+
+  const cls = await classificationStats(now).catch(() => []);
+  const short = (name: string) => name.replace(/^กลุ่ม\s*/, "").slice(0, 24);
+  const withReview = cls.filter((row) => row.accuracy !== null);
+  const corrected = cls.reduce((sum, row) => sum + row.corrected, 0);
+  const reviewed = cls.reduce((sum, row) => sum + row.reviewed, 0);
+  const worst = withReview.length ? Math.min(...withReview.map((row) => row.accuracy ?? 1)) : 1;
+  aiChecks.push({
+    key: "ai-accuracy",
+    label: "ความแม่นยำการจัดหมวดต่อกลุ่ม (30 วัน)",
+    level: !reviewed ? "off" : worst < 0.7 ? "warn" : "ok",
+    value: reviewed ? `ดูแล้ว ${reviewed} โพสต์ · แก้ “หมวดผิด” ${corrected} · แม่น ${Math.round(((reviewed - corrected) / reviewed) * 100)}%` : "ยังไม่มีโพสต์ที่ตรวจ",
+    detail: withReview.slice(0, 8).map((row) => `${short(row.name)} ${Math.round((row.accuracy ?? 0) * 100)}% (${row.corrected}/${row.reviewed})`).join(" · ") || undefined,
+    hint: "กด “หมวดผิด” ที่การ์ดโพสต์เพื่อแก้หมวด/เจตนา ระบบจะนับเป็นค่าจริงและใช้เป็นตัวอย่างให้ AI",
+  });
+  const otherWeek = cls.reduce((sum, row) => sum + row.other7d, 0);
+  aiChecks.push({
+    key: "ai-other-weekly",
+    label: "โพสต์หมวด “อื่นๆ” 7 วันล่าสุด",
+    level: otherWeek >= 20 ? "warn" : "ok",
+    value: `${otherWeek} โพสต์ · จัดด้วยกฎ (30 วัน) ${cls.reduce((sum, row) => sum + row.ruleDecided, 0)}`,
+    detail: cls.filter((row) => row.other7d).slice(0, 8).map((row) => `${short(row.name)} ${row.other7d}`).join(" · ") || undefined,
+    hint: otherWeek ? "ระบบส่งโพสต์ “อื่นๆ”/จัดด้วยกฎ ให้ AI จัดใหม่ทีละ 20 โพสต์ทุก 30 นาที เมื่อ AI ว่าง" : undefined,
+  });
 
   const sections = [
     section("board", "สถานะรวม", boardChecks),
