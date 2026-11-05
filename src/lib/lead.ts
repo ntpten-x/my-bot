@@ -90,6 +90,14 @@ export type AutomationRuleRow = {
   actionSave: boolean;
   actionDismiss: boolean;
   templateId: string | null;
+  subcategoryId: string | null;
+  productId: string | null;
+  sourceIds: string;
+  excludeKeywords: string;
+  maxAgeHours: number;
+  priority: number;
+  actionQueue: boolean;
+  templateIds: string;
   hitCount: number;
   lastHitAt: string | null;
 };

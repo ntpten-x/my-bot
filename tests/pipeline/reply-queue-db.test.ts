@@ -15,7 +15,7 @@ vi.mock("../../src/lib/notify", () => ({ dispatchNotification: vi.fn(async (...a
 
 import { prisma } from "../../src/lib/prisma";
 import { upsertSettings } from "../../src/lib/settings";
-import { ReplyQueueError, buildReplyQueue, editReplyItem, finishReplyItem, openNextReplyItem, openReplyItem, replyAdvanceInfo, replyQueueState } from "../../src/lib/reply-queue";
+import { ReplyQueueError, buildReplyQueue, ruleQueueStats, editReplyItem, finishReplyItem, openNextReplyItem, openReplyItem, replyAdvanceInfo, replyQueueState } from "../../src/lib/reply-queue";
 
 let seq = 0;
 async function post(sourceId: string, authorName: string, extra: Record<string, unknown> = {}) {
@@ -51,6 +51,7 @@ beforeEach(async () => {
   await prisma.post.deleteMany();
   await prisma.source.deleteMany();
   await prisma.replyTemplate.deleteMany();
+  await prisma.automationRule.deleteMany();
   await prisma.setting.deleteMany({ where: { key: { startsWith: "reply_" } } });
   await upsertSettings({ reply_daily_cap: "20", reply_group_daily_cap: "2", reply_author_days: "7", reply_min_score: "60", reply_gap_min_minutes: "2", reply_gap_max_minutes: "5" });
 });
@@ -107,6 +108,32 @@ describe.skipIf(!fixture.enabled)("reply queue against Postgres", () => {
 
     await finishReplyItem(second.id, "skip");
     expect((await prisma.replyQueueItem.findUniqueOrThrow({ where: { id: second.id } })).status).toBe("skipped");
+  });
+
+  it("comment rules: only matching posts queue, explicit templates rotate, stats per rule", async () => {
+    const g1 = await prisma.source.create({ data: { type: "facebook_group", name: "Roblox TH", url: "https://www.facebook.com/groups/11" } });
+    const g2 = await prisma.source.create({ data: { type: "facebook_group", name: "อื่นๆ", url: "https://www.facebook.com/groups/12" } });
+    const [t1, t2] = await Promise.all([
+      prisma.replyTemplate.create({ data: { name: "R1", body: "รับ {author} 1" } }),
+      prisma.replyTemplate.create({ data: { name: "R2", body: "รับ {author} 2" } }),
+    ]);
+    await prisma.replyTemplate.create({ data: { name: "ทั่วไป", body: "ทั่วไป {author}" } });
+    const rule = await prisma.automationRule.create({
+      data: { name: "Roblox", actionQueue: true, actionNotify: false, intent: "", minScore: 30, sourceIds: g1.id, excludeKeywords: "ขายไอดี", templateIds: `${t1.id},${t2.id}` },
+    });
+    await post(g1.id, "เอ", { score: 40, intent: "seller" }); // below default min score/intent, but the rule allows it
+    await post(g1.id, "บี");
+    await post(g1.id, "ซี", { text: "ขายไอดี roblox" }); // excluded word
+    await post(g2.id, "ดี"); // other group
+    const built = await buildReplyQueue({ notify: false });
+    expect(built.created).toBe(2);
+    const items = await prisma.replyQueueItem.findMany({ include: { post: true } });
+    expect(new Set(items.map((item) => item.post.authorName))).toEqual(new Set(["เอ", "บี"]));
+    expect(items.every((item) => item.ruleId === rule.id)).toBe(true);
+    expect(new Set(items.map((item) => item.templateId))).toEqual(new Set([t1.id, t2.id]));
+    const stats = await ruleQueueStats();
+    expect(stats[rule.id]).toMatchObject({ queued: 2, eligibleNow: 0 });
+    expect((await replyQueueState()).items.every((item) => item.ruleName === "Roblox")).toBe(true);
   });
 
   it("respects the daily cap", async () => {

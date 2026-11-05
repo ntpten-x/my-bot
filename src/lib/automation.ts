@@ -20,6 +20,11 @@ export type RuleLike = {
   provinces: string;
   intent: string;
   minScore: number;
+  subcategoryId?: string | null;
+  productId?: string | null;
+  sourceIds?: string;
+  excludeKeywords?: string;
+  maxAgeHours?: number;
 };
 
 export type RulePost = {
@@ -33,15 +38,32 @@ export type RulePost = {
   isAd: boolean;
   forbiddenHit: boolean;
   duplicateOfId: string | null;
+  productId?: string | null;
+  sourceId?: string;
+  postedAt?: Date | null;
+  createdAt?: Date;
 };
 
 export function splitList(value: string) {
   return value.split(/[,\n|]/).map((part) => part.trim()).filter(Boolean);
 }
 
-export function matchRule(rule: RuleLike, post: RulePost) {
+export function matchRule(rule: RuleLike, post: RulePost, now = Date.now()) {
   if (!rule.enabled || post.isAd || post.forbiddenHit || post.duplicateOfId) return false;
   if (rule.categoryId && post.categoryId !== rule.categoryId && post.subcategoryId !== rule.categoryId) return false;
+  if (rule.subcategoryId && post.subcategoryId !== rule.subcategoryId) return false;
+  if (rule.productId && post.productId !== rule.productId) return false;
+  const sources = splitList(rule.sourceIds ?? "");
+  if (sources.length && (!post.sourceId || !sources.includes(post.sourceId))) return false;
+  if (rule.maxAgeHours && rule.maxAgeHours > 0) {
+    const at = post.postedAt ?? post.createdAt;
+    if (at && now - at.getTime() > rule.maxAgeHours * 3_600_000) return false;
+  }
+  const excluded = splitList(rule.excludeKeywords ?? "").map((word) => word.toLowerCase().replace(/\s+/g, " "));
+  if (excluded.length) {
+    const haystack = `${post.text}\n${post.ocrText}`.toLowerCase().replace(/\s+/g, " ");
+    if (excluded.some((word) => haystack.includes(word))) return false;
+  }
   if (rule.intent && post.intent !== rule.intent) return false;
   if (post.score < rule.minScore) return false;
   const provinces = splitList(rule.provinces);
@@ -52,6 +74,16 @@ export function matchRule(rule: RuleLike, post: RulePost) {
     if (!keywords.some((word) => haystack.includes(word.replace(/\s+/g, " ")))) return false;
   }
   return true;
+}
+
+/** Queue rules in run order: priority asc, then oldest first. */
+export function sortQueueRules<T extends { priority?: number; createdAt?: Date }>(rules: T[]) {
+  return [...rules].sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0) || (a.createdAt?.getTime() ?? 0) - (b.createdAt?.getTime() ?? 0));
+}
+
+/** First (highest priority) enabled queue rule this post matches, or null. */
+export function queueRuleFor<T extends RuleLike & { actionQueue?: boolean; priority?: number; createdAt?: Date }>(rules: T[], post: RulePost, now = Date.now()) {
+  return sortQueueRules(rules.filter((rule) => rule.actionQueue)).find((rule) => matchRule(rule, post, now)) ?? null;
 }
 
 export function followUpDate(days: number, from = new Date()) {

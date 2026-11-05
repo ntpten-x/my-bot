@@ -329,6 +329,20 @@ model AutomationRule {
   actionSave    Boolean   @default(false)
   actionDismiss Boolean   @default(false)
   templateId    String?
+  /// ชุดตอบกลับ/กฎการเม้น: extra conditions (all optional).
+  subcategoryId   String?
+  productId       String?
+  /// Comma-separated Source ids; "" = every group.
+  sourceIds       String  @default("")
+  excludeKeywords String  @default("")
+  /// 0 = no limit (queue still only looks back 24 h unless a rule asks for more, max 168).
+  maxAgeHours     Int     @default(0)
+  /// Lower runs first when a post matches several queue rules.
+  priority        Int     @default(0)
+  /// Put matching posts into the assisted reply queue (owner still presses send).
+  actionQueue     Boolean @default(false)
+  /// Comma-separated explicit template ids; "" = auto (group/product-scoped set).
+  templateIds     String  @default("")
   hitCount      Int       @default(0)
   lastHitAt     DateTime?
   createdAt     DateTime  @default(now())
@@ -355,6 +369,8 @@ model ReplyQueueItem {
   sourceId   String
   authorKey  String    @default("")
   templateId String?
+  /// AutomationRule that queued it (null = default queue filters).
+  ruleId     String?
   text       String
   day        String
   status     String    @default("queued")

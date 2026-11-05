@@ -26,4 +26,28 @@ export const ruleSchema = z.object({
   actionSave: z.boolean().optional(),
   actionDismiss: z.boolean().optional(),
   templateId: z.string().nullable().optional(),
+  subcategoryId: z.string().nullable().optional(),
+  productId: z.string().nullable().optional(),
+  sourceIds: z.array(z.string().min(1)).max(200).optional(),
+  excludeKeywords: z.string().max(500).optional(),
+  maxAgeHours: z.number().int().min(0).max(168).optional(),
+  priority: z.number().int().min(0).max(999).optional(),
+  actionQueue: z.boolean().optional(),
+  templateIds: z.array(z.string().min(1)).max(100).optional(),
 });
+
+/** Turns the API body into Prisma data (arrays → comma lists, "" → null). */
+export function ruleData<T extends Partial<z.infer<typeof ruleSchema>>>(input: T) {
+  const { sourceIds, templateIds, ...rest } = input;
+  const nullable = (key: "categoryId" | "templateId" | "subcategoryId" | "productId") =>
+    rest[key] !== undefined ? { [key]: rest[key] || null } : {};
+  return {
+    ...rest,
+    ...nullable("categoryId"),
+    ...nullable("templateId"),
+    ...nullable("subcategoryId"),
+    ...nullable("productId"),
+    ...(sourceIds !== undefined ? { sourceIds: sourceIds.join(",") } : {}),
+    ...(templateIds !== undefined ? { templateIds: templateIds.join(",") } : {}),
+  };
+}

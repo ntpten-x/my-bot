@@ -4,7 +4,8 @@ import { bangkokClock } from "./smart/summary";
 import { dispatchNotification } from "./notify";
 import { inServiceArea } from "./service-area";
 import { renderTemplate } from "./templates";
-import { followUpDate } from "./automation";
+import { followUpDate, queueRuleFor, sortQueueRules, splitList } from "./automation";
+import type { AppSettings } from "./settings";
 import { workerLog } from "./log";
 import { ADVANCE_REASON_TH, advanceDecision, authorKeyOf, dueSlot, gapRemainingMs, pickTemplate, randomGapMs, rankTemplates, selectQueue } from "./reply-queue-core";
 
@@ -22,6 +23,93 @@ async function readSetting(key: string) {
   return (await prisma.setting.findUnique({ where: { key } }))?.value ?? null;
 }
 
+type QueueRule = Awaited<ReturnType<typeof loadQueueRules>>[number];
+type TemplateRow = Awaited<ReturnType<typeof prisma.replyTemplate.findMany>>[number];
+
+/** Enabled "กฎการเม้น" rules (actionQueue), in priority order. */
+export async function loadQueueRules() {
+  return sortQueueRules(await prisma.automationRule.findMany({ where: { enabled: true, actionQueue: true } }));
+}
+
+/**
+ * Posts the queue may take right now. With comment rules: only posts a rule matches (first
+ * rule by priority wins). Without rules: the default filters (buyer, min score, last 24 h).
+ * Read-only; also used for the dry-run preview.
+ */
+export async function queueCandidates(settings: AppSettings, rules: QueueRule[], now = Date.now()) {
+  const ruleMode = rules.length > 0;
+  const hours = ruleMode ? Math.min(168, Math.max(24, ...rules.map((rule) => rule.maxAgeHours || 24))) : 24;
+  const posts = await prisma.post.findMany({
+    where: {
+      createdAt: { gte: new Date(now - hours * 3_600_000) },
+      dismissed: false,
+      isAd: false,
+      forbiddenHit: false,
+      duplicateOfId: null,
+      ...(ruleMode ? {} : { intent: "buyer", score: { gte: settings.replyMinScore } }),
+      repliedAt: null,
+      pipelineStatus: { in: ["none", "following"] },
+      replyItem: { is: null },
+    },
+    include: { source: { select: { name: true } }, category: { select: { name: true } }, subcategory: { select: { name: true } }, product: { select: { name: true } } },
+    relationLoadStrategy: "join",
+    orderBy: [{ score: "desc" }, { createdAt: "desc" }],
+    take: 500,
+  });
+  const area = settings.serviceAreaNotifyOnly ? settings.serviceProvinces : [];
+  const inArea = posts.filter((post) => inServiceArea(post.province, area));
+  if (ruleMode) {
+    const order = new Map(rules.map((rule, index) => [rule.id, index]));
+    return inArea
+      .map((post) => ({ post, rule: queueRuleFor(rules, post, now) }))
+      .filter((row): row is { post: (typeof inArea)[number]; rule: QueueRule } => row.rule !== null)
+      .sort((a, b) => order.get(a.rule.id)! - order.get(b.rule.id)! || b.post.score - a.post.score);
+  }
+  const hits = await prisma.ruleHit.findMany({ where: { postId: { in: inArea.map((post) => post.id) } }, select: { postId: true } });
+  const ruleHit = new Set(hits.map((row) => row.postId));
+  inArea.sort((a, b) => Number(ruleHit.has(b.id)) - Number(ruleHit.has(a.id)) || b.score - a.score);
+  return inArea.map((post) => ({ post, rule: null as QueueRule | null }));
+}
+
+/** Rule's explicit templates (rotated, least used) or the best group/product-scoped set. */
+export function chooseTemplate(
+  templates: TemplateRow[],
+  post: { categoryId: string | null; subcategoryId: string | null; productId: string | null; sourceId: string },
+  rule: { templateIds: string; templateId: string | null } | null,
+  usage: Map<string, number>,
+) {
+  const explicit = rule ? splitList(rule.templateIds) : [];
+  if (!explicit.length && rule?.templateId) explicit.push(rule.templateId);
+  const pool = templates.filter((item) => explicit.includes(item.id));
+  if (pool.length) {
+    const picked = pickTemplate(pool.map((item) => ({ ...item, categoryId: null, productId: null, sourceIds: "" })), [], usage);
+    return pool.find((item) => item.id === picked?.id) ?? null;
+  }
+  return pickTemplate(templates, [post.categoryId, post.subcategoryId], usage, { productId: post.productId, sourceId: post.sourceId });
+}
+
+/** Per rule: matched today (RuleHit since Bangkok midnight), today's queue by status, eligible right now. */
+export async function ruleQueueStats() {
+  const day = bangkokClock().day;
+  const midnight = new Date(`${day}T00:00:00+07:00`);
+  const [settings, rules, hits, items] = await Promise.all([
+    getSettings(),
+    loadQueueRules(),
+    prisma.ruleHit.groupBy({ by: ["ruleId"], where: { createdAt: { gte: midnight } }, _count: { _all: true } }),
+    prisma.replyQueueItem.groupBy({ by: ["ruleId", "status"], where: { day, ruleId: { not: null } }, _count: { _all: true } }),
+  ]);
+  const candidates = rules.length ? await queueCandidates(settings, rules) : [];
+  const stats: Record<string, { matchedToday: number; queued: number; opened: number; sent: number; skipped: number; eligibleNow: number }> = {};
+  const row = (id: string) => (stats[id] ??= { matchedToday: 0, queued: 0, opened: 0, sent: 0, skipped: 0, eligibleNow: 0 });
+  for (const hit of hits) row(hit.ruleId).matchedToday = hit._count._all;
+  for (const item of items) {
+    const key = item.status as "queued" | "opened" | "sent" | "skipped";
+    if (item.ruleId && key in row(item.ruleId)) row(item.ruleId)[key] = item._count._all;
+  }
+  for (const candidate of candidates) if (candidate.rule) row(candidate.rule.id).eligibleNow += 1;
+  return stats;
+}
+
 // Builds today's queue of leads with filled drafts. Nothing is ever posted from here.
 export async function buildReplyQueue(options: { notify?: boolean } = {}) {
   const settings = await getSettings();
@@ -30,31 +118,11 @@ export async function buildReplyQueue(options: { notify?: boolean } = {}) {
   const remaining = settings.replyDailyCap - already.length;
   if (remaining <= 0) return { created: 0, reason: "ครบโควตาวันนี้แล้ว" };
 
-  const since = new Date(Date.now() - 24 * 3_600_000);
   const authorSince = new Date(Date.now() - settings.replyAuthorDays * 86_400_000);
-  const posts = await prisma.post.findMany({
-    where: {
-      createdAt: { gte: since },
-      dismissed: false,
-      isAd: false,
-      forbiddenHit: false,
-      duplicateOfId: null,
-      intent: "buyer",
-      score: { gte: settings.replyMinScore },
-      repliedAt: null,
-      pipelineStatus: { in: ["none", "following"] },
-      replyItem: { is: null },
-    },
-    include: { source: { select: { name: true } }, category: { select: { name: true } }, subcategory: { select: { name: true } }, product: { select: { name: true } } },
-    relationLoadStrategy: "join",
-    orderBy: [{ score: "desc" }, { createdAt: "desc" }],
-    take: 300,
-  });
-  const area = settings.serviceAreaNotifyOnly ? settings.serviceProvinces : [];
-  const inArea = posts.filter((post) => inServiceArea(post.province, area));
-  const hits = await prisma.ruleHit.findMany({ where: { postId: { in: inArea.map((post) => post.id) } }, select: { postId: true } });
-  const ruleHit = new Set(hits.map((row) => row.postId));
-  inArea.sort((a, b) => Number(ruleHit.has(b.id)) - Number(ruleHit.has(a.id)) || b.score - a.score);
+  const rules = await loadQueueRules();
+  const candidates = await queueCandidates(settings, rules);
+  const inArea = candidates.map((row) => row.post);
+  const ruleOf = new Map(candidates.map((row) => [row.post.id, row.rule]));
 
   const [recentItems, recentReplies] = await Promise.all([
     prisma.replyQueueItem.findMany({ where: { createdAt: { gte: authorSince }, authorKey: { not: "" } }, select: { authorKey: true } }),
@@ -74,7 +142,8 @@ export async function buildReplyQueue(options: { notify?: boolean } = {}) {
   const created: { id: string; author: string; source: string }[] = [];
   for (const choice of picked) {
     const post = byId.get(choice.id)!;
-    const template = pickTemplate(templates, [post.categoryId, post.subcategoryId], usage, { productId: post.productId, sourceId: post.sourceId });
+    const rule = ruleOf.get(post.id) ?? null;
+    const template = chooseTemplate(templates, post, rule, usage);
     const text = template
       ? renderTemplate(template.body, {
           author: post.authorName,
@@ -88,7 +157,7 @@ export async function buildReplyQueue(options: { notify?: boolean } = {}) {
     if (!text) continue;
     try {
       const item = await prisma.replyQueueItem.create({
-        data: { postId: post.id, sourceId: post.sourceId, authorKey: authorKeyOf(post.authorName), templateId: template?.id ?? null, text, day },
+        data: { postId: post.id, sourceId: post.sourceId, authorKey: authorKeyOf(post.authorName), templateId: template?.id ?? null, ruleId: rule?.id ?? null, text, day },
       });
       created.push({ id: item.id, author: post.authorName || "ไม่ทราบชื่อ", source: post.source?.name ?? "" });
     } catch {
@@ -136,6 +205,10 @@ export async function replyQueueState() {
     orderBy: [{ createdAt: "asc" }],
     take: 200,
   }), readSetting(NEXT_KEY), countOpenedToday(day)]);
+  const ruleIds = [...new Set(items.map((item) => item.ruleId).filter((id): id is string => Boolean(id)))];
+  const ruleNames = new Map(
+    (ruleIds.length ? await prisma.automationRule.findMany({ where: { id: { in: ruleIds } }, select: { id: true, name: true } }) : []).map((rule) => [rule.id, rule.name]),
+  );
   return {
     items: items.map((item) => ({
       id: item.id,
@@ -151,6 +224,7 @@ export async function replyQueueState() {
       score: item.post.score,
       province: item.post.province,
       snippet: item.post.text.slice(0, 160),
+      ruleName: item.ruleId ? ruleNames.get(item.ruleId) ?? "" : "",
     })),
     openedToday,
     cap: settings.replyDailyCap,

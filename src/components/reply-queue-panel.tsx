@@ -34,6 +34,7 @@ type QueueItem = {
   score: number;
   province: string | null;
   snippet: string;
+  ruleName?: string;
 };
 type QueueState = { settings: QueueSettings; items: QueueItem[]; openedToday: number; cap: number; nextAllowedAt: string | null };
 
@@ -349,6 +350,7 @@ export function ReplyQueuePanel() {
                   <span className="font-medium text-ink">{item.authorName || "ไม่ทราบชื่อ"}</span>
                   <span>{item.source}</span>
                   <span>คะแนน {item.score}</span>
+                  {item.ruleName ? <span className="rounded-full bg-pine/10 px-2 text-pine">กฎ: {item.ruleName}</span> : null}
                   {item.province ? <span>{item.province}</span> : null}
                   <span className="ml-auto">{STATUS[item.status]}</span>
                 </div>
