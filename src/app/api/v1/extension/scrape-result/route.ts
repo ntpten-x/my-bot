@@ -16,8 +16,19 @@ const schema = z.object({
   ok: z.boolean(),
   postsFound: z.number().int().min(0).max(1000).default(0),
   newPosts: z.number().int().min(0).max(1000).default(0),
-  scrolls: z.number().int().min(0).max(50).default(0),
-  stoppedBy: z.enum(["seen", "old", "cap", "end", "screens", "error"]).default("screens"),
+  scrolls: z.number().int().min(0).max(200).default(0),
+  stoppedBy: z.enum(["seen", "old", "cap", "end", "screens", "limit", "error"]).default("end"),
+  mode: z.enum(["normal", "sweep", "catchup", "audit"]).optional(),
+  coverage: z
+    .object({
+      reachedKnownPost: z.boolean().optional(),
+      hitLimit: z.boolean().optional(),
+      newCount: z.number().int().min(0).max(1000).optional(),
+      stalls: z.number().int().min(0).max(1000).optional(),
+      usedWindow: z.boolean().optional(),
+    })
+    .passthrough()
+    .optional(),
   message: z.string().max(500).optional(),
 });
 

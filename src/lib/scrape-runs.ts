@@ -19,6 +19,7 @@ export const STOP_REASON_LABEL: Record<string, string> = {
   cap: "ครบจำนวนต่อรอบ",
   end: "ไม่มีโพสต์เพิ่ม",
   screens: "เลื่อนครบตามที่ตั้ง",
+  limit: "เลื่อนครบขีดจำกัดรอบนี้",
   error: "ผิดพลาด",
 };
 
@@ -32,12 +33,13 @@ export async function buildExtensionConfig(now = new Date()) {
   const ordered = [...due, ...sources.filter((source) => !due.includes(source))];
   // Known post keys for the sources the extension is likely to open this cycle, so it can stop scrolling early.
   const hints = new Map<string, { keys: string[]; lastSeenAt: string | null; refetch: string[] }>();
-  const since = new Date(now.getTime() - Math.max(24, settings.maxPostAgeHours) * 3600_000);
+  // 72 h of keys so catch-up and hourly sweeps also stop on known posts.
+  const since = new Date(now.getTime() - Math.max(72, settings.maxPostAgeHours) * 3600_000);
   for (const source of due.slice(0, settings.maxGroupsPerCycle + 2)) {
     const rows = await prisma.post.findMany({
       where: { sourceId: source.id, createdAt: { gte: since } },
       orderBy: { createdAt: "desc" },
-      take: 80,
+      take: 300,
       select: { externalUrl: true, postedAt: true, createdAt: true, text: true },
     });
     const keys = [...new Set(rows.map((row) => postKeyFromUrl(row.externalUrl)).filter(Boolean))];
@@ -90,7 +92,11 @@ export type ScrapeRunInput = {
   scrolls: number;
   stoppedBy: string;
   message?: string;
+  mode?: string;
+  coverage?: { reachedKnownPost?: boolean; hitLimit?: boolean; newCount?: number; stalls?: number; usedWindow?: boolean };
 };
+
+const MODE_LABEL: Record<string, string> = { normal: "ปกติ", sweep: "กวาดลึกรายชั่วโมง", catchup: "ตามเก็บย้อนหลัง", audit: "ตรวจความครบ" };
 
 export async function recordScrapeRun(input: ScrapeRunInput, now = new Date(), random = Math.random) {
   const source = await findSourceByUrl(input.sourceUrl);
@@ -122,12 +128,32 @@ export async function recordScrapeRun(input: ScrapeRunInput, now = new Date(), r
     },
   });
   const reason = STOP_REASON_LABEL[stop] ?? stop;
+  const mode = input.mode && MODE_LABEL[input.mode] ? input.mode : "normal";
+  const cov = input.coverage ?? {};
+  await prisma.scrapeRun.create({
+    data: {
+      sourceId: source.id,
+      mode,
+      ok: input.ok,
+      found: Math.max(0, input.postsFound),
+      fresh: Math.max(0, Math.round(cov.newCount ?? 0)),
+      inserted: Math.max(0, input.newPosts),
+      scrolls: Math.max(0, input.scrolls),
+      stoppedBy: stop.slice(0, 40),
+      reachedKnown: Boolean(cov.reachedKnownPost),
+      hitLimit: Boolean(cov.hitLimit),
+      stalls: Math.max(0, Math.round(cov.stalls ?? 0)),
+      usedWindow: Boolean(cov.usedWindow),
+    },
+  });
+  const flags = [cov.hitLimit && !cov.reachedKnownPost ? "⚠ ถึงขีดจำกัดก่อนเจอโพสต์เก่า" : "", cov.stalls ? `โหลดค้าง ${cov.stalls} ครั้ง` : "", cov.usedWindow ? "ใช้หน้าต่างแยก" : ""].filter(Boolean).join(" · ");
+  const prefix = mode === "audit" ? `ตรวจความครบ: เจอโพสต์ที่ยังไม่มีในระบบ ${input.newPosts} โพสต์ · ` : `รอบอ่าน (${MODE_LABEL[mode]}): `;
   await prisma.fetchLog.create({
     data: {
       sourceId: source.id,
       status: input.ok ? "ok" : "error",
       message: input.ok
-        ? `รอบอ่าน: เห็น ${input.postsFound} ใหม่ ${input.newPosts} · เลื่อน ${input.scrolls} หน้าจอ · หยุดเพราะ${reason} · รอบหน้าอีก ~${interval} นาที`
+        ? `${prefix}เห็น ${input.postsFound} ใหม่ ${input.newPosts} · เลื่อน ${input.scrolls} หน้าจอ · หยุดเพราะ${reason} · รอบหน้าอีก ~${interval} นาที${flags ? ` · ${flags}` : ""}`
         : (input.message || "ดึงไม่สำเร็จ").slice(0, 500),
       postsFound: input.ok ? input.newPosts : 0,
     },

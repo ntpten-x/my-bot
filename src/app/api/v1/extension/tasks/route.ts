@@ -44,6 +44,7 @@ export async function GET(request: Request) {
           url: task.source.url,
           type: task.source.type,
           kind: task.source.type === "facebook_marketplace" ? "marketplace" : "group",
+          audit: task.mode === "audit",
         })),
     }),
   );

@@ -145,13 +145,13 @@ describe("extension safety policy", () => {
     }
   });
 
-  it("version 1.5 registers only the mark-sent / skip shortcuts", () => {
+  it("version 1.6 registers only the mark-sent / skip shortcuts", () => {
     const manifest = JSON.parse(readFileSync(path.join(ext, "manifest.json"), "utf8")) as {
       version: string;
       commands: Record<string, { suggested_key?: { default?: string } }>;
       permissions: string[];
     };
-    expect(manifest.version).toBe("1.5.0");
+    expect(manifest.version).toBe("1.6.0");
     expect(manifest.permissions).not.toContain("cookies");
     expect(manifest.permissions).not.toContain("webRequest");
     expect(Object.keys(manifest.commands).sort()).toEqual(["mark-sent", "mark-skip"]);

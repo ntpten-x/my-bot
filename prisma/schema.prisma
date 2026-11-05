@@ -52,6 +52,7 @@ model Source {
   posts           Post[]
   fetchLogs       FetchLog[]
   fetchTasks      FetchTask[]
+  scrapeRuns      ScrapeRun[]
 
   @@index([fbGroupId])
 }
@@ -230,6 +231,7 @@ model AiCache {
 
 model FetchTask {
   id         String    @id @default(cuid())
+  mode       String    @default("scrape")
   sourceId   String
   source     Source    @relation(fields: [sourceId], references: [id], onDelete: Cascade)
   status     String    @default("pending")
@@ -425,4 +427,25 @@ model LoginGuard {
   windowStart DateTime @default(now())
   lockedUntil DateTime?
   updatedAt   DateTime @updatedAt
+}
+
+// One read-only extension run, for coverage stats ("are we missing posts?").
+model ScrapeRun {
+  id           String   @id @default(cuid())
+  sourceId     String
+  source       Source   @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  createdAt    DateTime @default(now())
+  mode         String   @default("normal")
+  ok           Boolean  @default(true)
+  found        Int      @default(0)
+  fresh        Int      @default(0)
+  inserted     Int      @default(0)
+  scrolls      Int      @default(0)
+  stoppedBy    String   @default("")
+  reachedKnown Boolean  @default(false)
+  hitLimit     Boolean  @default(false)
+  stalls       Int      @default(0)
+  usedWindow   Boolean  @default(false)
+
+  @@index([sourceId, createdAt])
 }

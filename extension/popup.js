@@ -62,7 +62,8 @@ document.getElementById("pair").addEventListener("click", async () => {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.token) return void (status.textContent = data.error || "จับคู่ไม่สำเร็จ (HTTP " + response.status + ")");
-    const cfg = { apiBase: parsed.base, token: data.token, enabled: enabled.checked };
+    enabled.checked = true; // paired: start reading automatically (read-only)
+    const cfg = { apiBase: parsed.base, token: data.token, enabled: true };
     await chrome.storage.local.set(cfg);
     code.value = "";
     token.value = "";

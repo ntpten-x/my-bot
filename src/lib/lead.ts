@@ -59,6 +59,7 @@ export type SourceRow = {
   lastRunNew: number;
   lastRunScrolls: number;
   lastRunStop: string;
+  coverage?: import("./coverage").Coverage | null;
   postCount: number;
   logs: { id: string; status: string; message: string; postsFound: number; createdAt: string }[];
 };

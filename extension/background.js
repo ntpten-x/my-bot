@@ -249,7 +249,9 @@ async function reportRun(cfg, group, run) {
       postsFound: run.postsFound,
       newPosts: run.newPosts,
       scrolls: run.scrolls,
-      stoppedBy: run.ok ? run.stoppedBy || "screens" : "error",
+      stoppedBy: run.ok ? run.stoppedBy || "end" : "error",
+      mode: run.mode,
+      coverage: run.stats || undefined,
       message: run.ok ? undefined : run.message,
     });
     if (!response.ok) return null;
@@ -288,84 +290,176 @@ async function readFullTexts(tabId, kind, urls) {
   return found;
 }
 
-async function scrapeGroup(cfg, group, remote) {
+// Wait (read-only) until the feed shows more posts or grows, using a MutationObserver in the page.
+async function waitForGrowth(tabId, kind, before, timeoutMs) {
+  const [executed] = await chrome.scripting.executeScript({
+    target: { tabId },
+    args: [kind, before || 0, timeoutMs],
+    func: (pageKind, prev, limit) =>
+      new Promise((resolve) => {
+        const selector = pageKind === "marketplace" ? 'a[href*="/marketplace/item/"]' : '[role="article"], [aria-posinset]';
+        const count = () => document.querySelectorAll(selector).length;
+        const page = document.scrollingElement || document.documentElement;
+        const startHeight = page.scrollHeight;
+        let done = false;
+        const finish = (grew) => {
+          if (done) return;
+          done = true;
+          observer.disconnect();
+          resolve({ count: count(), grew, height: page.scrollHeight });
+        };
+        const check = () => {
+          if (count() > prev || page.scrollHeight > startHeight + 200) setTimeout(() => finish(true), 700);
+        };
+        const observer = new MutationObserver(check);
+        observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
+        check();
+        setTimeout(() => finish(false), limit);
+      }),
+  });
+  return executed && executed.result ? executed.result : { count: 0, grew: false, height: 0 };
+}
+
+// Lazy loading stalled: scroll up a little and back to the bottom so the feed asks for more (scrollTop only).
+async function nudgeScroll(tabId) {
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => {
+      const page = document.scrollingElement || document.documentElement;
+      page.scrollTop = Math.max(0, page.scrollTop - 900);
+      setTimeout(() => {
+        page.scrollTop = page.scrollHeight;
+      }, 600);
+      return true;
+    },
+  });
+}
+
+async function injectReaders(tabId) {
+  await chrome.scripting.executeScript({ target: { tabId }, files: ["selectors.js", "fbtime.js", "parser.js", "identity.js"] });
+}
+
+// A background tab by default; a small unfocused window when background tabs do not render the feed.
+async function openReader(url, useWindow) {
+  if (useWindow) {
+    const win = await chrome.windows.create({ url, focused: false, state: "normal", width: 560, height: 900, left: 0, top: 0 });
+    const tab = win.tabs && win.tabs[0];
+    return { tabId: tab ? tab.id : undefined, windowId: win.id };
+  }
+  const tab = await chrome.tabs.create({ url, active: false });
+  return { tabId: tab.id, windowId: undefined };
+}
+
+async function closeReader(reader) {
+  if (!reader) return;
+  if (reader.windowId !== undefined) await chrome.windows.remove(reader.windowId).catch(() => undefined);
+  else if (reader.tabId !== undefined) await chrome.tabs.remove(reader.tabId).catch(() => undefined);
+  scrapingTabs.delete(reader.tabId);
+}
+
+// Scroll and read one feed until the stop rule fires. Returns the run (see scrape.js).
+async function readFeed(reader, kind, plan, knownKeys, result) {
+  const Scrape = globalThis.MyBotScrape;
+  const tabId = reader.tabId;
+  const run = Scrape.createRun({ knownKeys, ...plan });
+  await waitComplete(tabId).catch(() => undefined);
+  await injectReaders(tabId);
+  let state = await waitForGrowth(tabId, kind, 0, 12000);
+  if (!state.count) {
+    run.stalls += 1;
+    await sleep(3000);
+    state = await waitForGrowth(tabId, kind, 0, 8000);
+  }
+  const first = await readPage(tabId, kind);
+  if (first.identity) await rememberIdentity(first.identity);
+  if (first.groupId) result.groupId = first.groupId;
+  result.sample = (first.posts || []).slice(0, 8);
+  let stop = Scrape.addStep(run, first.posts);
+  while (!stop) {
+    const before = state.count;
+    await scrollOneScreen(tabId);
+    await sleep(Scrape.scrollWaitMs());
+    state = await waitForGrowth(tabId, kind, before, 6000);
+    for (let retry = 0; !state.grew && retry < 2; retry += 1) {
+      run.stalls += 1;
+      await nudgeScroll(tabId);
+      state = await waitForGrowth(tabId, kind, before, 7000);
+    }
+    const page = await readPage(tabId, kind);
+    stop = Scrape.addStep(run, page.posts);
+  }
+  return run;
+}
+
+function cleanPost(post) {
+  const Scrape = globalThis.MyBotScrape;
+  return { url: post.url, authorName: post.authorName || "", text: Scrape.cleanupText(post.text), postedAt: post.postedAt || null, images: post.images || [] };
+}
+
+async function scrapeGroup(cfg, group, remote, options) {
   const Scrape = globalThis.MyBotScrape;
   const kind = sourceKind(group);
   const settings = await scrapeSettingsFor(remote);
-  const run = Scrape.createRun({ knownKeys: group.knownKeys || [], maxAgeMs: settings.maxAgeMs, maxPosts: settings.maxPosts });
-  const result = { ok: true, postsFound: 0, newPosts: 0, scrolls: 0, stoppedBy: "", message: "", nextRunAt: null };
-  let tabId;
-  let sample = [];
+  const stored = await chrome.storage.local.get({ sweeps: {}, dedicatedWindow: true });
+  const plan = Scrape.planRun({ group, settings, lastSweepAt: stored.sweeps[group.id], audit: Boolean(options && options.audit) });
+  const result = { ok: true, postsFound: 0, newPosts: 0, scrolls: 0, stoppedBy: "", message: "", nextRunAt: null, mode: plan.mode, stats: null };
+  let reader;
   try {
-    const tab = await chrome.tabs.create({ url: Scrape.scrapeUrl(group.url, kind), active: false });
-    tabId = tab.id;
-    scrapingTabs.add(tabId);
-    await waitComplete(tabId);
-    await sleep(2500);
-    await chrome.scripting.executeScript({ target: { tabId }, files: ["selectors.js", "fbtime.js", "parser.js", "identity.js"] });
-    const first = await readPage(tabId, kind);
-    if (first.identity) await rememberIdentity(first.identity);
-    if (first.groupId) result.groupId = first.groupId;
-    sample = (first.posts || []).slice(0, 8);
-    let stop = Scrape.addStep(run, first.posts);
-    while (!stop && result.scrolls < settings.screens) {
-      const moved = await scrollOneScreen(tabId);
-      result.scrolls += 1;
-      await sleep(Scrape.scrollWaitMs());
-      const page = await readPage(tabId, kind);
-      stop = Scrape.addStep(run, page.posts);
-      if (!stop && !moved.moved) stop = Scrape.addStep(run, []);
+    const url = Scrape.scrapeUrl(group.url, kind);
+    reader = await openReader(url, false);
+    scrapingTabs.add(reader.tabId);
+    let run = await readFeed(reader, kind, plan, group.knownKeys || [], result);
+    // The background tab did not render more than one screen: read again in a small unfocused window.
+    if (stored.dedicatedWindow && run.found <= 2 && run.stalls >= 2 && run.stoppedBy !== "seen") {
+      await closeReader(reader);
+      reader = await openReader(url, true);
+      scrapingTabs.add(reader.tabId);
+      const again = await readFeed(reader, kind, plan, group.knownKeys || [], result);
+      again.stalls += run.stalls;
+      again.usedWindow = true;
+      if (again.found >= run.found) run = again;
     }
-    result.stoppedBy = run.stoppedBy || "screens";
+    const stats = Scrape.runStats(run);
+    result.stats = { ...stats, usedWindow: Boolean(run.usedWindow) };
+    result.scrolls = stats.scrolls;
+    result.stoppedBy = run.stoppedBy || "end";
     result.postsFound = run.found;
-    const picked = run.fresh.slice(0, settings.maxPosts);
-    const fresh = picked.map((post) => ({
-      url: post.url,
-      authorName: post.authorName || "",
-      text: Scrape.cleanupText(post.text),
-      postedAt: post.postedAt || null,
-      images: post.images || [],
-    }));
-    if (fresh.length) {
-      const response = await sendPosts(cfg, group.url, fresh);
+    const picked = run.fresh;
+    for (let i = 0; i < picked.length; i += 50) {
+      const response = await sendPosts(cfg, group.url, picked.slice(i, i + 50).map(cleanPost));
       const data = response && response.ok ? await response.clone().json().catch(() => ({})) : {};
-      result.newPosts = Number(data.inserted) || 0;
+      result.newPosts += Number(data.inserted) || 0;
+    }
+    if (plan.mode !== "normal") {
+      stored.sweeps[group.id] = Date.now();
+      await chrome.storage.local.set({ sweeps: stored.sweeps });
     }
     if (kind !== "marketplace") {
       const cut = [...picked.filter((post) => post.truncated).map((post) => post.url), ...(group.refetchUrls || [])];
       const urls = [...new Set(cut.map(String))];
       if (urls.length) {
-        const full = await readFullTexts(tabId, kind, urls);
+        const full = await readFullTexts(reader.tabId, kind, urls);
         if (full.length) {
-          await sendPosts(cfg, group.url, full.map((post) => ({
-            url: post.url,
-            authorName: post.authorName || "",
-            text: Scrape.cleanupText(post.text),
-            postedAt: post.postedAt || null,
-            images: post.images || [],
-          }))).catch(() => undefined);
+          await sendPosts(cfg, group.url, full.map(cleanPost)).catch(() => undefined);
           result.fullTexts = full.length;
         }
       }
     }
-    await postJson(cfg, "/api/v1/extension/sample", { sourceUrl: group.url, posts: sample }).catch(() => undefined);
-    result.message = `อ่านได้ ${run.found} โพสต์ ใหม่ ${result.newPosts} · เลื่อน ${result.scrolls} หน้าจอ`;
+    await postJson(cfg, "/api/v1/extension/sample", { sourceUrl: group.url, posts: result.sample || [] }).catch(() => undefined);
+    result.message = `อ่านได้ ${run.found} โพสต์ ใหม่ ${result.newPosts} · เลื่อน ${result.scrolls} หน้าจอ (${plan.mode})`;
   } catch (error) {
     const message = String(error && error.message ? error.message : error).slice(0, 300);
     await rememberError(`อ่าน ${kind === "marketplace" ? "Marketplace" : "กลุ่ม"} ${group.name || group.url} ไม่สำเร็จ: ${message}`).catch(() => undefined);
-    Object.assign(result, { ok: false, message, postsFound: run.found });
+    Object.assign(result, { ok: false, message });
   } finally {
-    if (tabId) {
-      await chrome.tabs.remove(tabId).catch(() => undefined);
-      scrapingTabs.delete(tabId);
-    }
+    await closeReader(reader);
   }
+  delete result.sample;
   result.nextRunAt = await reportRun(cfg, group, result);
   return result;
 }
-
 let cycling = false;
-const RUN_LOCK_MS = 3 * 60 * 1000;
+const RUN_LOCK_MS = 12 * 60 * 1000;
 
 async function cycle() {
   if (cycling) return;
@@ -428,7 +522,7 @@ async function pollTasks() {
     if (!response.ok) return;
     const data = await response.json();
     for (const task of data.tasks || []) {
-      const result = await scrapeGroup(cfg, task, null);
+      const result = await scrapeGroup(cfg, task, null, { audit: Boolean(task.audit) });
       await postJson(cfg, "/api/v1/extension/tasks", {
         id: task.id,
         status: result.ok ? "done" : "error",

@@ -10,6 +10,8 @@ import { liveTestProvider } from "./ai/live-test";
 import { EXPECTED_EXTENSION_VERSION } from "./extension-heartbeat";
 import { EXTENSION_SOURCE_TYPES, PRIORITY_LABEL, maxIntervalFor, normalizePriority } from "./scrape-plan";
 import { STOP_REASON_LABEL } from "./scrape-runs";
+import { coverageBySource } from "./coverage-data";
+import type { Coverage } from "./coverage";
 import {
   ageMs,
   bangkokLabel,
@@ -58,6 +60,7 @@ export type ScrapeRow = {
   lastRunStop: string;
   nextRunAt: string | null;
   lastError: string;
+  coverage: Coverage | null;
 };
 
 export type InstallRow = {
@@ -291,7 +294,7 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
     {
       key: "ext-reading",
       label: "กำลังอ่านกลุ่ม",
-      level: enabledFb.length ? (activeInstalls.some((row) => row.enabled) || !newest ? "ok" : "warn") : "off",
+      level: enabledFb.length ? (activeInstalls.some((row) => row.enabled) || !newest ? "ok" : "bad") : "off",
       value: `${enabledFb.length} กลุ่ม/Marketplace ที่เปิดไว้ · แท็บ Facebook ที่เปิดอยู่ ${openTabs.length} แท็บ`,
       detail: enabledFb.length ? enabledFb.slice(0, 8).map((source) => source.name).join(", ") : "ยังไม่ได้เพิ่มกลุ่ม Facebook หรือ Marketplace",
       hint: newest && !activeInstalls.some((row) => row.enabled) && enabledFb.length ? "ติ๊ก “เปิดใช้งาน” ในป๊อปอัปของส่วนขยาย" : undefined,
@@ -335,7 +338,9 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
   }));
 
   // ---------- Per-source scrape stats ----------
+  const coverage = await coverageBySource(facebookSources.filter((source) => source.enabled), new Date(now));
   const scrapeRows: ScrapeRow[] = facebookSources.map((source) => ({
+    coverage: coverage.get(source.id) ?? null,
     id: source.id,
     name: source.name,
     kind: source.type === "facebook_marketplace" ? "marketplace" : "group",
@@ -355,11 +360,14 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
     ? facebookSources.slice(0, 20).map((source) => {
         const interval = source.currentIntervalMinutes || source.intervalMinutes;
         const overdueMs = source.nextRunAt ? now - source.nextRunAt.getTime() : 0;
+        const cov = coverage.get(source.id);
         const level: Level = !source.enabled
           ? "off"
-          : source.lastRunStop === "error" || overdueMs > Math.max(15, interval * 2) * 60_000
-            ? "warn"
-            : "ok";
+          : cov?.level === "bad"
+            ? "bad"
+            : source.lastRunStop === "error" || overdueMs > Math.max(15, interval * 2) * 60_000 || cov?.level === "warn"
+              ? "warn"
+              : "ok";
         const next = !source.enabled
           ? "ปิดอยู่"
           : !source.nextRunAt || overdueMs >= 0
@@ -369,9 +377,9 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
           key: `scrape-${source.id}`,
           label: `${source.type === "facebook_marketplace" ? "Marketplace" : "กลุ่ม"}: ${source.name}`,
           level,
-          value: source.lastRunAt ? `ใหม่ ${source.lastRunNew} จาก ${source.lastRunFound} · ${thaiAgo(ageMs(source.lastRunAt, now))}` : "ยังไม่มีรอบอ่านแบบใหม่",
+          value: (cov && source.enabled ? `ความครบ: ${cov.label} · ` : "") + (source.lastRunAt ? `ใหม่ ${source.lastRunNew} จาก ${source.lastRunFound} · ${thaiAgo(ageMs(source.lastRunAt, now))}` : "ยังไม่มีรอบอ่านแบบใหม่"),
           detail: `สำคัญ${PRIORITY_LABEL[normalizePriority(source.priority)]} · ตอนนี้ทุก ${Math.round(interval * 10) / 10} นาที (ตั้งไว้ ${source.intervalMinutes}) · รอบถัดไป ${next}${source.lastRunStop ? ` · หยุดเพราะ${STOP_REASON_LABEL[source.lastRunStop] ?? source.lastRunStop}` : ""}`,
-          hint: level === "warn" ? (source.lastError ? clean(source.lastError) : "เลยรอบมานาน ตรวจว่า Chrome และส่วนขยายเปิดอยู่") : undefined,
+          hint: cov?.reasons.length && source.enabled ? cov.reasons.join(" · ") : level === "warn" ? (source.lastError ? clean(source.lastError) : "เลยรอบมานาน ตรวจว่า Chrome และส่วนขยายเปิดอยู่") : undefined,
         };
       })
     : [{ key: "scrape-none", label: "แหล่งที่ส่วนขยายอ่าน", level: "off" as Level, value: "ยังไม่ได้เพิ่มกลุ่มหรือ Marketplace" }];

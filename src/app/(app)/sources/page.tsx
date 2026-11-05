@@ -13,6 +13,7 @@ const STOP_LABEL: Record<string, string> = {
   cap: "ครบจำนวนต่อรอบ",
   end: "ไม่มีโพสต์เพิ่ม",
   screens: "เลื่อนครบตามที่ตั้ง",
+  limit: "เลื่อนครบขีดจำกัดรอบนี้",
   error: "ผิดพลาด",
 };
 
@@ -138,6 +139,15 @@ export default function SourcesPage() {
                   <Badge>{TYPE_LABEL[source.type] ?? source.type}</Badge>
                   <Badge tone={source.enabled ? "pine" : "neutral"}>{source.enabled ? "เปิด" : "ปิด"}</Badge>
                   {isExtensionSource(source.type) ? <Badge tone={source.priority === "high" ? "pine" : "neutral"}>สำคัญ{PRIORITY_LABEL[source.priority]}</Badge> : null}
+                  {source.coverage && source.enabled ? (
+                    <span
+                      title={source.coverage.reasons.join("\n") || "รอบล่าสุดเลื่อนจนเจอโพสต์ที่เก็บแล้ว"}
+                      className={`rounded-full px-2 py-0.5 text-xs font-medium ${source.coverage.level === "ok" ? "bg-emerald-100 text-emerald-800" : source.coverage.level === "warn" ? "bg-amber-100 text-amber-800" : source.coverage.level === "bad" ? "bg-red-100 text-red-800" : "bg-stone-100 text-stone-600"}`}
+                    >
+                      ความครบ: {source.coverage.label}
+                      {source.coverage.reachedKnownPct !== null ? ` · ${source.coverage.reachedKnownPct}% ถึงโพสต์เดิม` : ""}
+                    </span>
+                  ) : null}
                 </div>
                 <a href={source.url} className="mt-1 block break-all text-sm text-clay" target="_blank" rel="noreferrer">{source.url}</a>
                 <p className="mt-2 text-sm text-muted">
@@ -157,6 +167,13 @@ export default function SourcesPage() {
                     </span>
                     {source.lastRunStop ? <span className="sm:col-span-2 lg:col-span-4">หยุดรอบล่าสุดเพราะ{STOP_LABEL[source.lastRunStop] ?? source.lastRunStop}</span> : null}
                   </div>
+                ) : null}
+                {source.coverage && source.enabled && source.coverage.reasons.length ? (
+                  <ul className="mt-1 list-disc pl-5 text-sm text-amber-800">
+                    {source.coverage.reasons.map((reason) => (
+                      <li key={reason}>{reason}</li>
+                    ))}
+                  </ul>
                 ) : null}
                 {source.lastError ? <p className="mt-1 text-sm text-red-700">สาเหตุที่ดึงไม่สำเร็จ: {source.lastError}</p> : null}
               </div>
@@ -194,6 +211,26 @@ export default function SourcesPage() {
                 >
                   ดึงทันที
                 </Button>
+                {isExtensionSource(source.type) ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    title="ให้ส่วนขยายเลื่อนลึกย้อนหลัง 72 ชม. (อ่านอย่างเดียว) แล้วนับโพสต์ที่ระบบยังไม่มี"
+                    onClick={async () => {
+                      setInfo("");
+                      setError("");
+                      try {
+                        const data = await api<{ message: string }>(`/api/sources/${source.id}/audit`, { method: "POST" });
+                        setInfo(data.message);
+                        await load();
+                      } catch (err) {
+                        setError(err instanceof ApiError ? err.message : "สั่งตรวจไม่สำเร็จ");
+                      }
+                    }}
+                  >
+                    ตรวจความครบ
+                  </Button>
+                ) : null}
                 <Button size="sm" variant="outline" onClick={() => patch(source.id, { enabled: !source.enabled })}>
                   {source.enabled ? "ปิดชั่วคราว" : "เปิดใช้"}
                 </Button>

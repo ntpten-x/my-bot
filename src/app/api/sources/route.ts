@@ -4,6 +4,7 @@ import { authed } from "@/lib/guard";
 import { json } from "@/lib/http";
 import { canonicalSourceUrl, defaultSourceName, detectSourceType } from "@/lib/pipeline/normalize";
 import { getSettings } from "@/lib/settings";
+import { coverageBySource } from "@/lib/coverage-data";
 import { PRIORITY_INTERVAL, isMarketplaceUrl, maxIntervalFor, normalizePriority } from "@/lib/scrape-plan";
 
 export const dynamic = "force-dynamic";
@@ -25,6 +26,7 @@ export async function GET() {
       fetchLogs: { orderBy: { createdAt: "desc" }, take: 3 },
     },
   });
+  const coverage = await coverageBySource(sources);
   return json({
     sources: sources.map((source) => ({
       id: source.id,
@@ -45,6 +47,7 @@ export async function GET() {
       lastRunNew: source.lastRunNew,
       lastRunScrolls: source.lastRunScrolls,
       lastRunStop: source.lastRunStop,
+      coverage: coverage.get(source.id) ?? null,
       postCount: source._count.posts,
       logs: source.fetchLogs.map((log) => ({
         id: log.id,

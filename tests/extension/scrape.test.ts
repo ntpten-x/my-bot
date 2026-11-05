@@ -7,12 +7,15 @@ import { postKeyFromUrl } from "@/lib/scrape-plan";
 const require = createRequire(import.meta.url);
 type Post = { url: string; postedAt?: string | null; text?: string };
 type Run = { fresh: Post[]; found: number; stoppedBy: string };
+type Plan = { mode: string; maxAgeMs: number; maxScrolls: number; knownStreak: number; maxPosts: number };
 const scrape = require(path.resolve(__dirname, "../../extension/scrape.js")) as {
   postKey(url: string): string;
   scrapeSettings(remote: unknown): { screens: number; maxAgeMs: number; maxPosts: number };
   scrollWaitMs(random?: () => number): number;
   scrapeUrl(url: string, kind: string): string;
-  createRun(opts: { knownKeys?: string[]; maxAgeMs?: number; maxPosts?: number; now?: number }): Run;
+  createRun(opts: { knownKeys?: string[]; maxAgeMs?: number; maxPosts?: number; maxScrolls?: number; knownStreak?: number; mode?: string; now?: number }): Run;
+  planRun(opts: { now?: number; group?: Record<string, unknown>; lastSweepAt?: number; audit?: boolean }): Plan;
+  runStats(run: Run): { reachedKnownPost: boolean; hitLimit: boolean; scrolls: number; newCount: number };
   addStep(run: Run, posts: Post[]): string;
   cleanupText(text: string): string;
 };
@@ -38,8 +41,8 @@ describe("scroll scrape plan (extension/scrape.js)", () => {
   });
 
   it("clamps settings and waits 1.5–4 s between screens", () => {
-    expect(scrape.scrapeSettings({})).toEqual({ screens: 3, maxAgeMs: 24 * 3600_000, maxPosts: 40 });
-    expect(scrape.scrapeSettings({ scrollScreens: 99, maxPostsPerRun: 500, maxAgeHours: 0 })).toMatchObject({ screens: 10, maxPosts: 40, maxAgeMs: 3600_000 });
+    expect(scrape.scrapeSettings({})).toEqual({ screens: 3, maxAgeMs: 24 * 3600_000, maxPosts: 200 });
+    expect(scrape.scrapeSettings({ scrollScreens: 99, maxPostsPerRun: 500, maxAgeHours: 0 })).toMatchObject({ screens: 10, maxPosts: 200, maxAgeMs: 3600_000 });
     expect(scrape.scrapeSettings({ scrollScreens: 0 }).screens).toBe(0);
     expect(scrape.scrollWaitMs(() => 0)).toBe(1500);
     expect(scrape.scrollWaitMs(() => 1)).toBe(4000);
@@ -50,40 +53,86 @@ describe("scroll scrape plan (extension/scrape.js)", () => {
     expect(scrape.scrapeUrl("https://www.facebook.com/marketplace/bangkok/search?query=iphone", "marketplace")).toContain("sortBy=creation_time_descend");
   });
 
-  it("keeps scrolling while posts are new and stops at the first fully known screen", () => {
-    const run = scrape.createRun({ knownKeys: ["p:4", "p:5"], now: NOW });
-    expect(scrape.addStep(run, [post(1), post(2)])).toBe("");
-    expect(scrape.addStep(run, [post(2), post(3), post(4)])).toBe("");
-    expect(scrape.addStep(run, [post(4), post(5)])).toBe("seen");
-    expect(run.fresh.map((p) => scrape.postKey(p.url))).toEqual(["p:1", "p:2", "p:3"]);
-    expect(run.found).toBe(5);
+  it("keeps scrolling past one known pinned post and stops after 3 known posts in a row", () => {
+    const run = scrape.createRun({ knownKeys: ["p:1", "p:7", "p:8", "p:9"], now: NOW });
+    // p:1 is a pinned/featured known post above new ones: it must not stop the run.
+    expect(scrape.addStep(run, [post(1), post(2), post(3)])).toBe("");
+    expect(scrape.addStep(run, [post(4), post(5), post(6)])).toBe("");
+    expect(scrape.addStep(run, [post(7), post(8)])).toBe("");
+    expect(scrape.addStep(run, [post(9), post(10)])).toBe("seen");
+    expect(run.fresh.map((p) => scrape.postKey(p.url))).toEqual(["p:2", "p:3", "p:4", "p:5", "p:6"]);
+    expect(scrape.runStats(run)).toMatchObject({ reachedKnownPost: true, hitLimit: false, newCount: 5, scrolls: 3 });
   });
 
-  it("does not stop on a single known pinned post on the first screen", () => {
-    const run = scrape.createRun({ knownKeys: ["p:1"], now: NOW });
-    expect(scrape.addStep(run, [post(1)])).toBe("");
-    expect(scrape.addStep(run, [post(2)])).toBe("");
-  });
-
-  it("stops when the new posts are all older than the max age", () => {
-    const run = scrape.createRun({ maxAgeMs: 24 * 3600_000, now: NOW });
-    expect(scrape.addStep(run, [post(1, 2), post(2, null)])).toBe("");
-    expect(scrape.addStep(run, [post(3, 30), post(4, 50)])).toBe("old");
+  it("a known post between new ones resets the streak", () => {
+    const run = scrape.createRun({ knownKeys: ["p:2", "p:3", "p:5", "p:6", "p:7"], now: NOW });
+    expect(scrape.addStep(run, [post(1), post(2), post(3), post(4)])).toBe("");
+    expect(scrape.addStep(run, [post(5), post(6), post(7)])).toBe("seen");
     expect(run.fresh).toHaveLength(2);
   });
 
-  it("stops after two empty screens and at the per-run cap", () => {
-    const run = scrape.createRun({ now: NOW });
-    scrape.addStep(run, [post(1)]);
-    expect(scrape.addStep(run, [post(1)])).toBe("");
-    expect(scrape.addStep(run, [])).toBe("end");
-
-    const capped = scrape.createRun({ maxPosts: 40, now: NOW });
-    const many = Array.from({ length: 45 }, (_, i) => post(i + 1));
-    expect(scrape.addStep(capped, many)).toBe("cap");
-    expect(capped.fresh).toHaveLength(40);
+  it("does not stop on one out-of-order old post, only on 3 old posts in a row", () => {
+    const run = scrape.createRun({ maxAgeMs: 24 * 3600_000, now: NOW });
+    expect(scrape.addStep(run, [post(1, 2), post(2, 50), post(3, 3)])).toBe("");
+    expect(scrape.addStep(run, [post(4, 30), post(5, 40)])).toBe("");
+    expect(scrape.addStep(run, [post(6, 60)])).toBe("old");
+    expect(run.fresh.map((p) => scrape.postKey(p.url))).toEqual(["p:1", "p:3"]);
   });
 
+  it("has no 40-post cap: keeps going while new posts appear, up to the sane bound", () => {
+    const run = scrape.createRun({ now: NOW });
+    expect(scrape.addStep(run, Array.from({ length: 60 }, (_, i) => post(i + 1)))).toBe("");
+    expect(run.fresh).toHaveLength(60);
+    const capped = scrape.createRun({ now: NOW });
+    expect(scrape.addStep(capped, Array.from({ length: 250 }, (_, i) => post(i + 1)))).toBe("cap");
+    expect(capped.fresh).toHaveLength(200);
+    expect(scrape.runStats(capped)).toMatchObject({ hitLimit: true, reachedKnownPost: false });
+  });
+
+  it("stops at the scroll budget and after three empty screens", () => {
+    const run = scrape.createRun({ maxScrolls: 2, now: NOW });
+    expect(scrape.addStep(run, [post(1)])).toBe("");
+    expect(scrape.addStep(run, [post(2)])).toBe("");
+    expect(scrape.addStep(run, [post(3)])).toBe("limit"); // first screen + 2 scrolls
+    expect(scrape.runStats(run).hitLimit).toBe(true);
+
+    const empty = scrape.createRun({ now: NOW });
+    scrape.addStep(empty, [post(1)]);
+    expect(scrape.addStep(empty, [post(1)])).toBe("");
+    expect(scrape.addStep(empty, [])).toBe("");
+    expect(scrape.addStep(empty, [])).toBe("end");
+  });
+
+  it("plans normal runs, hourly sweeps, 72 h catch-up and audits", () => {
+    const recent = new Date(NOW - 10 * 60_000).toISOString();
+    expect(scrape.planRun({ now: NOW, group: { lastFetchedAt: recent, intervalMinutes: 15 }, lastSweepAt: NOW - 5 * 60_000 })).toMatchObject({ mode: "normal", knownStreak: 3, maxScrolls: 15, maxPosts: 200 });
+    expect(scrape.planRun({ now: NOW, group: { lastFetchedAt: recent, intervalMinutes: 15 }, lastSweepAt: NOW - 61 * 60_000 })).toMatchObject({ mode: "sweep", maxScrolls: 30 });
+    // Chrome was closed for 30 h: read back to the newest stored post (+1 h).
+    const closed = scrape.planRun({ now: NOW, group: { lastFetchedAt: new Date(NOW - 30 * 3600_000).toISOString(), lastSeenAt: new Date(NOW - 31 * 3600_000).toISOString() } });
+    expect(closed).toMatchObject({ mode: "catchup", maxScrolls: 30, knownStreak: 3 });
+    expect(closed.maxAgeMs).toBe(32 * 3600_000);
+    // Never further than 72 h.
+    const week = scrape.planRun({ now: NOW, group: { lastFetchedAt: new Date(NOW - 7 * 24 * 3600_000).toISOString() } });
+    expect(week.maxAgeMs).toBe(72 * 3600_000);
+    expect(scrape.planRun({ now: NOW, group: {} }).mode).toBe("catchup");
+    const audit = scrape.planRun({ now: NOW, group: { lastFetchedAt: recent }, audit: true });
+    expect(audit).toMatchObject({ mode: "audit", knownStreak: Infinity, maxAgeMs: 72 * 3600_000 });
+  });
+
+  it("catch-up keeps reading new posts older than 24 h until it reaches known posts", () => {
+    const plan = scrape.planRun({ now: NOW, group: { lastFetchedAt: new Date(NOW - 40 * 3600_000).toISOString(), lastSeenAt: new Date(NOW - 41 * 3600_000).toISOString() } });
+    const run = scrape.createRun({ knownKeys: ["p:8", "p:9", "p:10"], now: NOW, ...plan });
+    expect(scrape.addStep(run, [post(1, 1), post(2, 10), post(3, 26)])).toBe("");
+    expect(scrape.addStep(run, [post(4, 30), post(5, 39)])).toBe("");
+    expect(scrape.addStep(run, [post(8, 41), post(9, 42), post(10, 43)])).toBe("seen");
+    expect(run.fresh).toHaveLength(5);
+  });
+
+  it("an audit never stops on known posts", () => {
+    const run = scrape.createRun({ knownKeys: ["p:1", "p:2", "p:3", "p:4"], now: NOW, ...scrape.planRun({ now: NOW, audit: true }) });
+    expect(scrape.addStep(run, [post(1), post(2), post(3), post(4), post(5)])).toBe("");
+    expect(run.fresh).toHaveLength(1);
+  });
   it("keeps the truncation mark when removing a trailing See more", () => {
     expect(scrape.cleanupText("หาช่างแอร์ ... ดูเพิ่มเติม")).toBe("หาช่างแอร์…");
     expect(scrape.cleanupText("สอบถามเพิ่มเติม")).toBe("สอบถามเพิ่มเติม");
