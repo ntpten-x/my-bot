@@ -9,7 +9,7 @@ import { resolveOllamaBaseUrl } from "./ai/ollama-url";
 import { liveTestProvider } from "./ai/live-test";
 import { EXPECTED_EXTENSION_VERSION } from "./extension-heartbeat";
 import { EXTENSION_SOURCE_TYPES, PRIORITY_LABEL, maxIntervalFor, normalizePriority } from "./scrape-plan";
-import { STOP_REASON_LABEL } from "./scrape-runs";
+import { STOP_REASON_LABEL, readerHealth } from "./scrape-runs";
 import { coverageBySource } from "./coverage-data";
 import type { Coverage } from "./coverage";
 import { parseWatchState } from "./watchdog";
@@ -306,6 +306,18 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
       detail: enabledFb.length ? enabledFb.slice(0, 8).map((source) => source.name).join(", ") : "ยังไม่ได้เพิ่มกลุ่ม Facebook หรือ Marketplace",
       hint: newest && !activeInstalls.some((row) => row.enabled) && enabledFb.length ? "ส่วนขยายถูกพักไว้ — ติ๊ก “ดึงข้อมูลอัตโนมัติเบื้องหลัง” ในป๊อปอัปของส่วนขยาย" : "อ่านเองอยู่เบื้องหลังในหน้าต่าง Chrome แยกที่ย่อไว้ (minimized) ไม่เปิดแท็บในหน้าต่างของคุณและไม่แย่งโฟกัส — ปิดได้ ระบบจะสร้างใหม่แบบย่อไว้เอง",
     },
+    await (async () => {
+      const r = await readerHealth(new Date(now)).catch(() => null);
+      const stallPct = r && r.minimized ? r.stalledMinimized / r.minimized : 0;
+      return {
+        key: "ext-reader-health",
+        label: "การอ่านในหน้าต่างย่อ (24 ชม.)",
+        level: (!r || !r.total ? "off" : stallPct >= 0.3 || r.throttled > 0 ? "warn" : "ok") as "ok" | "warn" | "off",
+        value: r && r.total ? `${r.total} รอบ · ย่ออยู่ ${r.minimized} · ค้าง ${r.stalled} (ขณะย่อ ${r.stalledMinimized}) · รีโหลดซ้ำ ${r.reloaded} · หน่วง ${r.throttled}` : "ยังไม่มีข้อมูล",
+        detail: r && r.total ? `อ่านข้อความเต็มสำเร็จ ${r.fullOk}/${r.fullTried} · เฉลี่ย ${r.avgSeconds} วินาที/รอบ` : "บันทึกจากส่วนขยาย v1.8.1 ขึ้นไป",
+        hint: r && stallPct >= 0.3 ? "Chrome หน่วงหน้าต่างที่ย่อไว้บ่อย — ระบบจะลดจำนวนกลุ่มต่อรอบเองและเก็บย้อนหลังในรอบกวาด" : undefined,
+      };
+    })(),
     {
       key: "ext-last-post",
       label: "โพสต์ล่าสุดที่ได้รับจาก Facebook",

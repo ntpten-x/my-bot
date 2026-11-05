@@ -4,7 +4,6 @@ import { getSettings, upsertSettings } from "../lib/settings";
 import { fetchRssPosts } from "../lib/rss";
 import { fetchWebBoardPosts } from "../lib/web-board";
 import { ingestPosts } from "../lib/ingest";
-import { checkExtensionSilence } from "../lib/extension-status";
 import { maybeSendScheduledSummary } from "../lib/smart/daily";
 import { enqueueUnclassifiedPosts, processAiQueue } from "../lib/ai/queue";
 import { maybeBackupDatabase } from "../lib/backup";
@@ -123,7 +122,6 @@ async function tick() {
         });
       }
     }
-    await checkExtensionSilence();
     await maybeSendScheduledSummary();
     await maybeBackupDatabase();
     await collapseTruncatedCaptures();

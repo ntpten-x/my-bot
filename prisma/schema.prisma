@@ -108,6 +108,10 @@ model Post {
   dismissed        Boolean         @default(false)
   ocrText          String          @default("")
   extraUrlsJson    String          @default("[]")
+  /// Stored text was cut off at "See more"; the extension re-reads the permalink.
+  truncated        Boolean         @default(false)
+  refetchAttempts  Int             @default(0)
+  refetchAfter     DateTime?
   followUpAt       DateTime?
   statusChangedAt  DateTime?
   repliedAt        DateTime?
@@ -131,6 +135,7 @@ model Post {
   @@index([embeddingConfig, embeddingRetryAt])
   @@index([followUpAt])
   @@index([duplicateOfId])
+  @@index([sourceId, truncated])
 }
 
 model AiJob {
@@ -449,6 +454,15 @@ model ScrapeRun {
   hitLimit     Boolean  @default(false)
   stalls       Int      @default(0)
   usedWindow   Boolean  @default(false)
+  windowState  String   @default("")
+  reloaded     Boolean  @default(false)
+  stallsFirst  Int      @default(0)
+  stallsRetry  Int      @default(0)
+  throttled    Boolean  @default(false)
+  fullTried    Int      @default(0)
+  fullOk       Int      @default(0)
+  durationMs   Int      @default(0)
+  extVersion   String   @default("")
 
   @@index([sourceId, createdAt])
 }

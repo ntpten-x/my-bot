@@ -365,7 +365,27 @@ async function reportRun(cfg, group, run) {
   }
 }
 
-const MAX_FULL_TEXT_PER_RUN = 3;
+// Full-text re-reads: at most this many permalinks per cycle (shared by all groups) and a time budget per group.
+const MAX_FULL_TEXT_PER_ROUND = 10;
+const FULL_TEXT_BUDGET_MS = 90 * 1000;
+const FULL_TEXT_MAX_TRIES = 4;
+let fullTextBudget = MAX_FULL_TEXT_PER_ROUND;
+
+// Local backlog of truncated posts not read yet (budget ran out or the read failed); retried with backoff.
+async function loadFullTextBacklog() {
+  const { fullTextBacklog } = await chrome.storage.local.get({ fullTextBacklog: {} });
+  const now = Date.now();
+  const kept = {};
+  for (const [url, item] of Object.entries(fullTextBacklog || {})) {
+    if (item && now - (item.addedAt || 0) < 3 * 24 * 3600 * 1000 && (item.tries || 0) < FULL_TEXT_MAX_TRIES) kept[url] = item;
+  }
+  return kept;
+}
+
+async function saveFullTextBacklog(backlog) {
+  const entries = Object.entries(backlog).sort((a, b) => (b[1].addedAt || 0) - (a[1].addedAt || 0)).slice(0, 200);
+  await chrome.storage.local.set({ fullTextBacklog: Object.fromEntries(entries) }).catch(() => undefined);
+}
 
 function postKey(url) {
   return String(url || "").split("?")[0].replace(/\/+$/, "");
@@ -375,7 +395,13 @@ function postKey(url) {
 // Facebook shows there. Navigation and reading only; nothing on the page is clicked.
 async function readFullTexts(tabId, kind, urls) {
   const found = [];
-  for (const url of urls.slice(0, MAX_FULL_TEXT_PER_RUN)) {
+  const failed = [];
+  const tried = [];
+  const deadline = Date.now() + FULL_TEXT_BUDGET_MS;
+  for (const url of urls) {
+    if (fullTextBudget <= 0 || Date.now() > deadline) break;
+    fullTextBudget -= 1;
+    tried.push(url);
     try {
       await chrome.tabs.update(tabId, { url });
       await waitComplete(tabId);
@@ -385,11 +411,12 @@ async function readFullTexts(tabId, kind, urls) {
       const posts = (page.posts || []).filter((post) => !post.truncated);
       const match = posts.find((post) => postKey(post.url) === postKey(url)) || posts.sort((a, b) => b.text.length - a.text.length)[0];
       if (match) found.push({ ...match, url });
+      else failed.push(url);
     } catch {
-      // Skip this one; it is tried again on a later run.
+      failed.push(url); // Tried again on a later run (backlog).
     }
   }
-  return found;
+  return { found, failed, tried };
 }
 
 // Wait (read-only) until the feed shows more posts or grows, using a MutationObserver in the page.
@@ -597,23 +624,32 @@ async function scrapeGroup(cfg, group, remote, options) {
   const stored = await chrome.storage.local.get({ sweeps: {} });
   const plan = Scrape.planRun({ group, settings, lastSweepAt: stored.sweeps[group.id], audit: Boolean(options && options.audit) });
   const result = { ok: true, postsFound: 0, newPosts: 0, scrolls: 0, stoppedBy: "", message: "", nextRunAt: null, mode: plan.mode, stats: null };
+  const startedAt = Date.now();
   let reader;
   try {
     const url = Scrape.scrapeUrl(group.url, kind);
     reader = await openReader(url);
+    const win = reader.windowId !== undefined ? await chrome.windows.get(reader.windowId).catch(() => null) : null;
+    const reading = { windowState: (win && win.state) || "unknown", reloaded: false, stallsFirst: 0, stallsRetry: 0, throttled: false };
     let run = await readFeed(reader, kind, plan, group.knownKeys || [], result);
+    reading.stallsFirst = run.stalls || 0;
     // A minimized window can be throttled by Chrome. Never un-minimize: reload once and read again with
     // patience; if it still stalls, later cycles use smaller batches and the catch-up sweeps fill the gap.
     if (run.found <= 2 && run.stalls >= 2 && run.stoppedBy !== "seen") {
       await chrome.tabs.reload(reader.tabId).catch(() => undefined);
       await sleep(2500);
+      reading.reloaded = true;
       const again = await readFeed(reader, kind, plan, group.knownKeys || [], result);
+      reading.stallsRetry = again.stalls || 0;
       again.stalls += run.stalls;
       if (again.found >= run.found) run = again;
-      if (run.found <= 2) await chrome.storage.local.set({ throttledAt: Date.now() }).catch(() => undefined);
+      if (run.found <= 2) {
+        reading.throttled = true;
+        await chrome.storage.local.set({ throttledAt: Date.now() }).catch(() => undefined);
+      }
     }
     const stats = Scrape.runStats(run);
-    result.stats = { ...stats, usedWindow: false };
+    result.stats = { ...stats, usedWindow: false, ...reading, fullTried: 0, fullOk: 0, durationMs: 0, extVersion: chrome.runtime.getManifest().version };
     result.scrolls = stats.scrolls;
     result.stoppedBy = run.stoppedBy || "end";
     result.postsFound = run.found;
@@ -628,14 +664,30 @@ async function scrapeGroup(cfg, group, remote, options) {
       await chrome.storage.local.set({ sweeps: stored.sweeps });
     }
     if (kind !== "marketplace") {
-      const cut = [...picked.filter((post) => post.truncated).map((post) => post.url), ...(group.refetchUrls || [])];
-      const urls = [...new Set(cut.map(String))];
+      // Order: newest posts cut off in this run, then the server's backlog (newest/high score), then the local backlog.
+      const backlog = await loadFullTextBacklog();
+      const now = Date.now();
+      const local = Object.entries(backlog)
+        .filter(([, item]) => item.groupId === group.id && (item.after || 0) <= now)
+        .sort((a, b) => (b[1].addedAt || 0) - (a[1].addedAt || 0))
+        .map(([url]) => url);
+      const freshCut = picked.filter((post) => post.truncated).map((post) => String(post.url));
+      const urls = [...new Set([...freshCut, ...(group.refetchUrls || []).map(String), ...local])];
       if (urls.length) {
-        const full = await readFullTexts(reader.tabId, kind, urls);
-        if (full.length) {
-          await sendPosts(cfg, group.url, full.map(cleanPost)).catch(() => undefined);
-          result.fullTexts = full.length;
+        const read = await readFullTexts(reader.tabId, kind, urls);
+        if (read.found.length) {
+          await sendPosts(cfg, group.url, read.found.map(cleanPost)).catch(() => undefined);
+          result.fullTexts = read.found.length;
         }
+        for (const post of read.found) delete backlog[post.url];
+        for (const url of read.failed) {
+          const tries = ((backlog[url] && backlog[url].tries) || 0) + 1;
+          backlog[url] = { groupId: group.id, tries, addedAt: (backlog[url] && backlog[url].addedAt) || now, after: now + 30 * 60 * 1000 * 2 ** tries };
+        }
+        // Cut-off posts the budget did not reach this time wait in the backlog for the next cycle.
+        for (const url of freshCut) if (!read.tried.includes(url) && !backlog[url]) backlog[url] = { groupId: group.id, tries: 0, addedAt: now, after: 0 };
+        await saveFullTextBacklog(backlog);
+        if (result.stats) Object.assign(result.stats, { fullTried: read.tried.length, fullOk: read.found.length });
       }
     }
     await postJson(cfg, "/api/v1/extension/sample", { sourceUrl: group.url, posts: result.sample || [] }).catch(() => undefined);
@@ -648,6 +700,7 @@ async function scrapeGroup(cfg, group, remote, options) {
     await closeReader(reader);
   }
   delete result.sample;
+  if (result.stats) result.stats.durationMs = Date.now() - startedAt;
   result.nextRunAt = await reportRun(cfg, group, result);
   return result;
 }
@@ -659,6 +712,7 @@ const RUN_LOCK_MS = 12 * 60 * 1000;
 async function takeRunLock(kind) {
   if (cycling) return false;
   cycling = true;
+  fullTextBudget = MAX_FULL_TEXT_PER_ROUND;
   const stored = await chrome.storage.session.get({ runLock: null }).catch(() => ({ runLock: null }));
   const lock = stored.runLock;
   if (lock && lock.boot === BOOT_ID && lock.until > Date.now()) {

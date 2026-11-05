@@ -26,6 +26,15 @@ const schema = z.object({
       newCount: z.number().int().min(0).max(1000).optional(),
       stalls: z.number().int().min(0).max(1000).optional(),
       usedWindow: z.boolean().optional(),
+      windowState: z.string().max(20).optional(),
+      reloaded: z.boolean().optional(),
+      stallsFirst: z.number().int().min(0).max(1000).optional(),
+      stallsRetry: z.number().int().min(0).max(1000).optional(),
+      throttled: z.boolean().optional(),
+      fullTried: z.number().int().min(0).max(100).optional(),
+      fullOk: z.number().int().min(0).max(100).optional(),
+      durationMs: z.number().int().min(0).max(3_600_000).optional(),
+      extVersion: z.string().max(20).optional(),
     })
     .passthrough()
     .optional(),

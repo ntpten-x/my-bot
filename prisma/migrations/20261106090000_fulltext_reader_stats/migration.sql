@@ -1,0 +1,18 @@
+-- AlterTable
+ALTER TABLE "Post" ADD COLUMN "truncated" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN "refetchAttempts" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN "refetchAfter" TIMESTAMP(3);
+
+-- AlterTable
+ALTER TABLE "ScrapeRun" ADD COLUMN "windowState" TEXT NOT NULL DEFAULT '',
+ADD COLUMN "reloaded" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN "stallsFirst" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN "stallsRetry" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN "throttled" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN "fullTried" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN "fullOk" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN "durationMs" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN "extVersion" TEXT NOT NULL DEFAULT '';
+
+-- CreateIndex
+CREATE INDEX "Post_sourceId_truncated_idx" ON "Post"("sourceId", "truncated");

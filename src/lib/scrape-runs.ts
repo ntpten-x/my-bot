@@ -23,6 +23,77 @@ export const STOP_REASON_LABEL: Record<string, string> = {
   error: "ผิดพลาด",
 };
 
+export const REFETCH_PER_SOURCE = 10;
+export const REFETCH_MAX_ATTEMPTS = 8;
+const REFETCH_BACKOFF_MS = 45 * 60_000;
+
+type RefetchRow = { id: string; externalUrl: string; score: number; createdAt: Date; refetchAttempts: number };
+
+/** Pure: newest and high-score first; posts tried fewer times win ties. */
+export function rankRefetch(rows: RefetchRow[], now: Date, limit = REFETCH_PER_SOURCE) {
+  const weight = (row: RefetchRow) => {
+    const ageHours = Math.max(0, (now.getTime() - row.createdAt.getTime()) / 3600_000);
+    return row.score + Math.max(0, 48 - ageHours) - row.refetchAttempts * 5;
+  };
+  return [...rows].sort((a, b) => weight(b) - weight(a)).slice(0, limit);
+}
+
+// Backlog of truncated posts (7 days). Handing one out pushes its next try back (45 min x attempts),
+// so a post that keeps failing waits longer and stops after REFETCH_MAX_ATTEMPTS.
+async function pickRefetch(sourceId: string, now: Date, legacy: string[]) {
+  const rows = await prisma.post.findMany({
+    where: {
+      sourceId,
+      truncated: true,
+      refetchAttempts: { lt: REFETCH_MAX_ATTEMPTS },
+      createdAt: { gte: new Date(now.getTime() - 7 * 24 * 3600_000) },
+      OR: [{ refetchAfter: null }, { refetchAfter: { lte: now } }],
+    },
+    orderBy: { createdAt: "desc" },
+    take: 60,
+    select: { id: true, externalUrl: true, score: true, createdAt: true, refetchAttempts: true },
+  });
+  const picked = rankRefetch(rows, now);
+  const byAttempts = new Map<number, string[]>();
+  for (const row of picked) byAttempts.set(row.refetchAttempts, [...(byAttempts.get(row.refetchAttempts) ?? []), row.id]);
+  for (const [attempts, ids] of byAttempts) {
+    await prisma.post.updateMany({
+      where: { id: { in: ids } },
+      data: { refetchAttempts: attempts + 1, refetchAfter: new Date(now.getTime() + REFETCH_BACKOFF_MS * (attempts + 1)) },
+    });
+  }
+  const urls = picked.map((row) => row.externalUrl);
+  // Older rows saved before the truncated flag existed.
+  for (const url of legacy) if (urls.length < REFETCH_PER_SOURCE && !urls.includes(url)) urls.push(url);
+  return urls;
+}
+
+export type ReaderRun = { windowState: string; stalls: number; reloaded: boolean; throttled: boolean; fullTried: number; fullOk: number; durationMs: number };
+
+/** Pure: 24 h health of the minimized reader window (runs from extension 1.8.1+). */
+export function summarizeReaderRuns(runs: ReaderRun[]) {
+  const minimized = runs.filter((run) => run.windowState === "minimized");
+  return {
+    total: runs.length,
+    minimized: minimized.length,
+    stalled: runs.filter((run) => run.stalls > 0).length,
+    stalledMinimized: minimized.filter((run) => run.stalls > 0).length,
+    reloaded: runs.filter((run) => run.reloaded).length,
+    throttled: runs.filter((run) => run.throttled).length,
+    fullTried: runs.reduce((sum, run) => sum + run.fullTried, 0),
+    fullOk: runs.reduce((sum, run) => sum + run.fullOk, 0),
+    avgSeconds: runs.length ? Math.round(runs.reduce((sum, run) => sum + run.durationMs, 0) / runs.length / 1000) : 0,
+  };
+}
+
+export async function readerHealth(now = new Date()) {
+  const runs = await prisma.scrapeRun.findMany({
+    where: { createdAt: { gte: new Date(now.getTime() - 24 * 3600_000) }, extVersion: { not: "" } },
+    select: { windowState: true, stalls: true, reloaded: true, throttled: true, fullTried: true, fullOk: true, durationMs: true },
+  });
+  return summarizeReaderRuns(runs);
+}
+
 export async function buildExtensionConfig(now = new Date()) {
   const settings = await getSettings();
   const sources = await prisma.source.findMany({
@@ -47,8 +118,8 @@ export async function buildExtensionConfig(now = new Date()) {
       const at = row.postedAt ?? null;
       return at && (!max || at > max) ? at : max;
     }, null);
-    // Posts stored cut off at "See more": the extension opens up to 3 permalinks to read the full text.
-    const refetch = rows.filter((row) => isTruncatedText(row.text)).slice(0, 3).map((row) => row.externalUrl);
+    // Posts stored cut off at "See more": the extension opens their permalinks (read-only) for the full text.
+    const refetch = await pickRefetch(source.id, now, rows.filter((row) => isTruncatedText(row.text)).map((row) => row.externalUrl));
     hints.set(source.id, { keys, lastSeenAt: newest?.toISOString() ?? null, refetch });
   }
   return {
@@ -94,7 +165,22 @@ export type ScrapeRunInput = {
   stoppedBy: string;
   message?: string;
   mode?: string;
-  coverage?: { reachedKnownPost?: boolean; hitLimit?: boolean; newCount?: number; stalls?: number; usedWindow?: boolean };
+  coverage?: {
+    reachedKnownPost?: boolean;
+    hitLimit?: boolean;
+    newCount?: number;
+    stalls?: number;
+    usedWindow?: boolean;
+    windowState?: string;
+    reloaded?: boolean;
+    stallsFirst?: number;
+    stallsRetry?: number;
+    throttled?: boolean;
+    fullTried?: number;
+    fullOk?: number;
+    durationMs?: number;
+    extVersion?: string;
+  };
 };
 
 const MODE_LABEL: Record<string, string> = { normal: "ปกติ", sweep: "กวาดลึกรายชั่วโมง", catchup: "ตามเก็บย้อนหลัง", audit: "ตรวจความครบ" };
@@ -145,9 +231,18 @@ export async function recordScrapeRun(input: ScrapeRunInput, now = new Date(), r
       hitLimit: Boolean(cov.hitLimit),
       stalls: Math.max(0, Math.round(cov.stalls ?? 0)),
       usedWindow: Boolean(cov.usedWindow),
+      windowState: String(cov.windowState ?? "").slice(0, 20),
+      reloaded: Boolean(cov.reloaded),
+      stallsFirst: Math.max(0, Math.round(cov.stallsFirst ?? 0)),
+      stallsRetry: Math.max(0, Math.round(cov.stallsRetry ?? 0)),
+      throttled: Boolean(cov.throttled),
+      fullTried: Math.max(0, Math.round(cov.fullTried ?? 0)),
+      fullOk: Math.max(0, Math.round(cov.fullOk ?? 0)),
+      durationMs: Math.max(0, Math.min(2_000_000_000, Math.round(cov.durationMs ?? 0))),
+      extVersion: String(cov.extVersion ?? "").slice(0, 20),
     },
   });
-  const flags = [cov.hitLimit && !cov.reachedKnownPost ? "⚠ ถึงขีดจำกัดก่อนเจอโพสต์เก่า" : "", cov.stalls ? `โหลดค้าง ${cov.stalls} ครั้ง` : "", cov.usedWindow ? "ใช้หน้าต่างแยก (รุ่นเก่า)" : ""].filter(Boolean).join(" · ");
+  const flags = [cov.hitLimit && !cov.reachedKnownPost ? "⚠ ถึงขีดจำกัดก่อนเจอโพสต์เก่า" : "", cov.stalls ? `โหลดค้าง ${cov.stalls} ครั้ง` : "", cov.usedWindow ? "ใช้หน้าต่างแยก (รุ่นเก่า)" : "", cov.windowState ? `หน้าต่าง ${cov.windowState}` : "", cov.reloaded ? `รีโหลดซ้ำ (ค้าง ${cov.stallsFirst ?? 0} → ${cov.stallsRetry ?? 0})` : "", cov.throttled ? "Chrome หน่วงหน้าต่างย่อ" : "", cov.fullTried ? `อ่านข้อความเต็ม ${cov.fullOk ?? 0}/${cov.fullTried}` : ""].filter(Boolean).join(" · ");
   const prefix = mode === "audit" ? `ตรวจความครบ: เจอโพสต์ที่ยังไม่มีในระบบ ${input.newPosts} โพสต์ · ` : `รอบอ่าน (${MODE_LABEL[mode]}): `;
   await prisma.fetchLog.create({
     data: {

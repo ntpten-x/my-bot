@@ -157,11 +157,57 @@ async function collectFacts(now: number, settings: AppSettings): Promise<WatchFa
   };
 }
 
-async function alert(settings: AppSettings, condition: WatchCondition) {
+export type WatchAlerted = Record<string, { at: number; since: string }>;
+export type WatchSend = { kind: "alert" | "recovered"; condition: WatchCondition; claimKey: string; since: string };
+
+/**
+ * Pure: which messages to send this run. A problem alerts after it is bad on two runs in a row, then at
+ * most once per everyMs while it stays bad; when an alerted problem returns to ok, one "recovered" message.
+ */
+export function planWatchAlerts(previous: WatchState, state: WatchState, conditions: WatchCondition[], alerted: WatchAlerted, now: number, everyMs: number) {
+  const next: WatchAlerted = { ...alerted };
+  const send: WatchSend[] = [];
+  for (const condition of conditions) {
+    const last = next[condition.key];
+    if (condition.level === "bad") {
+      if (previous[condition.key]?.level !== "bad") continue;
+      if (last && now - last.at < everyMs) continue;
+      const since = last?.since ?? state[condition.key]?.since ?? new Date(now).toISOString();
+      const sinceMs = Date.parse(since);
+      const slot = Math.floor((now - (Number.isFinite(sinceMs) ? sinceMs : now)) / everyMs);
+      send.push({ kind: "alert", condition, claimKey: `watch:${condition.key}:${since}:${slot}`, since });
+      next[condition.key] = { at: now, since };
+    } else if (last && condition.level === "ok") {
+      send.push({ kind: "recovered", condition, claimKey: `watch:${condition.key}:recovered:${last.since}`, since: last.since });
+      delete next[condition.key];
+    } else if (last && condition.level === "off") {
+      delete next[condition.key];
+    }
+  }
+  for (const key of Object.keys(next)) if (!conditions.some((c) => c.key === key)) delete next[key];
+  return { send, alerted: next };
+}
+
+export function parseWatchAlerted(raw: string | undefined | null): WatchAlerted {
+  try {
+    const value = JSON.parse(raw || "{}");
+    return value && typeof value === "object" && !Array.isArray(value) ? (value as WatchAlerted) : {};
+  } catch {
+    return {};
+  }
+}
+
+function recoveredText(condition: WatchCondition, since: string, now: number) {
+  const minutes = Math.max(1, Math.round((now - (Date.parse(since) || now)) / 60_000));
+  const span = minutes >= 120 ? `${Math.round(minutes / 60)} ชั่วโมง` : `${minutes} นาที`;
+  return `${condition.label}: กลับมาปกติแล้ว (ขัดข้องราว ${span}) — ${condition.message}`;
+}
+
+async function alert(settings: AppSettings, condition: WatchCondition, text?: string) {
   await dispatchNotification(
     {
       id: null,
-      text: `${condition.label}: ${condition.message}${condition.hint ? `\nวิธีแก้: ${condition.hint}` : ""}`,
+      text: text ?? `${condition.label}: ${condition.message}${condition.hint ? `\nวิธีแก้: ${condition.hint}` : ""}`,
       externalUrl: "http://localhost:8001/overview",
       intent: "unknown",
       province: null,
@@ -169,7 +215,7 @@ async function alert(settings: AppSettings, condition: WatchCondition) {
       source: { name: "MY-BOT" },
     },
     settings,
-    "ระบบผิดปกติ",
+    text ? "ระบบกลับมาปกติ" : "ระบบผิดปกติ",
     { external: true, forceExternal: true },
   );
 }
@@ -204,12 +250,13 @@ export async function runWatchdog(now = Date.now()) {
   const state = mergeWatchState(previous, conditions, now);
   await upsertSettings({ watchdog_state: JSON.stringify(state), watchdog_checked_at: new Date(now).toISOString() });
   if (!settings.watchEnabled) return;
-  const bucket = Math.floor(now / (settings.watchAlertEveryHours * HOUR));
-  for (const condition of conditions) {
-    if (condition.level !== "bad") continue;
-    // Give a brand-new problem one run to clear before alerting (avoids flapping).
-    if (previous[condition.key]?.level !== "bad") continue;
-    if (!(await claimOnce(`watch:${condition.key}:${bucket}`))) continue;
-    await alert(settings, condition).catch((error) => console.error(`[watchdog] alert failed: ${error instanceof Error ? error.message : String(error)}`));
+  const alertedBefore = parseWatchAlerted((await prisma.setting.findUnique({ where: { key: "watchdog_alerted" } }))?.value);
+  const plan = planWatchAlerts(previous, state, conditions, alertedBefore, now, Math.max(1, settings.watchAlertEveryHours) * HOUR);
+  if (JSON.stringify(plan.alerted) !== JSON.stringify(alertedBefore)) await upsertSettings({ watchdog_alerted: JSON.stringify(plan.alerted) });
+  for (const item of plan.send) {
+    // claimOnce keeps a leader hand-off (local <-> Render) from sending the same message twice.
+    if (!(await claimOnce(item.claimKey))) continue;
+    const text = item.kind === "recovered" ? recoveredText(item.condition, item.since, now) : undefined;
+    await alert(settings, item.condition, text).catch((error) => console.error(`[watchdog] alert failed: ${error instanceof Error ? error.message : String(error)}`));
   }
 }

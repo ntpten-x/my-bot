@@ -13,7 +13,7 @@ import { recordTiming } from "./metrics";
 import { queueExternalNotification } from "./notification-queue";
 import { applyAutomationRules } from "./automation";
 import { inServiceArea } from "./service-area";
-import { isExpansionOf } from "./pipeline/truncation";
+import { isExpansionOf, isTruncatedText } from "./pipeline/truncation";
 import { syncDuplicateLabels } from "./smart/duplicate-labels";
 
 export type IncomingPost = {
@@ -105,6 +105,8 @@ export async function ingestPosts(input: {
         text: item.raw.text.slice(0, 8000),
         normalizedText: item.lead.normalizedText.slice(0, 8000),
         aiProvider: "rules",
+        truncated: false,
+        refetchAfter: null,
       },
     });
     old.text = item.raw.text;
@@ -137,6 +139,7 @@ export async function ingestPosts(input: {
           authorName: (item.raw.authorName || "").slice(0, 200),
           text: item.raw.text.slice(0, 8000),
           normalizedText: item.lead.normalizedText.slice(0, 8000),
+          truncated: isTruncatedText(item.raw.text),
           contentHash: item.lead.hash,
           postedAt: parseDate(item.raw.postedAt),
           imagesJson: JSON.stringify(cleanImages(item.raw.images)),

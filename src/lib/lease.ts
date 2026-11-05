@@ -30,14 +30,13 @@ export async function currentLease(name: string) {
 }
 
 /** First caller with this key gets true; every later caller (any instance) gets false. */
+/** True for exactly one caller per key. Insert-or-skip, so an expected duplicate never logs prisma:error. */
 export async function claimOnce(key: string): Promise<boolean> {
-  try {
-    await prisma.sentKey.create({ data: { key: key.slice(0, 190) } });
-    return true;
-  } catch (error) {
-    if ((error as { code?: string }).code === "P2002") return false;
-    throw error;
-  }
+  const rows = await prisma.$queryRaw<{ key: string }[]>`
+    INSERT INTO "SentKey" ("key", "createdAt") VALUES (${key.slice(0, 190)}, ${new Date()})
+    ON CONFLICT ("key") DO NOTHING
+    RETURNING "key"`;
+  return rows.length > 0;
 }
 
 export async function pruneSentKeys(days = 30) {
