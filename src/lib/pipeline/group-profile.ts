@@ -1,5 +1,5 @@
 /** What a group (source) mostly posts about, from its recent labelled posts. */
-export type GroupHint = { categorySlug: string; share: number; total: number };
+export type GroupHint = { categorySlug: string; share: number; total: number; productSlug?: string | null };
 
 /** A group needs this many labelled posts before its profile is trusted. */
 export const MIN_PROFILE_POSTS = 10;
@@ -27,5 +27,5 @@ export function isDominant(hint: GroupHint | null | undefined, slug?: string) {
 /** Short Thai line for the AI prompt, e.g. "games 82%". */
 export function hintLabel(hint: GroupHint | null | undefined) {
   if (!hint || hint.share < 0.5) return undefined;
-  return `${hint.categorySlug} ${Math.round(hint.share * 100)}%`;
+  return `${hint.categorySlug} ${Math.round(hint.share * 100)}%${hint.productSlug ? ` ${hint.productSlug}` : ""}`;
 }

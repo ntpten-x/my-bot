@@ -1,5 +1,6 @@
 import { prisma } from "./prisma";
 import { dominantHint, type GroupHint } from "./pipeline/group-profile";
+import { loadGroupProducts } from "./products";
 
 const DAY = 24 * 3600_000;
 
@@ -27,6 +28,16 @@ export async function loadGroupHints(sourceIds: string[], now = Date.now()): Pro
   for (const [sourceId, counts] of bySource) {
     const hint = dominantHint(counts);
     if (hint) out.set(sourceId, hint);
+  }
+  // The owner's binding on the sources page beats the automatic profile.
+  const [bound, products] = await Promise.all([
+    prisma.source.findMany({ where: { id: { in: ids }, boundCategorySlug: { not: "" } }, select: { id: true, boundCategorySlug: true } }),
+    loadGroupProducts(ids, now).catch(() => new Map()),
+  ]);
+  for (const source of bound) out.set(source.id, { categorySlug: source.boundCategorySlug, share: 1, total: Math.max(out.get(source.id)?.total ?? 0, 100) });
+  for (const [sourceId, product] of products) {
+    const hint = out.get(sourceId);
+    if (hint) out.set(sourceId, { ...hint, productSlug: product.slug });
   }
   return out;
 }

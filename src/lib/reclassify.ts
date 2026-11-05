@@ -18,7 +18,16 @@ export function reclassWhere(now: number, otherId: string | null): Prisma.PostWh
     createdAt: { gte: new Date(now - 30 * DAY) },
     NOT: [{ aiProvider: "owner" }, { aiProvider: "rules:ad" }],
     AND: [
-      { OR: [{ aiProvider: null }, { aiProvider: { startsWith: "rules" } }, { categoryId: null }, ...(otherId ? [{ categoryId: otherId }] : [])] },
+      {
+        OR: [
+          { aiProvider: null },
+          { aiProvider: { startsWith: "rules" } },
+          { categoryId: null },
+          ...(otherId ? [{ categoryId: otherId }] : []),
+          // Game/IT posts where neither rules nor the group could name the game/product.
+          { productBy: "none", category: { slug: { in: ["games", "it"] } } },
+        ],
+      },
       { OR: [{ aiJobs: { none: {} } }, { aiJobs: { every: { status: { in: ["done", "failed", "skipped"] }, createdAt: { lt: new Date(now - RECLASS_COOLDOWN_MS) } } } }] },
     ],
   };

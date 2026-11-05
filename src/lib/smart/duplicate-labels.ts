@@ -10,6 +10,8 @@ export async function syncDuplicateLabels() {
       "categoryId" = o."categoryId",
       "subcategoryId" = o."subcategoryId",
       "intent" = o."intent",
+      "productId" = o."productId",
+      "productBy" = o."productBy",
       "isAd" = o."isAd",
       "province" = COALESCE(o."province", d."province"),
       "score" = o."score",
@@ -21,6 +23,7 @@ export async function syncDuplicateLabels() {
       AND (d."categoryId" IS DISTINCT FROM o."categoryId"
         OR d."subcategoryId" IS DISTINCT FROM o."subcategoryId"
         OR d."intent" <> o."intent"
+        OR d."productId" IS DISTINCT FROM o."productId"
         OR d."isAd" <> o."isAd"
         OR d."score" <> o."score")`;
 }

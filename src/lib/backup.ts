@@ -8,7 +8,7 @@ import { shouldSendSummary } from "./smart/summary";
 
 /** Every table, in an order that respects foreign keys when restoring. */
 export const BACKUP_TABLES = [
-  "Owner", "Session", "Source", "Category", "Post", "AiJob", "OcrCache", "Feedback", "PreferenceWeight",
+  "Owner", "Session", "Product", "Source", "Category", "Post", "AiJob", "OcrCache", "Feedback", "PreferenceWeight",
   "Summary", "Keyword", "Note", "Notification", "Setting", "AiCache", "FetchTask", "ParseSample", "FetchLog",
   "ReplyTemplate", "AutomationRule", "RuleHit", "ReplyQueueItem", "FbAccount", "ExtensionHeartbeat", "PostTombstone",
   "LabelCorrection",

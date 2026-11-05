@@ -33,6 +33,8 @@ export type PostRecord = {
   repliedAt?: Date | null;
   category: Ref;
   subcategory: Ref;
+  product?: Ref;
+  productBy?: string;
   source: SourceRef;
   notes?: { id: string; body: string; createdAt: Date }[];
 };
@@ -77,6 +79,8 @@ export function serializePost(post: PostRecord) {
     alsoIn: [] as AlsoIn[],
     category: post.category,
     subcategory: post.subcategory,
+    product: post.product ?? null,
+    productBy: post.productBy ?? "",
     source: post.source,
     notes: (post.notes ?? []).map((note) => ({
       id: note.id,
@@ -89,6 +93,7 @@ export function serializePost(post: PostRecord) {
 export const postInclude = {
   category: true,
   subcategory: true,
+  product: { select: { id: true, name: true, slug: true } },
   source: true,
   notes: { orderBy: { createdAt: "asc" as const } },
 };

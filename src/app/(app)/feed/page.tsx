@@ -5,6 +5,7 @@ import { Button, Input, Select } from "@/components/ui";
 import { LeadCard } from "@/components/lead-card";
 import { ApiError, api } from "@/components/api";
 import { bangkokStart } from "@/lib/format";
+import { FollowedProducts, ProductTabs, useProductBar } from "@/components/product-bar";
 import type { CategoryRow, Lead } from "@/lib/lead";
 
 type Meta = {
@@ -18,6 +19,7 @@ type Filters = {
   q: string;
   categoryId: string;
   subcategoryId: string;
+  productId: string;
   province: string;
   sourceId: string;
   intent: string;
@@ -37,6 +39,7 @@ const INITIAL: Filters = {
   q: "",
   categoryId: "",
   subcategoryId: "",
+  productId: "",
   province: "",
   sourceId: "",
   intent: "",
@@ -85,6 +88,7 @@ function queryFrom(filters: Filters, page: number) {
   if (filters.q) params.set("q", filters.q);
   if (filters.categoryId) params.set("categoryId", filters.categoryId);
   if (filters.subcategoryId) params.set("subcategoryId", filters.subcategoryId);
+  if (filters.productId) params.set("productId", filters.productId);
   if (filters.province) params.set("province", filters.province);
   if (filters.sourceId) params.set("sourceId", filters.sourceId);
   if (filters.intent) params.set("intent", filters.intent);
@@ -204,6 +208,8 @@ export default function FeedPage() {
     filters.q,
   ];
 
+  const bar = useProductBar(filters.categoryId);
+
   function update(partial: Partial<Filters>) {
     setPage(1);
     setFilters((current) => ({ ...current, ...partial }));
@@ -224,6 +230,9 @@ export default function FeedPage() {
           อ่านรายการในหน้านี้แล้ว
         </Button>
       </div>
+      <ProductTabs bar={bar} categories={meta?.categories ?? []} value={filters.productId} onChange={(productId) => update({ productId })} />
+      <div className="lg:grid lg:grid-cols-[1fr_220px] lg:gap-4">
+      <div className="min-w-0">
       <form
         className="mt-4 grid gap-2 md:grid-cols-4"
         onSubmit={(event) => {
@@ -321,6 +330,11 @@ export default function FeedPage() {
           <span className="text-sm text-muted">หน้า {page}/{pages}</span>
         </nav>
       ) : null}
+      </div>
+      <div className="mt-4">
+        <FollowedProducts bar={bar} value={filters.productId} onChange={(productId) => update({ productId })} />
+      </div>
+      </div>
     </div>
   );
 }

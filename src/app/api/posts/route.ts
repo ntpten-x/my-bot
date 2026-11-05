@@ -41,6 +41,8 @@ export async function GET(request: Request) {
   if (params.get("saved") === "1") and.push({ isSaved: true });
   if (categoryId) and.push({ categoryId });
   if (subcategoryId) and.push({ subcategoryId });
+  const productId = params.get("productId");
+  if (productId) and.push({ productId: productId === "none" ? null : productId });
   if (province) and.push({ province });
   if (params.get("area") === "1") {
     const area = (await getSettings()).serviceProvinces;

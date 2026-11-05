@@ -15,6 +15,7 @@ import { applyAutomationRules } from "./automation";
 import { inServiceArea } from "./service-area";
 import { isExpansionOf, isTruncatedText } from "./pipeline/truncation";
 import { syncDuplicateLabels } from "./smart/duplicate-labels";
+import { assignProducts } from "./products";
 
 export type IncomingPost = {
   url: string;
@@ -180,6 +181,7 @@ export async function ingestPosts(input: {
   const aiProvider = "rules";
   if (createdIds.length) {
     await collapseIdenticalTexts(fresh.map((item) => item.lead.normalizedText));
+    await assignProducts(createdIds).catch((error) => console.error("[products]", error));
     await syncDuplicateLabels().catch((error) => console.error("[dup-labels]", error));
   }
   const uniqueIds = createdIds.length

@@ -13,7 +13,9 @@ import { inServiceArea } from "../service-area";
 import { scoreAd } from "../pipeline/ad-filter";
 import { ruleItem, type AiItem } from "../pipeline/classify-rules";
 import { syncDuplicateLabels } from "../smart/duplicate-labels";
-import { setOwnerExamples } from "./prompt";
+import { setOwnerExamples, setProductList } from "./prompt";
+import { assignProducts, loadProducts } from "../products";
+import { productPrompt } from "../pipeline/products";
 import { loadGroupHints } from "../group-profiles";
 
 /** Ad score at which a post is plainly an ad: rules label it and the model is not called. */
@@ -122,6 +124,7 @@ export async function processAiQueue() {
       loadCatalogFromDb(),
       loadGroupHints(jobs.map(job => job.post.sourceId)).catch(() => new Map()),
       loadOwnerExamples().catch(() => undefined),
+      loadProducts().then((list) => setProductList(productPrompt(list))).catch(() => undefined),
     ]);
     const inputs = [];
     const adItems: AiItem[] = [];
@@ -162,6 +165,8 @@ export async function processAiQueue() {
       if (marketplaceIds.has(item.id)) Object.assign(item, { intent: "seller", isAd: false });
       return prisma.post.update({ where: { id: item.id }, data: { categoryId: ids.categoryId, subcategoryId: ids.subcategoryId, intent: item.intent, province: item.province, isAd: item.isAd, suggestedReply: item.suggestedReply, aiProvider: outcome.providersById[item.id] } });
     }));
+    // Level-3 product: rules win, the AI's pick only counts if it is in the list.
+    await assignProducts(successful.map(item => item.id), new Map(successful.map(item => [item.id, item.productSlug ?? null]))).catch((error) => console.error("[products]", error));
     // Scoring must not block completion on an embedding provider.
     await enrichPosts(successful.map(item => item.id), successful, settings, { embed: false });
     const successIds = new Set(successful.map(item => item.id));

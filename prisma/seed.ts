@@ -6,6 +6,7 @@ config();
 import { DEFAULT_GROQ_MODEL, resolveGroqModel } from "../src/lib/ai/models";
 import { CATEGORY_SEEDS, FORBIDDEN_KEYWORDS, WATCH_KEYWORDS, flattenSeeds } from "../src/lib/pipeline/catalog";
 import { prepareLead } from "../src/lib/pipeline/prepare";
+import { PRODUCT_SEEDS } from "../src/lib/pipeline/products";
 import { DEMO_SOURCE_URL, maskSecret, shouldInsertDemoPosts } from "../src/lib/seed-policy";
 
 const prisma = new PrismaClient();
@@ -69,6 +70,15 @@ async function main() {
       rows.push(saved);
       order += 1;
     }
+  }
+
+  // Level-3 products/games: create missing ones only, never overwrite the owner's edits.
+  for (const [index, product] of PRODUCT_SEEDS.entries()) {
+    await prisma.product.upsert({
+      where: { slug: product.slug },
+      update: {},
+      create: { slug: product.slug, name: product.name, nameEn: product.nameEn, categorySlug: product.categorySlug, aliases: product.aliases.join(", "), sortOrder: index },
+    });
   }
 
   for (const word of WATCH_KEYWORDS) {

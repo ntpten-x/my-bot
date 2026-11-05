@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { Button, Card, Input, Select } from "@/components/ui";
 import { ApiError, api } from "@/components/api";
 import type { CategoryRow } from "@/lib/lead";
+import { ProductsEditor } from "@/components/products-editor";
 
 type Keyword = { id: string; word: string; type: "watch" | "forbidden" };
 
@@ -121,6 +122,7 @@ export default function CategoriesPage() {
           ))}
         </Card>
       </div>
+      {categories.length ? <ProductsEditor categories={categories} /> : null}
     </div>
   );
 }

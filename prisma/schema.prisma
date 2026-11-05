@@ -1,5 +1,5 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
   previewFeatures = ["relationJoins"]
 }
 
@@ -27,32 +27,36 @@ model Session {
 }
 
 model Source {
-  id              String      @id @default(cuid())
-  type            String
-  name            String
-  url             String      @unique
-  enabled         Boolean     @default(true)
-  lastFetchedAt   DateTime?
-  lastExtensionAt DateTime?
-  lastError       String?
-  intervalMinutes Int         @default(10)
+  id                     String      @id @default(cuid())
+  type                   String
+  name                   String
+  url                    String      @unique
+  enabled                Boolean     @default(true)
+  lastFetchedAt          DateTime?
+  lastExtensionAt        DateTime?
+  lastError              String?
+  intervalMinutes        Int         @default(10)
   // Read-only scrape scheduling (extension): priority high|normal|low, adaptive interval, last-run stats.
-  priority               String    @default("normal")
-  currentIntervalMinutes Float     @default(10)
+  priority               String      @default("normal")
+  currentIntervalMinutes Float       @default(10)
   nextRunAt              DateTime?
   lastRunAt              DateTime?
-  lastRunFound           Int       @default(0)
-  lastRunNew             Int       @default(0)
-  lastRunScrolls         Int       @default(0)
-  lastRunStop            String    @default("")
+  lastRunFound           Int         @default(0)
+  lastRunNew             Int         @default(0)
+  lastRunScrolls         Int         @default(0)
+  lastRunStop            String      @default("")
   /// Numeric Facebook group id seen on the page (vanity URLs resolve to it).
   fbGroupId              String?
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
-  posts           Post[]
-  fetchLogs       FetchLog[]
-  fetchTasks      FetchTask[]
-  scrapeRuns      ScrapeRun[]
+  /// Owner binding: top-level category slug and default product for this group ("" / null = auto from last 30 days).
+  boundCategorySlug      String      @default("")
+  defaultProductId       String?
+  defaultProduct         Product?    @relation("SourceDefaultProduct", fields: [defaultProductId], references: [id], onDelete: SetNull)
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime    @updatedAt
+  posts                  Post[]
+  fetchLogs              FetchLog[]
+  fetchTasks             FetchTask[]
+  scrapeRuns             ScrapeRun[]
 
   @@index([fbGroupId])
 }
@@ -71,54 +75,77 @@ model Category {
   subPosts   Post[]     @relation("PostSubcategory")
 }
 
+/// Level 3 of the taxonomy: a game or product inside a top-level category (Roblox, ROV, iPhone…).
+model Product {
+  id           String   @id @default(cuid())
+  slug         String   @unique
+  name         String
+  nameEn       String   @default("")
+  categorySlug String
+  /// Comma-separated keyword aliases matched after normalisation.
+  aliases      String   @default("")
+  enabled      Boolean  @default(true)
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  posts        Post[]
+  sources      Source[] @relation("SourceDefaultProduct")
+
+  @@index([categorySlug, sortOrder])
+}
+
 model Post {
-  id               String          @id @default(cuid())
+  id               String            @id @default(cuid())
   sourceId         String
-  source           Source          @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  source           Source            @relation(fields: [sourceId], references: [id], onDelete: Cascade)
   externalUrl      String
-  authorName       String          @default("")
+  authorName       String            @default("")
   text             String
   normalizedText   String
-  contentHash      String          @unique
+  contentHash      String            @unique
   postedAt         DateTime?
   /// Generated column COALESCE(postedAt, createdAt); never write it.
   sortAt           DateTime?
-  imagesJson       String          @default("[]")
+  imagesJson       String            @default("[]")
   categoryId       String?
-  category         Category?       @relation("PostCategory", fields: [categoryId], references: [id], onDelete: SetNull)
+  category         Category?         @relation("PostCategory", fields: [categoryId], references: [id], onDelete: SetNull)
   subcategoryId    String?
-  subcategory      Category?       @relation("PostSubcategory", fields: [subcategoryId], references: [id], onDelete: SetNull)
-  intent           String          @default("unknown")
+  subcategory      Category?         @relation("PostSubcategory", fields: [subcategoryId], references: [id], onDelete: SetNull)
+  intent           String            @default("unknown")
+  productId        String?
+  product          Product?          @relation(fields: [productId], references: [id], onDelete: SetNull)
+  /// How productId was set: rules | ai | group | owner | none ("" = not checked yet).
+  productBy        String            @default("")
   province         String?
-  isAd             Boolean         @default(false)
-  keywordHitsJson  String          @default("[]")
-  forbiddenHit     Boolean         @default(false)
-  isRead           Boolean         @default(false)
-  isSaved          Boolean         @default(false)
-  pipelineStatus   String          @default("none")
-  suggestedReply   String          @default("")
+  isAd             Boolean           @default(false)
+  keywordHitsJson  String            @default("[]")
+  forbiddenHit     Boolean           @default(false)
+  isRead           Boolean           @default(false)
+  isSaved          Boolean           @default(false)
+  pipelineStatus   String            @default("none")
+  suggestedReply   String            @default("")
   aiProvider       String?
-  score            Int             @default(0)
-  scoreReason      String          @default("")
-  embeddingJson    String          @default("")
-  embeddingKey     String          @default("")
-  embeddingConfig  String          @default("")
-  embeddingRetryAt DateTime        @default("1970-01-01T00:00:00.000Z")
+  score            Int               @default(0)
+  scoreReason      String            @default("")
+  embeddingJson    String            @default("")
+  embeddingKey     String            @default("")
+  embeddingConfig  String            @default("")
+  embeddingRetryAt DateTime          @default("1970-01-01T00:00:00.000Z")
   duplicateOfId    String?
-  dismissed        Boolean         @default(false)
-  ocrText          String          @default("")
-  extraUrlsJson    String          @default("[]")
+  dismissed        Boolean           @default(false)
+  ocrText          String            @default("")
+  extraUrlsJson    String            @default("[]")
   /// Stored text was cut off at "See more"; the extension re-reads the permalink.
-  truncated        Boolean         @default(false)
-  refetchAttempts  Int             @default(0)
+  truncated        Boolean           @default(false)
+  refetchAttempts  Int               @default(0)
   refetchAfter     DateTime?
   followUpAt       DateTime?
   statusChangedAt  DateTime?
   repliedAt        DateTime?
   replyItem        ReplyQueueItem?
   aiJobs           AiJob[]
-  createdAt        DateTime        @default(now())
-  updatedAt        DateTime        @updatedAt
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
   notes            Note[]
   notifications    Notification[]
   feedback         Feedback[]
@@ -137,6 +164,8 @@ model Post {
   @@index([followUpAt])
   @@index([duplicateOfId])
   @@index([sourceId, truncated])
+  @@index([productId, createdAt])
+  @@index([productBy])
 }
 
 model AiJob {
@@ -351,25 +380,25 @@ model FbAccount {
 
 // One row per extension install (random id kept in chrome.storage). Updated every minute.
 model ExtensionHeartbeat {
-  id           String    @id
-  version      String    @default("")
-  browser      String    @default("")
-  profileLabel String    @default("")
-  enabled      Boolean   @default(false)
-  fbLoggedIn   Boolean   @default(false)
-  fbUserId     String?
-  fbUserName   String    @default("")
-  fbCheckedAt  DateTime?
-  tabsJson     String    @default("[]")
-  lastError    String    @default("")
-  lastErrorAt  DateTime?
-  lastPostAt   DateTime?
-  postsSent    Int       @default(0)
-  errorCount24h Int      @default(0)
-  errorLogJson String    @default("[]")
-  outboxSize   Int       @default(0)
-  lastSeenAt   DateTime  @default(now())
-  createdAt    DateTime  @default(now())
+  id            String    @id
+  version       String    @default("")
+  browser       String    @default("")
+  profileLabel  String    @default("")
+  enabled       Boolean   @default(false)
+  fbLoggedIn    Boolean   @default(false)
+  fbUserId      String?
+  fbUserName    String    @default("")
+  fbCheckedAt   DateTime?
+  tabsJson      String    @default("[]")
+  lastError     String    @default("")
+  lastErrorAt   DateTime?
+  lastPostAt    DateTime?
+  postsSent     Int       @default(0)
+  errorCount24h Int       @default(0)
+  errorLogJson  String    @default("[]")
+  outboxSize    Int       @default(0)
+  lastSeenAt    DateTime  @default(now())
+  createdAt     DateTime  @default(now())
 
   @@index([lastSeenAt])
 }
@@ -431,11 +460,11 @@ model ExtensionDevice {
 }
 
 model LoginGuard {
-  key         String   @id
-  failures    Int      @default(0)
-  windowStart DateTime @default(now())
+  key         String    @id
+  failures    Int       @default(0)
+  windowStart DateTime  @default(now())
   lockedUntil DateTime?
-  updatedAt   DateTime @updatedAt
+  updatedAt   DateTime  @updatedAt
 }
 
 // One read-only extension run, for coverage stats ("are we missing posts?").
@@ -467,6 +496,7 @@ model ScrapeRun {
 
   @@index([sourceId, createdAt])
 }
+
 // Leader lease: local and Render share this DB; only the holder runs background jobs.
 model Lease {
   name      String   @id
@@ -500,6 +530,8 @@ model LabelCorrection {
   toCategory      String   @default("")
   toSubcategory   String   @default("")
   toIntent        String   @default("")
+  fromProduct     String   @default("")
+  toProduct       String   @default("")
   createdAt       DateTime @default(now())
 
   @@index([sourceId, createdAt])

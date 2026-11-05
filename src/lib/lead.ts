@@ -28,6 +28,8 @@ export type Lead = {
   alsoIn?: { id: string; url: string; source: string }[];
   category: { id: string; name: string; slug: string } | null;
   subcategory: { id: string; name: string; slug: string } | null;
+  product?: { id: string; name: string; slug: string } | null;
+  productBy?: string;
   source: { id: string; name: string; url: string; type: string } | null;
   notes: { id: string; body: string; createdAt: string }[];
 };

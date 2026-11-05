@@ -20,6 +20,8 @@ export type AiItem = {
   urgency: number;
   hasBudget: boolean;
   specificity: number;
+  /** Level-3 product/game slug the AI picked; checked against the product list later. */
+  productSlug?: string | null;
 };
 
 export type LooseAiItem = {
@@ -33,6 +35,7 @@ export type LooseAiItem = {
   urgency?: number;
   hasBudget?: boolean;
   specificity?: number;
+  productSlug?: string | null;
 };
 
 const DEVICE = /ipad|iphone|ไอแพด|ไอโฟน|แท็บเล็ต|tablet|มือถือ|samsung|การ์ดจอ|โน้ตบุ๊ก|โน๊ตบุ๊ค|คอมพิวเตอร์|โทรศัพท์/i;
@@ -219,6 +222,7 @@ export function sanitizeAiItem(item: LooseAiItem, post: ClassifyInput, catalog: 
     urgency: typeof item.urgency === "number" ? Math.max(0, Math.min(1, item.urgency)) : fallback.urgency,
     hasBudget: typeof item.hasBudget === "boolean" ? item.hasBudget : fallback.hasBudget,
     specificity: typeof item.specificity === "number" ? Math.max(0, Math.min(1, item.specificity)) : fallback.specificity,
+    productSlug: typeof item.productSlug === "string" && item.productSlug.trim() ? item.productSlug.trim().toLowerCase().slice(0, 60) : null,
   };
 }
 

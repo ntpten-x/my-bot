@@ -5,7 +5,9 @@ import { Badge, Button, Card, Input, Select, Textarea } from "@/components/ui";
 import { ApiError, api } from "@/components/api";
 import { timeAgo, timeUntil } from "@/lib/format";
 import { PRIORITY_INTERVAL, PRIORITY_LABEL, isExtensionSource, type SourcePriority } from "@/lib/scrape-plan";
-import type { SourceRow } from "@/lib/lead";
+import type { CategoryRow, SourceRow } from "@/lib/lead";
+import { SourceBinding, type Binding } from "@/components/source-binding";
+import type { ProductRow } from "@/components/products-editor";
 
 const STOP_LABEL: Record<string, string> = {
   seen: "เจอโพสต์ที่เก็บแล้ว",
@@ -54,6 +56,9 @@ export default function SourcesPage() {
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
   const [loading, setLoading] = useState(true);
+  const [bindings, setBindings] = useState<Map<string, Binding>>(new Map());
+  const [categories, setCategories] = useState<CategoryRow[]>([]);
+  const [products, setProducts] = useState<ProductRow[]>([]);
 
   async function load() {
     setLoading(true);
@@ -61,6 +66,18 @@ export default function SourcesPage() {
       const data = await api<{ sources: SourceRow[] }>("/api/sources");
       setSources(data.sources);
       setError("");
+      // Bindings are extra; a failure must not hide the sources list.
+      Promise.all([
+        api<{ bindings: Binding[] }>("/api/sources/bindings"),
+        api<{ categories: CategoryRow[] }>("/api/categories"),
+        api<{ products: ProductRow[] }>("/api/products"),
+      ])
+        .then(([b, c, p]) => {
+          setBindings(new Map(b.bindings.map((item) => [item.sourceId, item])));
+          setCategories(c.categories);
+          setProducts(p.products);
+        })
+        .catch(() => undefined);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "โหลดแหล่งข้อมูลไม่สำเร็จ");
     } finally {
@@ -174,6 +191,9 @@ export default function SourcesPage() {
                       <li key={reason}>{reason}</li>
                     ))}
                   </ul>
+                ) : null}
+                {bindings.get(source.id) ? (
+                  <SourceBinding binding={bindings.get(source.id)!} categories={categories} products={products} onSave={(body) => void patch(source.id, body)} />
                 ) : null}
                 {source.lastError ? <p className="mt-1 text-sm text-red-700">สาเหตุที่ดึงไม่สำเร็จ: {source.lastError}</p> : null}
               </div>

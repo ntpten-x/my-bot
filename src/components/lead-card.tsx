@@ -23,6 +23,18 @@ function loadCategories() {
   return categoriesPromise;
 }
 
+type ProductOption = { id: string; name: string; categorySlug: string; enabled: boolean };
+let productsPromise: Promise<ProductOption[]> | null = null;
+function loadProductOptions() {
+  productsPromise ??= api<{ products: ProductOption[] }>("/api/products")
+    .then((data) => data.products.filter((item) => item.enabled))
+    .catch(() => {
+      productsPromise = null;
+      return [];
+    });
+  return productsPromise;
+}
+
 function bangkokDate(iso: string) {
   return new Intl.DateTimeFormat("th-TH", { timeZone: "Asia/Bangkok", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
 }
@@ -46,6 +58,8 @@ export function LeadCard({
   const [awaitingSent, setAwaitingSent] = useState(false);
   const [fixOpen, setFixOpen] = useState(false);
   const [cats, setCats] = useState<CatOption[]>([]);
+  const [productOptions, setProductOptions] = useState<ProductOption[]>([]);
+  const [fixProduct, setFixProduct] = useState("");
   const [fixCat, setFixCat] = useState("");
   const [fixIntent, setFixIntent] = useState<string>(lead.intent);
   const templates = useTemplates();
@@ -122,7 +136,9 @@ export function LeadCard({
     setFixOpen((open) => !open);
     setFixIntent(lead.intent);
     setFixCat(lead.category ? `${lead.category.id}|${lead.subcategory?.id ?? ""}` : "");
+    setFixProduct(lead.product?.id ?? "");
     if (!cats.length) setCats(await loadCategories());
+    if (!productOptions.length) setProductOptions(await loadProductOptions());
   }
 
   async function saveFix() {
@@ -131,7 +147,7 @@ export function LeadCard({
     try {
       const data = await api<{ post: Lead }>(`/api/posts/${lead.id}/relabel`, {
         method: "POST",
-        body: JSON.stringify({ categoryId: categoryId || null, subcategoryId: subcategoryId || null, intent: fixIntent }),
+        body: JSON.stringify({ categoryId: categoryId || null, subcategoryId: subcategoryId || null, intent: fixIntent, ...(fixProduct !== (lead.product?.id ?? "") ? { productId: fixProduct || null } : {}) }),
       });
       onChange(data.post);
       setFixOpen(false);
@@ -176,6 +192,7 @@ export function LeadCard({
           {INTENT_LABEL[lead.intent] ?? lead.intent}
         </Badge>
         {lead.category ? <Badge>{lead.subcategory ? `${lead.category.name} / ${lead.subcategory.name}` : lead.category.name}</Badge> : null}
+        {lead.product ? <Badge tone="pine">{lead.product.name}</Badge> : null}
         <Badge tone={lead.score >= 80 ? "clay" : "neutral"}>{lead.score >= 80 ? `ร้อน ${lead.score}` : `คะแนน ${lead.score}`}</Badge>
         {lead.province ? <Badge tone="amber">{lead.province}</Badge> : null}
         {lead.isAd ? <Badge tone="danger">โฆษณา</Badge> : null}
@@ -327,6 +344,13 @@ export function LeadCard({
                     <option key={child.id} value={`${parent.id}|${child.id}`}>— {parent.name} / {child.name}</option>
                   )),
               ])}
+          </select>
+          <span className="text-muted">เกม/สินค้า</span>
+          <select className="h-8 rounded-lg border border-line bg-card px-2" aria-label="เกม/สินค้าที่ถูก" value={fixProduct} onChange={(event) => setFixProduct(event.target.value)}>
+            <option value="">ไม่ระบุ</option>
+            {productOptions.map((item) => (
+              <option key={item.id} value={item.id}>{item.name}</option>
+            ))}
           </select>
           <span className="text-muted">เจตนา</span>
           <select className="h-8 rounded-lg border border-line bg-card px-2" value={fixIntent} onChange={(event) => setFixIntent(event.target.value)}>

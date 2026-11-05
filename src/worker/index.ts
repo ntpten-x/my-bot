@@ -20,6 +20,7 @@ import { acquireLease, releaseLease, pruneSentKeys, INSTANCE_ID, WORKER_LEASE, W
 import { runWatchdog } from "../lib/watchdog";
 import { maybeRunRetention } from "../lib/retention";
 import { maybeReclassify } from "../lib/reclassify";
+import { backfillProducts } from "../lib/products";
 
 process.env.MYBOT_PROCESS = "worker";
 
@@ -127,6 +128,7 @@ async function tick() {
     await maybeSendScheduledSummary();
     await maybeBackupDatabase();
     await maybeRunRetention().catch(() => undefined);
+    await backfillProducts().catch(() => undefined);
     await maybeReclassify().catch(() => undefined);
     await collapseTruncatedCaptures();
     await processFollowUps().catch((error) => workerLog({ level: "error", message: "เตือนตามลีดไม่สำเร็จ", error: String(error).slice(0, 300) }));
