@@ -16,7 +16,7 @@ const bodySchema = z.object({
 });
 
 export async function POST(request: Request) {
-  if (!(await requireExtensionToken(request.headers.get("authorization")))) {
+  if (!(await requireExtensionToken(request.headers.get("authorization"), request))) {
     return withCors(json({ error: "โทเคนไม่ถูกต้อง" }, 401));
   }
   const parsed = bodySchema.safeParse(await request.json().catch(() => null));

@@ -27,7 +27,7 @@ export function OPTIONS() {
 }
 
 export async function POST(request: Request) {
-  if (!(await requireExtensionToken(request.headers.get("authorization")))) {
+  if (!(await requireExtensionToken(request.headers.get("authorization"), request))) {
     await noteBadExtensionToken();
     return withCors(json({ error: "โทเคนไม่ถูกต้อง" }, 401));
   }

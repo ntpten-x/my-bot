@@ -12,7 +12,7 @@ export function OPTIONS() {
 }
 
 export async function GET(request: Request) {
-  if (!(await requireExtensionToken(request.headers.get("authorization")))) {
+  if (!(await requireExtensionToken(request.headers.get("authorization"), request))) {
     return withCors(json({ error: "โทเคนไม่ถูกต้อง" }, 401));
   }
   await touchExtension();
@@ -57,7 +57,7 @@ const doneSchema = z.object({
 });
 
 export async function POST(request: Request) {
-  if (!(await requireExtensionToken(request.headers.get("authorization")))) {
+  if (!(await requireExtensionToken(request.headers.get("authorization"), request))) {
     return withCors(json({ error: "โทเคนไม่ถูกต้อง" }, 401));
   }
   const parsed = doneSchema.safeParse(await request.json().catch(() => null));

@@ -11,10 +11,50 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Only the local app over http, or any server over HTTPS, ever receives the token.
+function validApiBase(value) {
+  try {
+    const url = new URL(String(value || ""));
+    if (url.protocol === "https:") return true;
+    return url.protocol === "http:" && (url.hostname === "localhost" || url.hostname === "127.0.0.1");
+  } catch {
+    return false;
+  }
+}
+
 async function loadConfig() {
   const stored = await chrome.storage.local.get(DEFAULTS);
-  return { ...DEFAULTS, ...stored, schedules: stored.schedules || {} };
+  const cfg = { ...DEFAULTS, ...stored, schedules: stored.schedules || {} };
+  if (!validApiBase(cfg.apiBase)) return { ...cfg, apiBase: DEFAULTS.apiBase, token: "" };
+  return cfg;
 }
+
+// The MY-BOT page bridge for a custom HTTPS server the owner granted in the popup (*.onrender.com is in the manifest).
+const CUSTOM_BRIDGE_ID = "mybot-bridge-custom";
+async function syncCustomBridge() {
+  try {
+    await chrome.scripting.unregisterContentScripts({ ids: [CUSTOM_BRIDGE_ID] });
+  } catch {
+    // not registered yet
+  }
+  const cfg = await loadConfig();
+  let url;
+  try {
+    url = new URL(base(cfg));
+  } catch {
+    return;
+  }
+  if (url.protocol !== "https:" || /\.onrender\.com$/i.test(url.hostname)) return;
+  const pattern = `${url.origin}/*`;
+  if (!(await chrome.permissions.contains({ origins: [pattern] }))) return;
+  await chrome.scripting
+    .registerContentScripts([{ id: CUSTOM_BRIDGE_ID, matches: [pattern], js: ["bridge.js"], runAt: "document_start" }])
+    .catch(() => undefined);
+}
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.apiBase) void syncCustomBridge();
+});
+chrome.permissions.onAdded.addListener(() => void syncCustomBridge());
 
 function headers(token) {
   return { authorization: `Bearer ${token}`, "content-type": "application/json" };
@@ -410,11 +450,13 @@ function armAlarms() {
 }
 
 chrome.runtime.onInstalled.addListener(() => {
+  void syncCustomBridge();
   armAlarms();
   void heartbeat();
 });
 
 chrome.runtime.onStartup.addListener(() => {
+  void syncCustomBridge();
   armAlarms();
   void heartbeat();
 });

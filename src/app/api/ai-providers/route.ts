@@ -5,16 +5,20 @@ import { getSettings } from "@/lib/settings";
 import { ensureSeeded, publicProvider } from "@/lib/ai/provider-registry";
 import { providerData } from "@/lib/ai/provider-input";
 import { hasKeySecret } from "@/lib/ai/secret-box";
+import { ollamaReachable } from "@/lib/ai/ollama-url";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   const { error } = await authed();
   if (error) return error;
-  await ensureSeeded(await getSettings());
+  const settings = await getSettings();
+  await ensureSeeded(settings);
   const rows = await prisma.aiProvider.findMany({ orderBy: [{ priority: "asc" }, { createdAt: "asc" }] });
   const now = new Date();
-  return json({ providers: rows.map((row) => publicProvider(row, now)), keySecretReady: hasKeySecret(), now: now.toISOString() });
+  const ollamaUp = rows.some((row) => row.kind === "ollama") ? await ollamaReachable(settings.ollamaBaseUrl) : true;
+  const providers = rows.map((row) => ({ ...publicProvider(row, now), unreachable: row.kind === "ollama" && !ollamaUp }));
+  return json({ providers, ollamaReachable: ollamaUp, keySecretReady: hasKeySecret(), now: now.toISOString() });
 }
 
 export async function POST(request: Request) {

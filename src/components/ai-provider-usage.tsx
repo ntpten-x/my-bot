@@ -34,6 +34,7 @@ export type ProviderView = {
   cooldownUntil: string | null;
   cooldownReason: string | null;
   coolingDown: boolean;
+  unreachable?: boolean;
 };
 
 const REASONS: Record<string, string> = {
@@ -51,6 +52,7 @@ export function bangkokTime(value: string | null) {
 
 export function ProviderStatus({ provider }: { provider: ProviderView }) {
   if (!provider.enabled) return <Badge>ปิดอยู่</Badge>;
+  if (provider.unreachable) return <Badge>ข้าม (เซิร์ฟเวอร์นี้ไม่มี Ollama)</Badge>;
   if (provider.coolingDown)
     return (
       <Badge tone="amber">

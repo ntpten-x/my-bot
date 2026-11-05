@@ -122,7 +122,7 @@ describe("extension safety policy", () => {
       .replace(/\/\*[\s\S]*?\*\//g, "")
       .replace(/(^|[^:])\/\/.*$/gm, "$1");
 
-  it.each(["assist.js", "bridge.js", "background.js", "content.js", "identity.js", "scrape.js", "parser.js", "selectors.js"])("%s never clicks, presses keys, submits or calls GraphQL", (file) => {
+  it.each(["assist.js", "bridge.js", "background.js", "content.js", "identity.js", "scrape.js", "parser.js", "selectors.js", "popup.js"])("%s never clicks, presses keys, submits or calls GraphQL", (file) => {
     const src = code(file);
     expect(src).not.toMatch(/\.click\s*\(/);
     expect(src).not.toMatch(/["']Enter["']|keydown|keypress|keyup|KeyboardEvent/);
@@ -138,20 +138,20 @@ describe("extension safety policy", () => {
     expect(reader.js).not.toContain("assist.js");
   });
 
-  it("only exposes the bridge to the local MY-BOT app", () => {
+  it("only exposes the bridge to the local MY-BOT app or an HTTPS Render deployment", () => {
     const manifest = JSON.parse(readFileSync(path.join(ext, "manifest.json"), "utf8")) as { content_scripts: { matches: string[]; js: string[] }[] };
     for (const script of manifest.content_scripts.filter((entry) => entry.js.includes("bridge.js"))) {
-      for (const match of script.matches) expect(match).toMatch(/^http:\/\/(localhost|127\.0\.0\.1)\//);
+      for (const match of script.matches) expect(match).toMatch(/^(http:\/\/(localhost|127\.0\.0\.1)\/|https:\/\/\*\.onrender\.com\/)/);
     }
   });
 
-  it("version 1.4 registers only the mark-sent / skip shortcuts", () => {
+  it("version 1.5 registers only the mark-sent / skip shortcuts", () => {
     const manifest = JSON.parse(readFileSync(path.join(ext, "manifest.json"), "utf8")) as {
       version: string;
       commands: Record<string, { suggested_key?: { default?: string } }>;
       permissions: string[];
     };
-    expect(manifest.version).toBe("1.4.2");
+    expect(manifest.version).toBe("1.5.0");
     expect(manifest.permissions).not.toContain("cookies");
     expect(manifest.permissions).not.toContain("webRequest");
     expect(Object.keys(manifest.commands).sort()).toEqual(["mark-sent", "mark-skip"]);

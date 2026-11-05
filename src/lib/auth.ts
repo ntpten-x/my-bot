@@ -4,6 +4,8 @@ import bcrypt from "bcryptjs";
 import { prisma } from "./prisma";
 import { getSettings } from "./settings";
 import { SESSION_COOKIE } from "./auth-cookie";
+import { isHttpsRequest, isLocalRequest, transportAllowed } from "./request-security";
+import { verifyDeviceToken } from "./extension-devices";
 
 export { SESSION_COOKIE };
 const WINDOW_MS = 10 * 60 * 1000;
@@ -12,12 +14,13 @@ const attempts = new Map<string, { count: number; reset: number }>();
 const SESSION_CACHE_MS = 60_000;
 const sessionCache = new Map<string, { until: number; session: { id: string; ownerId: string; token: string; expiresAt: Date; createdAt: Date } }>();
 
-export function cookieOptions() {
+/** Secure is on whenever the request arrived over HTTPS (e.g. Render); plain http://localhost keeps working. */
+export function cookieOptions(request?: Request) {
   return {
     httpOnly: true,
     sameSite: "lax" as const,
     path: "/",
-    secure: false,
+    secure: request ? isHttpsRequest(request.headers, request.url) : false,
     maxAge: 60 * 60 * 24 * 30,
   };
 }
@@ -86,8 +89,19 @@ export async function destroySession() {
   }
 }
 
-export async function requireExtensionToken(header: string | null) {
+/**
+ * Extension auth. Paired device tokens work over HTTPS (or locally). The older shared settings token
+ * is accepted only from the local app, so a public deployment needs a paired device.
+ */
+export async function requireExtensionToken(header: string | null, request?: Request) {
   const token = (header ?? "").replace(/^Bearer\s+/i, "").trim();
+  if (!token) return false;
+  if (request && !transportAllowed(request.headers, request.url)) return false;
+  if (token.startsWith("mbd_")) {
+    const ip = request ? clientIp(request.headers.get("x-forwarded-for")) : "";
+    return Boolean(await verifyDeviceToken(token, { ip }));
+  }
+  if (request && !isLocalRequest(request.headers, request.url)) return false;
   const settings = await getSettings();
   const expected = settings.extensionToken;
   if (!token || !expected) return false;

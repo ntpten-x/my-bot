@@ -23,7 +23,7 @@ const schema = z.object({
 
 // Called by the extension after each read-only scrape run: updates the adaptive interval and per-source stats.
 export async function POST(request: Request) {
-  if (!(await requireExtensionToken(request.headers.get("authorization")))) {
+  if (!(await requireExtensionToken(request.headers.get("authorization"), request))) {
     return withCors(json({ error: "โทเคนไม่ถูกต้อง" }, 401));
   }
   const parsed = schema.safeParse(await request.json().catch(() => null));

@@ -97,6 +97,15 @@ Restart the app (or the Startup launcher). Then, if older posts need it: `npm ru
 | PowerShell parse error | `scripts/windows/*.ps1` are ASCII. Save as ASCII, or run with `-ExecutionPolicy Bypass -File` |
 | Seed `P2002` | Pull latest. Seed upserts demo posts |
 
+## Cloud deploy (Render)
+
+- https://my-bot-e6bt.onrender.com, auto-deploys on push to `master`. Health check path: `/health`. Full Thai guide: `docs/RENDER.th.md`.
+- Required env on Render: `DATABASE_URL`, `DIRECT_URL`, `AI_KEY_SECRET` (same value as local `.env`; production refuses to start without it), `NODE_ENV=production`. Optional: `GROQ_API_KEY`, `GEMINI_API_KEY` (cloud embeddings), `OLLAMA_DISABLED=1`.
+- Free tier sleeps after ~15 min idle; first request takes 30–60 s.
+- The Supabase DB is shared by local and Render: run migrations once (`npm run db:migrate`); never put per-host state (e.g. Ollama cooldowns) in the DB. Ollama rows are skipped, not cooled down, when unreachable.
+- Extension (>=1.5.0) pairs per device: web Settings → ส่วนขยาย Chrome → pairing code (10 min, one-time) → popup exchanges it for an `mbd_` token (stored hashed, revocable). Device tokens require HTTPS or localhost; the legacy shared token is accepted from localhost only.
+- Never put secrets in `NEXT_PUBLIC_*`. Don't change the owner's password; the security page only warns and lets them change it.
+
 ## Hard rules
 
 - Commit `.env.example` only. Leave `.env`, `data/*.db`, `data/*.log`, `data/backups/`, and `*.traineddata` untracked.

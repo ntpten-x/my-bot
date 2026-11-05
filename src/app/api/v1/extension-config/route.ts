@@ -9,7 +9,7 @@ export function OPTIONS() {
 }
 
 export async function GET(request: Request) {
-  if (!(await requireExtensionToken(request.headers.get("authorization")))) {
+  if (!(await requireExtensionToken(request.headers.get("authorization"), request))) {
     return withCors(json({ error: "โทเคนไม่ถูกต้อง" }, 401));
   }
   return withCors(json(await buildExtensionConfig()));

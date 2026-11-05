@@ -1,13 +1,15 @@
 import { prisma } from "@/lib/prisma";
 import { APP_VERSION } from "@/lib/version";
 import { orderAvailable, sharedMinuteWindow } from "@/lib/ai/router";
+import { ollamaReachable } from "@/lib/ai/ollama-url";
 import { buildHealth, createHealthCache, httpStatusFor } from "@/lib/public-health";
 
 const startedAt = Date.now();
 const cache = createHealthCache(7000);
 
 async function availableAiProviders() {
-  const rows = await prisma.aiProvider.findMany({ where: { enabled: true } });
+  const all = await prisma.aiProvider.findMany({ where: { enabled: true } });
+  const rows = all.some((row) => row.kind === "ollama") && !(await ollamaReachable()) ? all.filter((row) => row.kind !== "ollama") : all;
   const providers = rows.map((row) => ({
     ...row,
     tasks: row.tasks.split(",").map((task) => task.trim()).filter(Boolean),

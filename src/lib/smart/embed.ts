@@ -1,5 +1,5 @@
 import type { AppSettings } from "../settings";
-import { OLLAMA_KEEP_ALIVE, resolveOllamaBaseUrl } from "../ai/ollama-url";
+import { OLLAMA_KEEP_ALIVE, ollamaReachable, resolveOllamaBaseUrl } from "../ai/ollama-url";
 import { upsertSettings } from "../settings";
 import { embeddingConfig } from "./embedding-key";
 
@@ -103,6 +103,10 @@ async function ollamaEmbed(text: string, settings: EmbedSettings): Promise<{ vec
   const healthKey = `ollama-embed:${embeddingConfig(settings)}`;
   const failed = health.get(healthKey);
   if (failed && !failed.ok && Date.now() - failed.at < BAD_TTL_MS) return null;
+  if (!(await ollamaReachable(settings.ollamaBaseUrl))) {
+    health.set(healthKey, { ok: false, at: Date.now(), message: "เซิร์ฟเวอร์นี้ไม่มี Ollama" });
+    return null;
+  }
   const base = await resolveOllamaBaseUrl(settings.ollamaBaseUrl);
   const installed = await installedModels(base);
   const models = ollamaEmbedModels(settings.embedModel || "bge-m3", installed);

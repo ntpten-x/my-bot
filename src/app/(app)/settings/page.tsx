@@ -118,6 +118,16 @@ export default function SettingsPage() {
         <span className="font-semibold">ผู้ให้บริการ AI และ API key →</span>
         <span className="mt-1 block text-muted">เพิ่ม Groq, Gemini, OpenRouter, OpenCode Zen ฯลฯ เรียงลำดับ และสลับอัตโนมัติเมื่อโควตาหมด</span>
       </Link>
+      <div className="mt-3 grid gap-3 md:grid-cols-2">
+        <Link href="/settings/extension" className="block rounded-2xl border border-line bg-card p-4 text-sm shadow-sm hover:bg-paper">
+          <span className="font-semibold">ส่วนขยาย Chrome: ดาวน์โหลดและจับคู่ →</span>
+          <span className="mt-1 block text-muted">ติดตั้ง/อัปเดตส่วนขยาย สร้างรหัสจับคู่ และจัดการอุปกรณ์</span>
+        </Link>
+        <Link href="/settings/security" className="block rounded-2xl border border-line bg-card p-4 text-sm shadow-sm hover:bg-paper">
+          <span className="font-semibold">ความปลอดภัย: เปลี่ยนรหัสผ่าน →</span>
+          <span className="mt-1 block text-muted">ตรวจความแข็งแรงของรหัสผ่านสำหรับการใช้งานบนคลาวด์</span>
+        </Link>
+      </div>
       <form onSubmit={save} className="mt-5 space-y-4">
         <Card className="space-y-3">
           <h2 className="font-semibold">ผู้ช่วยจัดหมวด</h2>
@@ -199,7 +209,7 @@ export default function SettingsPage() {
           <p className="text-sm text-muted">“ทุกกี่นาที” คือค่าเริ่มต้นของกลุ่มใหม่ที่ความสำคัญปกติ (สูง 3 · ปกติ 10 · ต่ำ 30 นาที ปรับรายกลุ่มได้ที่หน้าแหล่งข้อมูล) ระบบปรับรอบเองตามจำนวนโพสต์ใหม่: เจอเยอะ → ถี่ขึ้น (ต่ำสุด 2 นาที) · ไม่เจอ → ห่างขึ้น (สูงสุด 3 เท่า) ส่วนขยายเปิดทีละแท็บเท่านั้น เลื่อนอ่านอย่างเดียว ไม่กดอะไรบนหน้า Facebook และหยุดเมื่อเจอโพสต์ที่เคยเก็บแล้วหรือเก่าเกินกำหนด</p>
         </Card>
         <Card className="space-y-3">
-          <h2 className="font-semibold">โทเคนส่วนขยาย</h2>
+          <h2 className="font-semibold">โทเคนส่วนขยาย (แบบเดิม · ใช้ได้เฉพาะ localhost)</h2>
           <p className="break-all rounded-xl bg-paper px-3 py-2 font-mono text-sm">{settings.extensionToken || "ยังไม่มีโทเคน รัน seed หรือสร้างใหม่"}</p>
           <div className="flex gap-2">
             <Button type="button" variant="outline" onClick={async () => {

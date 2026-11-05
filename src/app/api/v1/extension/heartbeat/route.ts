@@ -10,7 +10,7 @@ export function OPTIONS() {
 
 // Read-only status from the browser extension: version, Facebook login (account id only), open group tabs, last error.
 export async function POST(request: Request) {
-  if (!(await requireExtensionToken(request.headers.get("authorization")))) {
+  if (!(await requireExtensionToken(request.headers.get("authorization"), request))) {
     await noteBadExtensionToken();
     return withCors(json({ error: "โทเคนไม่ถูกต้อง" }, 401));
   }

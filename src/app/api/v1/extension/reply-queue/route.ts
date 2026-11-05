@@ -13,7 +13,7 @@ export function OPTIONS() {
 // Used by the extension's overlay on the Facebook tab. It only records what the owner did
 // ("sent" after they pressed Facebook's own send button, or "skip") and opens the next queued lead.
 export async function POST(request: Request) {
-  if (!(await requireExtensionToken(request.headers.get("authorization")))) {
+  if (!(await requireExtensionToken(request.headers.get("authorization"), request))) {
     return withCors(json({ error: "โทเคนไม่ถูกต้อง" }, 401));
   }
   const parsed = extensionReplySchema.safeParse(await request.json().catch(() => null));

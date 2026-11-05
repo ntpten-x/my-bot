@@ -35,3 +35,25 @@ export async function resolveOllamaBaseUrl(configured?: string): Promise<string>
   }
   return candidates[0];
 }
+
+let reach: { ok: boolean; at: number } | null = null;
+
+/** Is any Ollama server answering from this host? Cached ~45 s so a cloud deploy without Ollama skips it cheaply. */
+export async function ollamaReachable(configured?: string): Promise<boolean> {
+  if (process.env.OLLAMA_DISABLED === "1") return false;
+  if (reach && Date.now() - reach.at < 45_000) return reach.ok;
+  let ok = false;
+  for (const url of ollamaBaseCandidates(configured || process.env.OLLAMA_BASE_URL)) {
+    try {
+      const response = await fetch(`${url}/api/tags`, { signal: AbortSignal.timeout(800) });
+      if (response.ok) {
+        ok = true;
+        break;
+      }
+    } catch {
+      continue;
+    }
+  }
+  reach = { ok, at: Date.now() };
+  return ok;
+}

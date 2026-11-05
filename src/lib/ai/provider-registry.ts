@@ -3,7 +3,7 @@ import type { CatNode } from "../pipeline/catalog";
 import type { ClassifyInput, LooseAiItem } from "../pipeline/classify-rules";
 import { prisma } from "../prisma";
 import type { AppSettings } from "../settings";
-import { resolveOllamaBaseUrl, OLLAMA_KEEP_ALIVE } from "./ollama-url";
+import { resolveOllamaBaseUrl, OLLAMA_KEEP_ALIVE, ollamaReachable } from "./ollama-url";
 import { extractAiItems } from "./parse";
 import { AI_SYSTEM, userPrompt } from "./prompt";
 import { presetById, type ProviderKind } from "./provider-presets";
@@ -193,8 +193,11 @@ function asItems(raw: string): LooseAiItem[] {
  */
 export async function routedClassifyAttempts(settings: AppSettings, store: RouterStore = dbRouterStore) {
   await ensureSeeded(settings);
-  const rows = await listProviders();
-  if (!rows.some((row) => row.enabled && row.tasks.includes("classify"))) return null;
+  const allRows = await listProviders();
+  if (!allRows.some((row) => row.enabled && row.tasks.includes("classify"))) return null;
+  // Skip (never cool down: the DB is shared with other hosts) Ollama rows when this server has no Ollama.
+  const ollamaUp = await ollamaReachable(settings.ollamaBaseUrl);
+  const rows = ollamaUp ? allRows : allRows.filter((row) => row.kind !== "ollama");
   const { ready, skipped } = orderAvailable(rows, "classify", new Date(), sharedMinuteWindow);
   const providers = ready.map((row) => ({
     name: `${row.preset === "custom" ? "ai" : row.preset}:${row.name}`.slice(0, 60),

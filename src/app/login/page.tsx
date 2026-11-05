@@ -28,8 +28,8 @@ export default function LoginPage() {
     setBusy(true);
     setError("");
     try {
-      await api("/api/auth/login", { method: "POST", body: JSON.stringify({ password }) });
-      router.replace("/dashboard");
+      const result = await api<{ weakPassword?: boolean }>("/api/auth/login", { method: "POST", body: JSON.stringify({ password }) });
+      router.replace(result.weakPassword ? "/settings/security" : "/dashboard");
       router.refresh();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "เข้าสู่ระบบไม่สำเร็จ");

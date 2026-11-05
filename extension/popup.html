@@ -3,28 +3,39 @@
   <head>
     <meta charset="utf-8" />
     <style>
-      body { font: 14px/1.5 "Segoe UI", sans-serif; width: 320px; margin: 0; padding: 14px; color: #1c1612; background: #f3ecdf; }
+      body { font: 14px/1.5 "Segoe UI", sans-serif; width: 330px; margin: 0; padding: 14px; color: #1c1612; background: #f3ecdf; }
       h1 { font-size: 18px; margin: 0 0 4px; }
       p { margin: 0 0 10px; color: #6f6256; }
       label { display: block; margin: 8px 0 4px; font-weight: 600; }
       input { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #e3d5c3; border-radius: 8px; }
-      button { margin-top: 12px; width: 100%; padding: 8px; border: 0; border-radius: 8px; background: #c24e1d; color: white; }
+      button { margin-top: 10px; width: 100%; padding: 8px; border: 0; border-radius: 8px; background: #c24e1d; color: white; cursor: pointer; }
+      button.ghost { background: transparent; color: #c24e1d; border: 1px solid #c24e1d; }
       .row { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+      .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #e3d5c3; font-size: 12px; }
+      .ok { background: #d8ead9; color: #24553a; }
+      details { margin-top: 10px; }
       #status { min-height: 1.2em; margin-top: 8px; }
+      #code { text-transform: uppercase; letter-spacing: 2px; font-family: monospace; }
     </style>
   </head>
   <body>
-    <h1>MY-BOT</h1>
-    <p>อ่านโพสต์กลุ่มที่คุณเป็นสมาชิก แล้วส่งเข้าแอปบนเครื่อง ไม่โพสต์และไม่คอมเมนต์ให้</p>
-    <label>ที่อยู่แอป</label>
-    <input id="apiBase" value="http://localhost:8001" />
-    <label>โทเคนจากหน้าตั้งค่า</label>
-    <input id="token" type="password" />
+    <h1>MY-BOT <span id="version" class="pill"></span></h1>
+    <p>อ่านโพสต์กลุ่มที่คุณเป็นสมาชิก แล้วส่งเข้า MY-BOT ของคุณ ไม่โพสต์และไม่คอมเมนต์ให้</p>
+    <label for="apiBase">ที่อยู่เซิร์ฟเวอร์ MY-BOT</label>
+    <input id="apiBase" placeholder="http://localhost:8001 หรือ https://xxx.onrender.com" />
+    <div id="pairState" style="margin-top:8px"></div>
+    <label for="code">รหัสจับคู่ (จากหน้า “ส่วนขยาย” บนเว็บ)</label>
+    <input id="code" maxlength="9" placeholder="ABCD-EFGH" autocomplete="off" />
+    <button id="pair">จับคู่อุปกรณ์นี้</button>
     <div class="row">
       <input id="enabled" type="checkbox" style="width:auto" />
       <label for="enabled" style="margin:0">เปิดดึงกลุ่มอัตโนมัติ</label>
     </div>
-    <button id="save">บันทึก</button>
+    <button id="save" class="ghost">บันทึก</button>
+    <details>
+      <summary>โทเคนแบบเดิม (ใช้ได้เฉพาะแอปบนเครื่อง localhost)</summary>
+      <input id="token" type="password" placeholder="วางโทเคนจากหน้าตั้งค่า" style="margin-top:6px" />
+    </details>
     <div id="status"></div>
     <script src="popup.js"></script>
   </body>

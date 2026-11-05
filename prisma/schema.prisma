@@ -398,3 +398,31 @@ model AiProvider {
 
   @@index([priority])
 }
+
+model ExtensionPairingCode {
+  id        String    @id @default(cuid())
+  codeHash  String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+}
+
+model ExtensionDevice {
+  id         String    @id @default(cuid())
+  name       String    @default("")
+  tokenHash  String    @unique
+  tokenHint  String    @default("")
+  version    String    @default("")
+  lastSeenAt DateTime?
+  lastIp     String    @default("")
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+}
+
+model LoginGuard {
+  key         String   @id
+  failures    Int      @default(0)
+  windowStart DateTime @default(now())
+  lockedUntil DateTime?
+  updatedAt   DateTime @updatedAt
+}

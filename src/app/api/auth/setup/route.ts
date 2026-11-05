@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { cookieOptions, createOwner, createSession, ownerExists, SESSION_COOKIE } from "@/lib/auth";
 import { json } from "@/lib/http";
+import { passwordProblems } from "@/lib/password-policy";
 
 export const dynamic = "force-dynamic";
 
@@ -14,9 +15,11 @@ export async function POST(request: Request) {
   const parsed = bodySchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" }, 400);
   if (parsed.data.password !== parsed.data.confirm) return json({ error: "รหัสผ่านไม่ตรงกัน" }, 400);
+  const problems = passwordProblems(parsed.data.password);
+  if (problems.length) return json({ error: `รหัสผ่านยังไม่ปลอดภัย: ต้อง${problems.join(", ")}`, problems }, 400);
   const owner = await createOwner(parsed.data.password);
   const token = await createSession(owner.id);
   const response = json({ ok: true });
-  response.cookies.set(SESSION_COOKIE, token, cookieOptions());
+  response.cookies.set(SESSION_COOKIE, token, cookieOptions(request));
   return response;
 }
