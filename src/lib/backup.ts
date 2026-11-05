@@ -10,7 +10,7 @@ import { shouldSendSummary } from "./smart/summary";
 export const BACKUP_TABLES = [
   "Owner", "Session", "Source", "Category", "Post", "AiJob", "OcrCache", "Feedback", "PreferenceWeight",
   "Summary", "Keyword", "Note", "Notification", "Setting", "AiCache", "FetchTask", "ParseSample", "FetchLog",
-  "ReplyTemplate", "AutomationRule", "RuleHit", "ReplyQueueItem", "FbAccount", "ExtensionHeartbeat",
+  "ReplyTemplate", "AutomationRule", "RuleHit", "ReplyQueueItem", "FbAccount", "ExtensionHeartbeat", "PostTombstone",
 ] as const;
 
 type Delegate = { findMany: (args?: unknown) => Promise<unknown[]> };

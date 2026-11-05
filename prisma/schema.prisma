@@ -475,6 +475,17 @@ model Lease {
 }
 
 // Idempotency keys: an alert or summary with the same key is sent once.
+// Dedupe record for a post removed by retention, so the same post is not stored or alerted again.
+model PostTombstone {
+  contentHash String   @id
+  sourceId    String
+  externalUrl String
+  createdAt   DateTime @default(now())
+
+  @@index([sourceId, externalUrl])
+  @@index([createdAt])
+}
+
 model SentKey {
   key       String   @id
   createdAt DateTime @default(now())

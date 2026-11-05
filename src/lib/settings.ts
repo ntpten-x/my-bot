@@ -58,6 +58,8 @@ export type AppSettings = {
   watchNoPostsHours: number;
   watchExtOfflineMinutes: number;
   watchAlertEveryHours: number;
+  postRetentionDays: number;
+  leadRetentionDays: number;
   watchParseSpikePct: number;
   quietPauseOnFacebook: boolean;
   quietWindow: string;
@@ -139,6 +141,8 @@ export async function getSettings(): Promise<AppSettings> {
     watchNoPostsHours: num(map.watch_no_posts_hours, 6, 1, 48),
     watchExtOfflineMinutes: num(map.watch_ext_offline_minutes, 30, 5, 720),
     watchAlertEveryHours: num(map.watch_alert_every_hours, 6, 1, 48),
+    postRetentionDays: num(map.post_retention_days, 30, 7, 365),
+    leadRetentionDays: num(map.lead_retention_days, 90, 7, 730),
     watchParseSpikePct: num(map.watch_parse_spike_pct, 30, 10, 100),
     quietPauseOnFacebook: map.quiet_pause_on_facebook !== "false",
     quietWindow: String(map.quiet_window ?? "").slice(0, 200),
@@ -212,6 +216,8 @@ export function publicSettings(settings: AppSettings) {
     watchNoPostsHours: settings.watchNoPostsHours,
     watchExtOfflineMinutes: settings.watchExtOfflineMinutes,
     watchAlertEveryHours: settings.watchAlertEveryHours,
+    postRetentionDays: settings.postRetentionDays,
+    leadRetentionDays: settings.leadRetentionDays,
     watchParseSpikePct: settings.watchParseSpikePct,
     quietPauseOnFacebook: settings.quietPauseOnFacebook,
     quietWindow: settings.quietWindow,

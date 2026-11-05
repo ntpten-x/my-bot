@@ -35,6 +35,8 @@ type Settings = {
   watchNoPostsHours: number;
   watchExtOfflineMinutes: number;
   watchAlertEveryHours: number;
+  postRetentionDays?: number;
+  leadRetentionDays?: number;
   watchParseSpikePct: number;
   quietPauseOnFacebook?: boolean;
   quietWindow?: string;
@@ -51,6 +53,11 @@ type Settings = {
   embedLastAt: string;
 };
 
+type RetentionInfo = {
+  preview: { posts: number; totalPosts: number; fetchLogs: number; scrapeRuns: number; notifications: number; tombstones: number; policy: { postDays: number; leadDays: number } };
+  lastRun: { at: string; posts: number; fetchLogs: number; scrapeRuns: number; notifications: number; more: boolean } | null;
+};
+
 export default function SettingsPage() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [geminiApiKey, setGeminiApiKey] = useState("");
@@ -61,6 +68,15 @@ export default function SettingsPage() {
   const [error, setError] = useState("");
   const [confirmToken, setConfirmToken] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [retention, setRetention] = useState<RetentionInfo | null>(null);
+
+  async function loadRetention() {
+    try {
+      setRetention(await api<RetentionInfo>("/api/settings/retention"));
+    } catch {
+      setRetention(null);
+    }
+  }
 
   useEffect(() => {
     api<{ settings: Settings }>("/api/settings")
@@ -267,6 +283,33 @@ export default function SettingsPage() {
               <Input type="number" min={1} max={48} value={settings.watchAlertEveryHours ?? 6} onChange={(event) => setSettings({ ...settings, watchAlertEveryHours: Number(event.target.value) })} />
             </div>
           </div>
+        </Card>
+        <Card className="space-y-3">
+          <h2 className="font-semibold">ลบข้อมูลเก่าอัตโนมัติ</h2>
+          <p className="text-sm text-muted-foreground">ระบบลบโพสต์ที่ดึงมาเก่ากว่าที่กำหนดทุกวันเวลา 03:30 น. พร้อมผล AI แจ้งเตือน และประวัติการดึงที่เก่ากว่ากัน โพสต์ที่ลบแล้วจะไม่ถูกเก็บหรือแจ้งเตือนซ้ำ</p>
+          <div className="grid gap-3 md:grid-cols-2">
+            <div>
+              <Label>เก็บโพสต์ไว้ (วัน)</Label>
+              <Input type="number" min={7} max={365} value={settings.postRetentionDays ?? 30} onChange={(event) => setSettings({ ...settings, postRetentionDays: Number(event.target.value) })} />
+            </div>
+            <div>
+              <Label>เก็บโพสต์ที่บันทึกไว้/ตอบแล้ว/เป็นลีด (วัน)</Label>
+              <Input type="number" min={7} max={730} value={settings.leadRetentionDays ?? 90} onChange={(event) => setSettings({ ...settings, leadRetentionDays: Number(event.target.value) })} />
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <Button type="button" variant="outline" onClick={loadRetention}>นับข้อมูลที่จะถูกลบ (ไม่ลบจริง)</Button>
+            {retention ? (
+              <span>
+                รอบถัดไปจะลบโพสต์ {retention.preview.posts.toLocaleString()} จาก {retention.preview.totalPosts.toLocaleString()} โพสต์ · บันทึกดึง {retention.preview.fetchLogs.toLocaleString()} · รอบอ่าน {retention.preview.scrapeRuns.toLocaleString()} · แจ้งเตือน {retention.preview.notifications.toLocaleString()}
+              </span>
+            ) : null}
+          </div>
+          {retention?.lastRun ? (
+            <p className="text-xs text-muted-foreground">
+              ลบล่าสุด {new Date(retention.lastRun.at).toLocaleString("th-TH", { timeZone: "Asia/Bangkok" })}: โพสต์ {retention.lastRun.posts} · บันทึกดึง {retention.lastRun.fetchLogs} · รอบอ่าน {retention.lastRun.scrapeRuns} · แจ้งเตือน {retention.lastRun.notifications}{retention.lastRun.more ? " (ยังเหลือ จะลบต่อรอบหน้า)" : ""}
+            </p>
+          ) : null}
         </Card>
         <Card className="space-y-3">
           <h2 className="font-semibold">แจ้งเตือนภายนอก</h2>

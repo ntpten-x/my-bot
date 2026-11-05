@@ -116,6 +116,22 @@ export async function ingestPosts(input: {
 
   const seenHash = new Set(existing.map((item) => item.contentHash));
   const seenUrl = new Set(existing.map((item) => item.externalUrl));
+  // Posts already removed by retention: treat as seen so they are not stored or alerted again.
+  const removed = prepared.length
+    ? await prisma.postTombstone.findMany({
+        where: {
+          OR: [
+            { contentHash: { in: prepared.map((item) => item.lead.hash) } },
+            { sourceId: source.id, externalUrl: { in: prepared.map((item) => item.url) } },
+          ],
+        },
+        select: { contentHash: true, externalUrl: true },
+      })
+    : [];
+  for (const row of removed) {
+    seenHash.add(row.contentHash);
+    if (row.externalUrl) seenUrl.add(row.externalUrl);
+  }
   let duplicates = 0;
   const fresh = [];
   for (const item of prepared) {
