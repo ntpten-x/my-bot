@@ -5,7 +5,7 @@ const PUBLIC_PATHS = new Set(["/login", "/setup"]);
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  if (pathname.startsWith("/api") || pathname.startsWith("/_next")) return NextResponse.next();
+  if (pathname === "/health" || pathname.startsWith("/api") || pathname.startsWith("/_next")) return NextResponse.next();
   const hasSession = Boolean(request.cookies.get(SESSION_COOKIE)?.value);
   if (!hasSession && !PUBLIC_PATHS.has(pathname)) {
     const url = request.nextUrl.clone();
