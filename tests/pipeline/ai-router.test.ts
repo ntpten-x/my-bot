@@ -36,6 +36,16 @@ let clock = new Date("2026-11-04T10:00:00Z");
 const now = () => clock;
 
 describe("AI provider router", () => {
+  it("preserves Retry-After for the queue after recording a provider cooldown", async () => {
+    const { store } = memoryStore();
+    await expect(routeTask([provider("limited", 1)], "classify", { store, now, minute: new MinuteWindow() }, async () => {
+      throw new AiCallError("rate limited", 429, 120_000);
+    })).resolves.toMatchObject({ value: null });
+    const { guardedCall } = await import("../../src/lib/ai/router");
+    await expect(guardedCall(provider("retry", 1), "classify", { store, now, minute: new MinuteWindow() }, async () => {
+      throw new AiCallError("rate limited", 429, 120_000);
+    })).rejects.toMatchObject({ status: 429, retryAfterMs: 120_000 });
+  });
   beforeEach(() => {
     clock = new Date("2026-11-04T10:00:00Z");
   });

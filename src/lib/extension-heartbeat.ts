@@ -4,7 +4,7 @@ import { upsertSettings } from "./settings";
 import { touchExtension } from "./extension-status";
 
 // Version this MY-BOT build expects from extension/manifest.json (tests keep the two in sync).
-export const EXPECTED_EXTENSION_VERSION = "1.8.1";
+export const EXPECTED_EXTENSION_VERSION = "1.9.0";
 
 const FB_ID = /^\d{5,20}$/;
 
@@ -49,6 +49,7 @@ export const heartbeatSchema = z.object({
     })
     .optional(),
   outboxSize: z.number().int().nonnegative().max(100000).default(0),
+  runtime: z.object({ quietReason: z.string().max(160).default(""), commentsEnabled: z.boolean().default(false), commentPending: z.boolean().default(false) }).optional(),
 });
 
 export type HeartbeatInput = z.infer<typeof heartbeatSchema>;
@@ -79,7 +80,7 @@ export function normalizeHeartbeat(input: HeartbeatInput) {
   };
 }
 
-export async function recordHeartbeat(input: HeartbeatInput) {
+export async function recordHeartbeat(input: HeartbeatInput, deviceId?: string) {
   const row = normalizeHeartbeat(input);
   const now = new Date();
   await prisma.extensionHeartbeat.upsert({
@@ -118,6 +119,7 @@ export async function recordHeartbeat(input: HeartbeatInput) {
   // Forget installs that have been silent for 30 days.
   await prisma.extensionHeartbeat.deleteMany({ where: { lastSeenAt: { lt: new Date(Date.now() - 30 * 86400000) } } });
   await touchExtension();
+  if (deviceId && input.runtime) await upsertSettings({ [`extension_runtime_${deviceId}`]: JSON.stringify({ ...input.runtime, fbUserId: row.fbUserId, at: now.toISOString() }) });
   return row;
 }
 

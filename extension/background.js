@@ -1,4 +1,5 @@
 importScripts("assist.js", "identity.js", "scrape.js", "quiet.js");
+importScripts("browser-comment.js", "comment-worker.js");
 
 const DEFAULTS = {
   apiBase: "http://localhost:8001",
@@ -183,8 +184,13 @@ async function flushOutbox(cfg) {
     let outbox = await loadOutbox();
     for (let sent = 0; outbox.length && sent < 10; sent += 1) {
       const item = outbox[0];
+      if (item.apiBase && item.apiBase !== base(cfg)) break;
       const response = await postJson(cfg, "/api/v1/ingest", { sourceUrl: item.sourceUrl, posts: item.posts, fbUserId: item.fbUserId || undefined }, { timeoutMs: 45000, retries: 0 }).catch(() => null);
       if (!response || RETRY_STATUS.has(response.status) || response.status >= 500) break;
+      if ([401, 403].includes(response.status)) {
+        await rememberError("การเชื่อมต่อหมดสิทธิ์ ข้อมูลยังอยู่ในคิว กรุณาจับคู่ Extension ใหม่");
+        break;
+      }
       // Sent, or rejected for good (4xx): either way it leaves the outbox.
       if (response.ok) await countSent(item.posts.length);
       outbox = (await loadOutbox()).filter((entry) => !(entry.at === item.at && entry.sourceUrl === item.sourceUrl));
@@ -224,14 +230,14 @@ async function sendPosts(cfg, sourceUrl, posts) {
   try {
     response = await postJson(cfg, "/api/v1/ingest", { sourceUrl, posts, fbUserId: fbUserId || undefined });
   } catch (error) {
-    await queueOutbox({ sourceUrl, posts, fbUserId });
+    await queueOutbox({ sourceUrl, posts, fbUserId, apiBase: base(cfg) });
     await rememberError(`ส่งโพสต์ไม่สำเร็จ เก็บไว้ส่งใหม่ ${posts.length} โพสต์: ${String(error && error.message ? error.message : error).slice(0, 120)}`);
     return null;
   }
   if (response.ok) {
     await countSent(posts.length);
   } else {
-    if (response.status >= 500 || RETRY_STATUS.has(response.status)) await queueOutbox({ sourceUrl, posts, fbUserId });
+    if (response.status >= 500 || RETRY_STATUS.has(response.status) || [401, 403].includes(response.status)) await queueOutbox({ sourceUrl, posts, fbUserId, apiBase: base(cfg) });
     const data = await response.clone().json().catch(() => ({}));
     await rememberError(`ส่งโพสต์เข้า MY-BOT ไม่สำเร็จ (${response.status}) ${data.error || ""}`.trim());
   }
@@ -272,7 +278,7 @@ async function heartbeat() {
   if (!cfg.token) return;
   beating = true;
   try {
-    const stored = await chrome.storage.local.get({ fbIdentity: null, lastError: null, lastPostAt: 0, postsSent: 0, profileLabel: "" });
+    const stored = await chrome.storage.local.get({ fbIdentity: null, lastError: null, lastPostAt: 0, postsSent: 0, profileLabel: "", quiet: null, browserCommentsEnabled: false, commentJournal: null });
     const outbox = await loadOutbox();
     const fb = stored.fbIdentity || { loggedIn: false, id: "", name: "", at: 0 };
     const response = await postJson(cfg, "/api/v1/extension/heartbeat", {
@@ -288,6 +294,7 @@ async function heartbeat() {
       postsSent: stored.postsSent || 0,
       errors: await errorSummary(),
       outboxSize: outbox.length,
+      runtime: { quietReason: stored.quiet?.reason || "", commentsEnabled: Boolean(stored.browserCommentsEnabled), commentPending: Boolean(stored.commentJournal) },
     }, { timeoutMs: 30000, retries: 1 });
     await chrome.storage.local.set({ lastHeartbeat: { at: Date.now(), status: response.status } });
     if (response.ok && outbox.length) await flushOutbox(cfg);
@@ -875,6 +882,10 @@ chrome.runtime.onStartup.addListener(() => {
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "mybot-tick") void cycle();
   if (alarm.name === "mybot-tasks") void pollTasks();
+  if (alarm.name === "mybot-tasks") {
+    const deps = { loadConfig, postJson, currentFbUserId, base, waitComplete, sleep, rememberError };
+    void globalThis.MyBotCommentWorker.recover(deps).then(() => globalThis.MyBotCommentWorker.run(deps));
+  }
   if (alarm.name === "mybot-heartbeat") {
     void heartbeat();
     void closeOrphanReaders().catch(() => undefined);

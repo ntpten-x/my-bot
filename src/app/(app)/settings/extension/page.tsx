@@ -44,7 +44,7 @@ export default function ExtensionPage() {
       <div>
         <Link href="/settings" className="text-sm text-muted">← ตั้งค่า</Link>
         <h1 className="text-2xl font-semibold">ส่วนขยาย Chrome</h1>
-        <p className="mt-1 max-w-2xl text-sm text-muted">ส่วนขยายอ่านโพสต์กลุ่ม Facebook ที่คุณเปิดดูอยู่แล้วส่งเข้า MY-BOT อ่านอย่างเดียว ไม่กด ไม่โพสต์ ไม่คอมเมนต์</p>
+        <p className="mt-1 max-w-2xl text-sm text-muted">ส่วนขยายอ่านโพสต์และส่งเข้า MY-BOT การคอมเมนต์ผ่านหน้าจอต้องเปิดสวิตช์รับงานบนเครื่องนี้และกฎบนเว็บก่อน ค่าเริ่มต้นไม่ส่ง</p>
       </div>
       {error && <p className="text-sm text-red-700">{error}</p>}
       {outdated && (

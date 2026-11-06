@@ -66,12 +66,12 @@ export async function loadGroupProducts(sourceIds?: string[], now = Date.now()):
  * Owner choices are never overwritten. If the rules found a product while the post sat in "other"/no category,
  * the post moves to that product's category.
  */
-export async function assignProducts(postIds: string[], aiSlugs: Map<string, string | null | undefined> = new Map()) {
+export async function assignProducts(postIds: string[], aiSlugs: Map<string, string | null | undefined> = new Map(), revisions?: Map<string, number>) {
   if (!postIds.length) return 0;
   const [posts, products, cats] = await Promise.all([
     prisma.post.findMany({
       where: { id: { in: postIds }, NOT: { productBy: "owner" } },
-      select: { id: true, text: true, ocrText: true, sourceId: true, productId: true, productBy: true, aiProvider: true, category: { select: { slug: true } } },
+      select: { id: true, textRevision: true, text: true, ocrText: true, sourceId: true, productId: true, productBy: true, aiProvider: true, category: { select: { slug: true } } },
     }),
     loadProducts(),
     prisma.category.findMany({ where: { parentId: null }, select: { id: true, slug: true } }),
@@ -93,8 +93,8 @@ export async function assignProducts(postIds: string[], aiSlugs: Map<string, str
         ? cats.find((row) => row.slug === catOf.get(pick.slug!))?.id
         : undefined;
     if (productId === post.productId && pick.by === post.productBy && !moveCategory) continue;
-    await prisma.post.update({
-      where: { id: post.id },
+    await prisma.post.updateMany({
+      where: { id: post.id, textRevision: revisions?.get(post.id) ?? post.textRevision },
       data: { productId, productBy: pick.by, ...(moveCategory ? { categoryId: moveCategory, subcategoryId: null } : {}) },
     });
     changed += 1;

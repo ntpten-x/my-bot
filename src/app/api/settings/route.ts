@@ -4,6 +4,7 @@ import { json } from "@/lib/http";
 import { getSettings, publicSettings, upsertSettings } from "@/lib/settings";
 import { clearProviderHealthCache } from "@/lib/ai/health";
 import { clearOllamaUrlCache } from "@/lib/ai/ollama-url";
+import { commentMutationGuard } from "@/lib/auto-comment/api-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +34,7 @@ const putSchema = z.object({
   updateLineToken: z.boolean().optional(),
   lineToken: z.string().optional(),
   discordWebhook: z.string().optional(),
+  updateDiscordWebhook: z.boolean().optional(),
   notifyEmailTo: z.string().optional(),
   smtpHost: z.string().optional(),
   smtpPort: z.number().int().min(1).max(65535).optional(),
@@ -59,7 +61,7 @@ const putSchema = z.object({
 });
 
 export async function PUT(request: Request) {
-  const { error } = await authed();
+  const error = await commentMutationGuard(request);
   if (error) return error;
   const parsed = putSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return json({ error: "ค่าที่ส่งมาไม่ถูกต้อง" }, 400);
@@ -84,7 +86,7 @@ export async function PUT(request: Request) {
   set("max_posts_per_run", body.maxPostsPerRun);
   set("line_user_id", body.lineUserId?.trim());
   if (body.updateLineToken) entries.line_token = body.lineToken?.trim() ?? "";
-  set("discord_webhook", body.discordWebhook?.trim());
+  if (body.updateDiscordWebhook || body.discordWebhook?.trim()) set("discord_webhook", body.discordWebhook?.trim() ?? "");
   set("notify_email_to", body.notifyEmailTo?.trim());
   set("smtp_host", body.smtpHost?.trim());
   set("smtp_port", body.smtpPort);
@@ -109,6 +111,8 @@ export async function PUT(request: Request) {
   set("vision_ocr", body.visionOcr);
   clearProviderHealthCache();
   clearOllamaUrlCache();
-  await upsertSettings(entries);
-  return json({ settings: publicSettings(await getSettings()) });
+  try {
+    await upsertSettings(entries);
+    return json({ settings: publicSettings(await getSettings()) });
+  } catch { return json({ error: "บันทึกไม่สำเร็จ ตรวจ AI_KEY_SECRET และฐานข้อมูล" }, 400); }
 }

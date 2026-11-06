@@ -24,6 +24,7 @@ type Settings = {
   lineUserId: string;
   lineTokenSet: boolean;
   discordWebhook: string;
+  discordWebhookSet?: boolean;
   notifyEmailTo: string;
   smtpHost: string;
   smtpPort: number;
@@ -64,6 +65,7 @@ export default function SettingsPage() {
   const [groqApiKey, setGroqApiKey] = useState("");
   const [lineToken, setLineToken] = useState("");
   const [smtpPass, setSmtpPass] = useState("");
+  const [clearDiscord, setClearDiscord] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [confirmToken, setConfirmToken] = useState(false);
@@ -94,6 +96,8 @@ export default function SettingsPage() {
         method: "PUT",
         body: JSON.stringify({
           ...settings,
+          updateDiscordWebhook: clearDiscord || settings.discordWebhook.length > 0,
+          discordWebhook: clearDiscord ? "" : settings.discordWebhook,
           updateGeminiKey: geminiApiKey.length > 0,
           geminiApiKey,
           updateGroqKey: groqApiKey.length > 0,
@@ -105,6 +109,7 @@ export default function SettingsPage() {
         }),
       });
       setSettings(data.settings);
+      setClearDiscord(false);
       setGeminiApiKey("");
       setGroqApiKey("");
       setLineToken("");
@@ -384,8 +389,9 @@ export default function SettingsPage() {
               <Input type="password" value={lineToken} onChange={(event) => setLineToken(event.target.value)} placeholder="ว่างไว้ถ้าไม่เปลี่ยน" />
             </div>
             <div className="md:col-span-2">
-              <Label>Discord webhook</Label>
-              <Input value={settings.discordWebhook} onChange={(event) => setSettings({ ...settings, discordWebhook: event.target.value })} />
+              <Label>Discord webhook {settings.discordWebhookSet ? "(มีค่าแล้ว)" : ""}</Label>
+              <Input type="password" autoComplete="off" placeholder="ว่างไว้เพื่อเก็บค่าเดิม" value={settings.discordWebhook} onChange={(event) => setSettings({ ...settings, discordWebhook: event.target.value })} />
+              <label className="mt-2 flex items-center gap-2 text-sm"><input type="checkbox" checked={clearDiscord} onChange={event => setClearDiscord(event.target.checked)} /> ล้าง Webhook ที่เก็บไว้</label>
             </div>
             <div>
               <Label>อีเมลผู้รับ</Label>
@@ -420,6 +426,7 @@ export default function SettingsPage() {
             onClick={async () => {
               const data = await api<{ settings: Settings }>("/api/settings/regenerate-token", { method: "POST" });
               setSettings(data.settings);
+      setClearDiscord(false);
               setConfirmToken(false);
               setMessage("สร้างโทเคนใหม่แล้ว อย่าลืมอัปเดตในส่วนขยาย");
             }}

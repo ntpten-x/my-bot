@@ -1,0 +1,54 @@
+{
+  "date": "2026-11-06",
+  "branch": "dev/security-stability",
+  "base_commit": "ee00dd45730764b77d229bae52218902d8d8aeac",
+  "uncommitted_worktree": true,
+  "audit": {
+    "info": 0,
+    "low": 0,
+    "moderate": 0,
+    "high": 0,
+    "critical": 0,
+    "total": 0
+  },
+  "checks": {
+    "unit_and_integration": {
+      "status": "PASS",
+      "command": "TEST_DATABASE_URL=<dedicated loopback database> npm run test:ci",
+      "files": 41,
+      "passed": 329,
+      "failed": 0,
+      "skipped": 0
+    },
+    "lint": {
+      "status": "PASS",
+      "command": "npm run lint"
+    },
+    "production_build": {
+      "status": "PASS",
+      "command": "npm run build"
+    },
+    "production_smoke": {
+      "status": "PASS",
+      "command": "TEST_DATABASE_URL=<dedicated loopback database> npm run test:production",
+      "database": "127.0.0.1:55432; disposable test_smoke_* schema"
+    },
+    "live_environment": {
+      "status": "BLOCKED",
+      "reason": "No production environment or live credentials accessed"
+    },
+    "legacy_gemini_defaults": {
+      "status": "FAIL",
+      "reason": "Retired models must be replaced and tested, or Gemini disabled before deployment"
+    },
+    "deployment": {
+      "status": "BLOCKED",
+      "reason": "Not authorized; no deployment performed"
+    }
+  },
+  "sha256": {
+    "package.json": "8e49ab16cbc4ed3573986947cb98c3ed7c51ffe6948f8079204a7ff75bde4a35",
+    "package-lock.json": "1e60d5485fe6f79c6e6600ff624d7067471ef33a0d1fdb39929d8665e7b0eec1",
+    "prisma/migrations/20261109100000_security_stability/migration.sql": "fadaaa493e21cc44878740c83da1f3f82b58e91e3c39bfab4ad4b2734b81b815"
+  }
+}

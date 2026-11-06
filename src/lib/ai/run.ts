@@ -27,21 +27,25 @@ export async function classifyLeads(
 
   // "auto" uses the owner's provider table (/settings/ai-providers) with cooldown failover.
   // An empty table, or a fixed provider choice, keeps the original env-based chain.
-  const routed = settings.aiProvider === "auto" ? await routedClassifyAttempts(settings).catch(() => null) : null;
-  const selected = routed ? { ready: [] as ProviderName[], errors: routed.errors } : await selectReadyProviders(order, settings);
-  const providers = routed
-    ? routed.providers
-    : selected.ready.map((name) => ({
-        name: name as string,
-        classify: (batch: ClassifyInput[], tree: CatNode[]) => callers[name](batch, tree, settings),
-      }));
+  const routed = settings.aiProvider === "auto" ? await routedClassifyAttempts(settings) : null;
+  // Explicitly disabled/cooling registry presets stay disabled. Only absent env presets
+  // are appended, so adding a key later works without bypassing the owner's limits.
+  const legacyOrder = routed ? order.filter(name => !routed.managedPresets.includes(name)) : order;
+  const selected = await selectReadyProviders(legacyOrder, settings);
+  const providers = [
+    ...(routed?.providers ?? []),
+    ...selected.ready.map(name => ({
+      name: name as string,
+      classify: (batch: ClassifyInput[], tree: CatNode[]) => callers[name](batch, tree, settings),
+    })),
+  ];
 
   const batches: ClassifyInput[][] = [];
   for (let index = 0; index < posts.length; index += 10) batches.push(posts.slice(index, index + 10));
 
   const results = [];
   const providersById: Record<string, string> = {};
-  const errors = [...selected.errors];
+  const errors = [...(routed?.errors ?? []), ...selected.errors];
   let provider = "rules";
   for (const batch of batches) {
     const outcome = await classifyWithChain({ posts: batch, catalog, providers, cache });

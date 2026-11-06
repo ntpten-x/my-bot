@@ -1,7 +1,15 @@
-import { afterAll, describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import path from "node:path";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { assessWatch, mergeWatchState, parseWatchState, type WatchFacts } from "../../src/lib/watchdog";
 import { tuneDatabaseUrl, prisma } from "../../src/lib/prisma";
 import { acquireLease, claimOnce, releaseLease } from "../../src/lib/lease";
+
+const fixture = vi.hoisted(() => {
+  const { createRequire } = process.getBuiltinModule("node:module");
+  const helper = createRequire(`${process.cwd()}/package.json`)("./tests/helpers/pg-test-db.cjs");
+  return { ...helper.setupTestDatabase("test_stability"), drop: helper.dropTestSchema };
+});
 
 const NOW = Date.UTC(2026, 10, 5, 12, 0, 0);
 const thresholds = { watchNoPostsHours: 6, watchExtOfflineMinutes: 30, watchParseSpikePct: 30 };
@@ -73,12 +81,15 @@ describe("database url tuning", () => {
   });
 });
 
-describe("leader lease and idempotency keys (database)", () => {
+describe.skipIf(!fixture.enabled)("leader lease and idempotency keys (database)", () => {
   const name = `test-lease-${process.pid}-${Date.now()}`;
   const key = `test-key-${process.pid}-${Date.now()}`;
+  beforeAll(() => {
+    execFileSync(process.execPath, [path.resolve("node_modules/prisma/build/index.js"), "migrate", "deploy"], { env: process.env, stdio: "pipe" });
+  }, 180_000);
   afterAll(async () => {
-    await prisma.lease.deleteMany({ where: { name } });
-    await prisma.sentKey.deleteMany({ where: { key } });
+    await fixture.drop(prisma, fixture.schema);
+    await prisma.$disconnect();
   });
   it("lets one holder lead until it releases or expires", async () => {
     expect(await acquireLease(name, 60_000, "a")).toBe(true);

@@ -1,4 +1,5 @@
 import cron from "node-cron";
+import { WorkerLease } from "../lib/worker-lease";
 import { prisma } from "../lib/prisma";
 import { getSettings, upsertSettings } from "../lib/settings";
 import { fetchRssPosts } from "../lib/rss";
@@ -21,8 +22,11 @@ import { runWatchdog } from "../lib/watchdog";
 import { maybeRunRetention } from "../lib/retention";
 import { maybeReclassify } from "../lib/reclassify";
 import { backfillProducts } from "../lib/products";
+import { assertProductionConfig } from "../lib/production-config";
+import { autoCommentTick } from "../lib/auto-comment/poll";
 
 process.env.MYBOT_PROCESS = "worker";
+assertProductionConfig();
 
 process.on("uncaughtException", (error) => {
   const message = error instanceof Error ? error.stack || error.message : String(error);
@@ -35,27 +39,29 @@ process.on("unhandledRejection", (error) => {
 
 let running = false;
 let consumerRunning = false;
+let commentRunning = false;
 let stopping = false;
-let leader = false;
-let leaderCheckedAt = 0;
 let startupDone = false;
-
-// Local and Render share the database: only the lease holder runs queues, alerts and schedules.
+const lease = new WorkerLease({
+  acquire: () => acquireLease(WORKER_LEASE, WORKER_LEASE_MS),
+  ttlMs: WORKER_LEASE_MS,
+  onLost: () => {
+    // Never release another holder's lease or keep running jobs after losing ours.
+    // The supervisor restarts us; claimed AI jobs recover via their stale timeout.
+    console.error("[worker] ยืนยัน lease ไม่ได้ — หยุดทันทีเพื่อป้องกันงานซ้ำ");
+    process.exit(1);
+  },
+});
+const assertActive = () => lease.assertActive();
 async function isLeader() {
   if (stopping) return false;
-  if (Date.now() - leaderCheckedAt < 30_000) return leader;
-  leaderCheckedAt = Date.now();
-  const was = leader;
-  try {
-    leader = await acquireLease(WORKER_LEASE, WORKER_LEASE_MS);
-  } catch (error) {
-    // Can't reach the DB: stop leading until the lease is confirmed again.
-    leader = false;
-    console.error(`[worker] lease check failed: ${error instanceof Error ? error.message : String(error)}`);
+  if (!lease.active() && !(await lease.renew())) return false;
+  if (!startupDone) {
+    startupDone = true;
+    console.log(`[worker] เป็นตัวหลัก (${INSTANCE_ID})`);
+    await startupJobs();
   }
-  if (leader !== was) console.log(leader ? `[worker] เป็นตัวหลัก (${INSTANCE_ID}) — รันคิวและงานตามเวลา` : `[worker] สแตนด์บาย — อีกเครื่องเป็นตัวหลักอยู่`);
-  if (leader && !startupDone) { startupDone = true; await startupJobs(); }
-  return leader;
+  return lease.active();
 }
 
 async function startupJobs() {
@@ -79,10 +85,12 @@ async function consume() {
   try {
     if (!(await isLeader())) return;
     for (;;) {
-      if (stopping) break;
-      const processed = await processAiQueue();
+      if (stopping || !lease.active()) break;
+      const processed = await processAiQueue(assertActive);
+      await assertActive();
       const embedded = await backfillEmbeddings(5);
-      const notified = await processNotificationQueue();
+      await assertActive();
+      const notified = await processNotificationQueue(10, assertActive);
       if (!processed && !embedded.tried && !notified) break;
       if (!processed && !embedded.filled) break;
     }
@@ -106,11 +114,13 @@ async function tick() {
     });
     const now = Date.now();
     for (const source of sources) {
+      await assertActive();
       const minutes = source.intervalMinutes || settings.fetchIntervalMinutes;
       const last = source.lastFetchedAt?.getTime() ?? 0;
       if (now - last < minutes * 60 * 1000) continue;
       try {
         const posts = source.type === "rss" ? await fetchRssPosts(source.url) : await fetchWebBoardPosts(source.url);
+        await assertActive();
         const result = await ingestPosts({ sourceUrl: source.url, posts, actor: "worker" });
         console.log(`[worker] ${source.name}: ใหม่ ${result.inserted} ซ้ำ ${result.duplicates}`);
       } catch (error) {
@@ -125,14 +135,23 @@ async function tick() {
         });
       }
     }
+    await assertActive();
     await maybeSendScheduledSummary();
+    await assertActive();
     await maybeBackupDatabase();
+    await assertActive();
     await maybeRunRetention().catch(() => undefined);
+    await assertActive();
     await backfillProducts().catch(() => undefined);
+    await assertActive();
     await maybeReclassify().catch(() => undefined);
+    await assertActive();
     await collapseTruncatedCaptures();
+    await assertActive();
     await processFollowUps().catch((error) => workerLog({ level: "error", message: "เตือนตามลีดไม่สำเร็จ", error: String(error).slice(0, 300) }));
+    await assertActive();
     await maybeBuildScheduledReplyQueue().catch((error) => workerLog({ level: "error", message: "สร้างคิวตอบลีดไม่สำเร็จ", error: String(error).slice(0, 300) }));
+    await assertActive();
     await runWatchdog().catch((error) => workerLog({ level: "error", message: "ตัวเฝ้าระวังระบบล้มเหลว", error: String(error).slice(0, 300) }));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -144,19 +163,31 @@ async function tick() {
 
 console.log("[worker] MY-BOT worker เริ่มทำงาน — ตรวจ RSS และเว็บบอร์ดทุก 1 นาที");
 void (async () => {
+  lease.start();
   await upsertSettings({ worker_started_at: new Date().toISOString() }).catch(() => undefined);
   const settings = await getSettings().catch(() => null);
   if (settings) await warmOllamaModels(settings).catch(() => undefined);
   const task = cron.schedule("* * * * *", () => { void tick(); }, { timezone: "Asia/Bangkok" });
   const timer = setInterval(() => { void consume(); }, 2000);
+  const commentTimer = setInterval(() => {
+    void (async () => {
+      if (commentRunning || stopping) return;
+      commentRunning = true;
+      try { if (await isLeader()) await autoCommentTick(assertActive); }
+      finally { commentRunning = false; }
+    })()
+      .catch(() => workerLog({ level: "error", message: "Auto Comment ตรวจงานไม่สำเร็จ จะลองในรอบถัดไป" }));
+  }, 3000);
   const shutdown = async (signal: string) => {
     if (stopping) return;
     stopping = true;
     console.log(`[worker] ได้รับ ${signal} — ปิดอย่างปลอดภัย`);
     task.stop();
     clearInterval(timer);
+    clearInterval(commentTimer);
+    lease.stop();
     const deadline = Date.now() + 10_000;
-    while ((running || consumerRunning) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 200));
+    while ((running || consumerRunning || commentRunning) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 200));
     await releaseLease(WORKER_LEASE).catch(() => undefined);
     await prisma.$disconnect().catch(() => undefined);
     process.exit(0);

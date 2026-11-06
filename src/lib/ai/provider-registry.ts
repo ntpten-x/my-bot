@@ -75,6 +75,7 @@ let seeded = false;
 
 /** First run: copy the env-based Ollama/Gemini/Groq setup into the table, in the old auto order. */
 export async function ensureSeeded(settings: AppSettings) {
+  if (!hasKeySecret()) return;
   if (seeded) return;
   if (await prisma.aiProvider.count()) {
     seeded = true;
@@ -194,10 +195,10 @@ function asItems(raw: string): LooseAiItem[] {
 export async function routedClassifyAttempts(settings: AppSettings, store: RouterStore = dbRouterStore) {
   await ensureSeeded(settings);
   const allRows = await listProviders();
-  if (!allRows.some((row) => row.enabled && row.tasks.includes("classify"))) return null;
+  if (!allRows.length) return null;
   // Skip (never cool down: the DB is shared with other hosts) Ollama rows when this server has no Ollama.
-  const ollamaUp = await ollamaReachable(settings.ollamaBaseUrl);
-  const rows = ollamaUp ? allRows : allRows.filter((row) => row.kind !== "ollama");
+  const reachable = await Promise.all(allRows.map(async row => row.kind !== "ollama" || await ollamaReachable(row.baseUrl || settings.ollamaBaseUrl)));
+  const rows = allRows.filter((_, index) => reachable[index]);
   const { ready, skipped } = orderAvailable(rows, "classify", new Date(), sharedMinuteWindow);
   const providers = ready.map((row) => ({
     name: `${row.preset === "custom" ? "ai" : row.preset}:${row.name}`.slice(0, 60),
@@ -209,7 +210,7 @@ export async function routedClassifyAttempts(settings: AppSettings, store: Route
         return { value: items, tokens: result.tokens };
       }),
   }));
-  return { providers, errors: skipped.map((item) => ({ name: item.name, message: item.reason })) };
+  return { providers, managedPresets: allRows.map(row => row.preset), errors: skipped.map((item) => ({ name: item.name, message: item.reason })) };
 }
 
 /** Owner pressed "ทดสอบ": one tiny real call. Success clears a cooldown; failure only notes the error. */

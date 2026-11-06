@@ -226,6 +226,14 @@ npm run doctor
 
 ก่อนอัปเดตให้หยุดเฉพาะ MY-BOT แล้วรัน migrate/build ตามขั้นตอนเดิม การ build บน Windows ขณะ web/worker ใช้ Prisma DLL อาจเกิด EPERM; อย่ารัน integration tests ที่ใช้ Prisma พร้อมกับขั้น generate ของ build
 
+### การอัปเดตความปลอดภัยและเสถียรภาพ
+
+ดู [รายละเอียด Migration, Backup v2, Restore แบบ Transaction และผลทดสอบ](SECURITY-STABILITY.th.md) ก่อนอัปเดต Local/Render ที่ใช้ฐานร่วมกัน ต้องหยุด Worker ทุก Host ก่อน Migrate และไม่รัน Worker ต่างรุ่นพร้อมกัน
+
+ตรวจไฟล์สำรองโดยไม่ต่อฐานได้ด้วย `npm run db:restore -- <file> --check` ไฟล์ v1 เดิมต้องเพิ่ม `--allow-legacy` เพราะข้อมูลบางตารางไม่มีใน Backup รุ่นนั้น ห้ามทดสอบ Restore บนฐานจริง
+
+DB Integration Tests ใช้เฉพาะ `TEST_DATABASE_URL` ที่ตั้งอย่างชัดเจน ไม่ใช้ `DIRECT_URL` เป็นทางเลือกอัตโนมัติ หากไม่มีฐานทดสอบจะ Skip ชุดที่ต้องใช้ฐาน Node สำหรับชุดทดสอบตาม Lockfile ต้องเป็น 22.22.2+, 24.15.0+ หรือ 26+
+
 ## แก้ปัญหาที่พบบ่อย
 
 - **พอร์ต 11434 ถูกกันไว้:** ใช้ `OLLAMA_HOST=127.0.0.1:41434` แล้วเปิด `ollama serve` ใหม่ ใส่ `OLLAMA_BASE_URL=http://127.0.0.1:41434` ใน `.env`

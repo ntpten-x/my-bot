@@ -2,6 +2,8 @@
 
 เว็บ: https://my-bot-e6bt.onrender.com · Render ดีพลอยใหม่เองทุกครั้งที่ push `master`
 
+ก่อนนำ Branch ความปลอดภัยขึ้นจริง ให้อ่าน [Production Readiness และแผน Apply/Rollback](PRODUCTION-READINESS.th.md) ต้องปิด FAIL/BLOCKED ที่เกี่ยวข้องและได้รับอนุญาตก่อน Push/Deploy
+
 ## ตัวแปรที่ต้องตั้งใน Render → Environment
 
 | ตัวแปร | จำเป็น | หมายเหตุ |
@@ -18,7 +20,7 @@
 
 ## ตั้งค่าบริการ
 
-- Build command: `npm ci && npm run build` · Start command: `npm start` (หรือ `npx next start -p $PORT`)
+- Build command: `npm ci --include=dev && npm run build` · Start command: `npm start` เพื่อเปิดทั้ง Web และ Worker (Build ต้องใช้ Prisma CLI/TypeScript ใน devDependencies; ตัวรัน Worker `tsx` เป็น runtime dependency)
 - Health check path: **`/health`** (ตอบ 200 เมื่อ ok/degraded, 503 เมื่อ down)
 - Migration: ฐานข้อมูล Supabase ใช้ร่วมกับเครื่อง ตอนนี้ migrate จากเครื่องแล้ว ถ้าอยากให้ Render ทำเอง ตั้ง Pre-deploy command เป็น `npx prisma migrate deploy`
 - **Free tier หลับ** หลังไม่มีคนเรียก ~15 นาที เรียกครั้งแรกจะช้า 30–60 วินาที ส่วนขยายจะลองใหม่เองรอบถัดไป ถ้าต้องการให้ตื่นตลอดให้ใช้แผนแบบเสียเงิน
@@ -39,3 +41,7 @@
 - คุกกี้ `Secure; HttpOnly; SameSite=Lax` เมื่อเข้าผ่าน HTTPS
 - CORS อนุญาตเฉพาะ `chrome-extension://` และโดเมนของเว็บเอง
 - ถ้ารหัสผ่านอ่อน หลังล็อกอินจะพาไปหน้า ตั้งค่า → ความปลอดภัย เพื่อเปลี่ยน (≥12 ตัว ตัวอักษร+ตัวเลข+ตัวพิมพ์ใหญ่หรือสัญลักษณ์)
+
+## โหมดคอมเมนต์ผ่าน Extension v1.9.0
+
+เริ่มที่ `/getting-started` และอ่าน [คู่มือปัจจุบัน](BROWSER-COMMENTS.th.md) Chrome บนเครื่องเจ้าของต้องเปิดและล็อกอิน Facebook อยู่ ทั้งการอ่านกลุ่มและการส่งขึ้นกับเครื่องนี้ Worker ปกติไม่เรียก Graph API เพื่อคอมเมนต์ โหมดส่งมีสวิตช์รับงานบนอุปกรณ์ + กฎที่ยืนยันสิทธิ์ + Dry Run แยกกัน Migration ใหม่ต้องทดสอบฐานแยกก่อน ไม่ apply Production โดยอัตโนมัติ

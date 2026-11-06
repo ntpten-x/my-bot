@@ -21,10 +21,10 @@ async function loadCentroids() {
   };
 }
 
-export async function enrichPosts(postIds: string[], classified: AiItem[], settings: AppSettings, options: { embed?: boolean } = {}) {
+export async function enrichPosts(postIds: string[], classified: AiItem[], settings: AppSettings, options: { embed?: boolean; revisions?: Map<string, number> } = {}) {
   if (!postIds.length) return;
   const posts = await prisma.post.findMany({
-    where: { id: { in: postIds } },
+    where: { id: { in: postIds }, ...(options.revisions ? { OR: postIds.map(id => ({ id, textRevision: options.revisions!.get(id) })) } : {}) },
     include: { source: true, category: true },
   });
   const config = embeddingConfig(settings);
@@ -109,8 +109,8 @@ export async function enrichPosts(postIds: string[], classified: AiItem[], setti
       signals,
       preference,
     });
-    await prisma.post.update({
-      where: { id: post.id },
+    await prisma.post.updateMany({
+      where: { id: post.id, textRevision: post.textRevision },
       data: {
         score: scored.score,
         scoreReason: scored.reason,

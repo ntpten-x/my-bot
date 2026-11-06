@@ -104,6 +104,7 @@ model Post {
   text             String
   normalizedText   String
   contentHash      String            @unique
+  textRevision     Int               @default(0)
   postedAt         DateTime?
   /// Generated column COALESCE(postedAt, createdAt); never write it.
   sortAt           DateTime?
@@ -151,6 +152,7 @@ model Post {
   notifications    Notification[]
   feedback         Feedback[]
   labelFixes       LabelCorrection[]
+  autoCommentJobs  AutoCommentJob[]
 
   @@unique([sourceId, externalUrl])
   @@index([createdAt])
@@ -177,6 +179,7 @@ model AiJob {
   attempts      Int      @default(0)
   nextAttemptAt DateTime @default(now())
   lastError     String   @default("")
+  claimToken    String?
   latencyMs     Int?
   queueWaitMs   Int?
   createdAt     DateTime @default(now())
@@ -565,4 +568,110 @@ model SentKey {
   createdAt DateTime @default(now())
 
   @@index([createdAt])
+}
+
+model AutoCommentRule {
+  id               String   @id @default(cuid())
+  name             String
+  enabled          Boolean  @default(false)
+  revision         Int      @default(1)
+  sourceIdsJson    String   @default("[]")
+  keywords         String   @default("")
+  excludeKeywords  String   @default("")
+  keywordMode      String   @default("any")
+  selectionMode    String   @default("sequential")
+  nextTemplate     Int      @default(0)
+  startMinute      Int      @default(0)
+  endMinute        Int      @default(1440)
+  daysJson         String   @default("[0,1,2,3,4,5,6]")
+  maxAgeHours      Int      @default(24)
+  areaCooldownSec  Int      @default(300)
+  pageId           String   @default("")
+  deliveryMode     String   @default("official")
+  browserDeviceId  String   @default("")
+  browserFbUserId  String   @default("")
+  browserConsent   Boolean  @default(false)
+  requireAi        Boolean  @default(false)
+  messageMode      String   @default("template")
+  pageTokenEnc     String?
+  managerTokenEnc  String?
+  pausedReason     String   @default("")
+  lastPolledAt     DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  templates        AutoCommentTemplate[]
+  jobs             AutoCommentJob[]
+  logs             AutoCommentLog[]
+
+  @@index([enabled, createdAt])
+}
+
+model AutoCommentTemplate {
+  id        String   @id @default(cuid())
+  ruleId    String
+  rule      AutoCommentRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  body      String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@unique([ruleId, sortOrder])
+}
+
+model AutoCommentJob {
+  id              String   @id @default(cuid())
+  ruleId          String
+  rule            AutoCommentRule @relation(fields: [ruleId], references: [id], onDelete: Restrict)
+  postId          String?
+  post            Post?    @relation(fields: [postId], references: [id], onDelete: SetNull)
+  dedupeKey       String   @unique
+  postKey         String
+  externalUrl     String
+  sourceId        String
+  pageId          String   @default("")
+  deliveryMode    String   @default("official")
+  browserDeviceId String   @default("")
+  browserFbUserId String   @default("")
+  remotePostId    String   @default("")
+  ruleRevision    Int
+  textRevision    Int
+  generation      String
+  dryRun          Boolean  @default(true)
+  message         String
+  status          String   @default("pending")
+  attempts        Int      @default(0)
+  claimToken      String?
+  claimUntil      DateTime?
+  nextAttemptAt   DateTime @default(now())
+  dispatchedAt    DateTime?
+  remoteCommentId String?
+  lastError       String   @default("")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  logs            AutoCommentLog[]
+
+  @@index([status, nextAttemptAt])
+  @@index([deliveryMode, browserDeviceId, status, nextAttemptAt], map: "AutoCommentJob_browser_queue_idx")
+  @@index([sourceId, dispatchedAt])
+  @@index([pageId, dispatchedAt])
+  @@index([generation, status])
+  @@index([postId])
+}
+
+model AutoCommentLog {
+  id        String   @id @default(cuid())
+  ruleId    String?
+  rule      AutoCommentRule? @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  jobId     String?
+  job       AutoCommentJob? @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  eventKey  String?  @unique
+  event     String
+  message   String   @default("")
+  pageId    String   @default("")
+  sourceId  String   @default("")
+  createdAt DateTime @default(now())
+
+  @@index([event, createdAt])
+  @@index([pageId, event, createdAt])
+  @@index([sourceId, event, createdAt])
+  @@index([jobId])
 }

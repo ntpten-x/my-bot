@@ -1,0 +1,80 @@
+// Runs in the MV3 worker only. Nothing is exposed to Facebook page messages.
+(function (root) {
+  let busy = false;
+  async function run(deps) {
+    if (busy) return; busy = true;
+    let tabId, job, cfg, authorized = false;
+    const request = async body => {
+      const response = await deps.postJson(cfg, "/api/v1/extension/comments", body, { retries: 0, timeoutMs: 15000 });
+      if (!response.ok) throw new Error("comment request rejected");
+      return response.json();
+    };
+    const report = async (outcome, commentUrl) => request({ action: "report", id: job.id, claimToken: job.claimToken, outcome, ...(commentUrl ? { commentUrl } : {}) });
+    try {
+      cfg = await deps.loadConfig();
+      const local = await chrome.storage.local.get({ browserCommentsEnabled: false, commentJournal: null });
+      if (!local.browserCommentsEnabled || cfg.paused || !String(cfg.token).startsWith("mbd_") || local.commentJournal) return;
+      const fbUserId = await deps.currentFbUserId(); if (!fbUserId) return;
+      job = (await request({ action: "claim", fbUserId })).job; if (!job) return;
+      // Persist before opening a tab. A service-worker restart must never re-run this job.
+      await chrome.storage.local.set({ commentJournal: { id: job.id, claimToken: job.claimToken, apiBase: deps.base(cfg), state: "claimed", at: Date.now() } });
+      const tab = await chrome.tabs.create({ url: job.externalUrl, active: false }); tabId = tab.id;
+      await deps.waitComplete(tabId);
+      const execute = async (kind, payload = {}) => {
+        const result = await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, func: root.MyBotBrowserComment.action, args: [kind, { ...job, ...payload }] });
+        return result[0]?.result || { ok: false, outcome: "failed" };
+      };
+      // Retry only finding/loading the composer, never the send action.
+      let prepared;
+      for (let attempt = 0; attempt < 8; attempt++) {
+        prepared = await execute("prepare");
+        if (prepared.ok || prepared.outcome === "blocked") break;
+        await deps.sleep(1000);
+      }
+      if (!prepared?.ok) { await report(prepared?.outcome === "blocked" ? "blocked" : "failed"); return; }
+      const latest = await deps.loadConfig();
+      const enabled = await chrome.storage.local.get({ browserCommentsEnabled: false });
+      if (latest.paused || !enabled.browserCommentsEnabled || deps.base(latest) !== deps.base(cfg) || latest.token !== cfg.token) { await report("failed"); return; }
+      // Mark locally before asking. Losing the authorization response is an ambiguous dispatch too.
+      await chrome.storage.local.set({ commentJournal: { id: job.id, claimToken: job.claimToken, apiBase: deps.base(cfg), state: "sending", at: Date.now() } });
+      authorized = true;
+      const started = Date.now();
+      const grant = (await request({ action: "authorize", id: job.id, claimToken: job.claimToken, fbUserId })).grant;
+      if (!grant || Date.now() - started >= grant.ttlMs) { await report("uncertain"); return; }
+      const finalConfig = await deps.loadConfig(), finalFlags = await chrome.storage.local.get({ browserCommentsEnabled: false });
+      if (finalConfig.paused || !finalFlags.browserCommentsEnabled || finalConfig.token !== cfg.token || deps.base(finalConfig) !== deps.base(cfg)) { await report("uncertain"); return; }
+      const sent = await execute("send", { permitUntil: started + Math.min(3000, grant.ttlMs) });
+      if (!sent.ok) { await report(sent.outcome === "blocked" ? "blocked" : "uncertain"); return; }
+      let observed;
+      for (let attempt = 0; attempt < 10; attempt++) {
+        await deps.sleep(1000); observed = await execute("observe");
+        if (observed.ok || observed.outcome === "blocked") break;
+      }
+      await report(observed?.outcome || "uncertain", observed?.commentUrl);
+    } catch {
+      if (job) await report(authorized ? "uncertain" : "failed").catch(() => undefined);
+      await deps.rememberError("งานคอมเมนต์ Extension หยุด กรุณาตรวจประวัติและ Facebook ก่อนเริ่มใหม่").catch(() => undefined);
+    } finally {
+      // Retain an unresolved journal if reporting failed; recovery reports only, never sends.
+      if (job) {
+        try {
+          await report(authorized ? "uncertain" : "failed");
+          await chrome.storage.local.remove("commentJournal");
+        } catch { /* recovered on the next alarm */ }
+      }
+      if (tabId !== undefined) await chrome.tabs.remove(tabId).catch(() => undefined);
+      busy = false;
+    }
+  }
+  async function recover(deps) {
+    if (busy) return;
+    const stored = await chrome.storage.local.get({ commentJournal: null }); const journal = stored.commentJournal;
+    if (!journal) return;
+    const cfg = await deps.loadConfig(); if (deps.base(cfg) !== journal.apiBase) return;
+    try {
+      const response = await deps.postJson(cfg, "/api/v1/extension/comments", { action: "report", id: journal.id, claimToken: journal.claimToken, outcome: journal.state === "sending" ? "uncertain" : "failed" }, { retries: 0, timeoutMs: 15000 });
+      if (response.ok) await chrome.storage.local.remove("commentJournal");
+    } catch { /* no retry of sending */ }
+  }
+  root.MyBotCommentWorker = { run, recover };
+})(typeof globalThis !== "undefined" ? globalThis : this);

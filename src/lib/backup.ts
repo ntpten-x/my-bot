@@ -1,20 +1,13 @@
-import { mkdir, readdir, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, stat, unlink, writeFile, rename } from "node:fs/promises";
 import { gzipSync } from "node:zlib";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { snapshotDatabase } from "./backup-format";
+export { BACKUP_TABLES } from "./backup-format";
 import { prisma } from "./prisma";
 import { upsertSettings } from "./settings";
 import { bangkokClock } from "./smart/summary";
 import { shouldSendSummary } from "./smart/summary";
-
-/** Every table, in an order that respects foreign keys when restoring. */
-export const BACKUP_TABLES = [
-  "Owner", "Session", "Product", "Source", "Category", "Post", "AiJob", "OcrCache", "Feedback", "PreferenceWeight",
-  "Summary", "Keyword", "Note", "Notification", "Setting", "AiCache", "FetchTask", "ParseSample", "FetchLog",
-  "ReplyTemplate", "AutomationRule", "RuleHit", "ReplyQueueItem", "FbAccount", "ExtensionHeartbeat", "PostTombstone",
-  "LabelCorrection",
-] as const;
-
-type Delegate = { findMany: (args?: unknown) => Promise<unknown[]> };
 
 export function backupsToDelete(files: { name: string; mtimeMs: number }[], now: number, keepDays = 14) {
   const cutoff = now - keepDays * 24 * 3600 * 1000;
@@ -25,12 +18,7 @@ export function backupsToDelete(files: { name: string; mtimeMs: number }[], now:
 
 /** Snapshot of all rows as gzip JSON. Restore with `npm run db:restore -- <file> --replace`. */
 export async function exportDatabase() {
-  const tables: Record<string, unknown[]> = {};
-  for (const model of BACKUP_TABLES) {
-    const key = model.charAt(0).toLowerCase() + model.slice(1);
-    tables[model] = await (prisma as unknown as Record<string, Delegate>)[key].findMany();
-  }
-  return gzipSync(JSON.stringify({ format: "mybot-backup", version: 1, createdAt: new Date().toISOString(), tables }));
+  return gzipSync(JSON.stringify(await snapshotDatabase(prisma)));
 }
 
 export async function backupDatabase(name?: string) {
@@ -38,7 +26,11 @@ export async function backupDatabase(name?: string) {
   const directory = path.resolve("data", "backups");
   await mkdir(directory, { recursive: true });
   const file = name ?? `${day}.json.gz`;
-  await writeFile(path.join(directory, file), await exportDatabase());
+  if (path.basename(file) !== file) throw new Error("Invalid backup filename");
+  const target = path.join(directory, file);
+  const temporary = `${target}.${randomUUID()}.tmp`;
+  await writeFile(temporary, await exportDatabase(), { mode: 0o600, flag: "wx" });
+  await rename(temporary, target);
   const entries = await readdir(directory);
   const files = await Promise.all(
     entries.map(async (entry) => ({ name: entry, mtimeMs: (await stat(path.join(directory, entry))).mtimeMs })),

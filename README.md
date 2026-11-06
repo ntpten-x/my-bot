@@ -244,3 +244,7 @@ pm2 save
 การเปิดแท็บกลุ่มอัตโนมัติอาจทำให้ Facebook จำกัดบัญชีได้ ถ้าใช้หลายกลุ่มให้ถ่างช่วงเวลาและลดจำนวนกลุ่มต่อรอบ
 
 ตัวอ่านโพสต์อยู่ใน `extension/parser.js` ทดสอบกับไฟล์ตัวอย่างใน `extension/fixtures` การตัดซ้ำ การจับคีย์เวิร์ด และตัวคัดสำรองอยู่ใน `tests/pipeline`
+
+## Auto Comment (เปิดใช้เอง)
+
+หน้า `/auto-comment` เพิ่มกฎ/ข้อความ/Allowlist พร้อม Dry Run, Queue, Emergency Stop และ Audit Log ค่าเริ่มต้นปิด ส่งจริงผ่าน API ทางการเฉพาะโพสต์ของเพจที่มีสิทธิ์; กลุ่ม/Marketplace เตรียมข้อความให้ส่งเอง Extension ยังคงอ่านอย่างเดียว ดู [คู่มือและข้อจำกัด](docs/AUTO-COMMENT.th.md) ก่อนตั้ง Credential หรือ Apply Migration

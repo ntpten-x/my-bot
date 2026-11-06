@@ -42,6 +42,7 @@ function IntervalInput({ value, onSave }: { value: number; onSave: (minutes: num
 
 const TYPE_LABEL: Record<string, string> = {
   facebook_group: "กลุ่ม Facebook",
+  facebook_page: "เพจ Facebook (API ทางการ)",
   facebook_marketplace: "Marketplace",
   rss: "RSS",
   web_board: "เว็บบอร์ด",
@@ -169,7 +170,7 @@ export default function SourcesPage() {
                 <a href={source.url} className="mt-1 block break-all text-sm text-clay" target="_blank" rel="noreferrer">{source.url}</a>
                 <p className="mt-2 text-sm text-muted">
                   {source.postCount} โพสต์ · ดึงล่าสุด {timeAgo(source.lastFetchedAt)}
-                  {isExtensionSource(source.type) ? null : ` · ทุก ${source.intervalMinutes} นาที`}
+                  {source.type === "facebook_page" ? " · อ่านผ่าน Worker เมื่อ Auto Comment ทำงาน (รอบ 5 นาที)" : isExtensionSource(source.type) ? null : ` · ทุก ${source.intervalMinutes} นาที`}
                 </p>
                 {isExtensionSource(source.type) ? (
                   <div className="mt-2 grid gap-x-4 gap-y-1 text-sm text-muted sm:grid-cols-2 lg:grid-cols-4">

@@ -15,6 +15,13 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
   const { id } = await context.params;
   const source = await prisma.source.findUnique({ where: { id } });
   if (!source) return json({ error: "ไม่พบแหล่งข้อมูล" }, 404);
+  if (source.type === "facebook_page") {
+    if (!source.enabled) return json({ error: "เปิดแหล่งข้อมูลก่อนสั่งอ่านเพจ" }, 409);
+    // Only the worker may read this Page through the official Graph API. Never
+    // fall through to the web-board HTML fetcher or change the engine's state.
+    await prisma.autoCommentRule.updateMany({ where: { sourceIdsJson: { contains: JSON.stringify(source.id) } }, data: { lastPolledAt: null } });
+    return json({ queued: true, message: "จัดคิวอ่านเพจผ่าน API ทางการแล้ว ต้องเปิดกฎและ Start Auto Comment (ใช้ Dry Run เพื่อไม่ส่งจริง)" });
+  }
   if (isExtensionSource(source.type)) {
     const task = await prisma.fetchTask.create({ data: { sourceId: source.id, status: "pending" } });
     await prisma.fetchLog.create({

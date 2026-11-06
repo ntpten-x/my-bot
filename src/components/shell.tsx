@@ -8,12 +8,14 @@ import { api } from "./api";
 import { cn } from "@/lib/utils";
 
 const NAV = [
+  { href: "/getting-started", label: "เริ่มใช้งาน", icon: Activity },
   { href: "/overview", label: "ภาพรวมระบบ", icon: Activity },
   { href: "/dashboard", label: "แดชบอร์ด", icon: LayoutDashboard },
   { href: "/feed", label: "ฟีดลีด", icon: Radar },
   { href: "/pipeline", label: "ไปป์ไลน์", icon: Bookmark },
   { href: "/templates", label: "ข้อความสำเร็จรูป", icon: MessageSquareText },
   { href: "/automation", label: "กฎและพื้นที่", icon: Workflow },
+  { href: "/auto-comment", label: "คอมเมนต์อัตโนมัติ", icon: MessageSquareText },
   { href: "/sources", label: "แหล่งข้อมูล", icon: Rss },
   { href: "/parser", label: "ทดสอบตัวอ่าน", icon: Bug },
   { href: "/categories", label: "หมวดและคีย์เวิร์ด", icon: Tags },

@@ -76,7 +76,7 @@ export async function ingestPosts(input: {
 
   const prepared = [];
   for (const raw of input.posts) {
-    const text = raw.text?.replace(/\u0000/g, "").trim();
+    const text = raw.text?.replace(/\u0000/g, "").trim().slice(0, 8000);
     if (!text || text.length < 4 || !raw.url) continue;
     const lead = prepareLead({ text, url: raw.url }, rules, catalog);
     prepared.push({ raw: { ...raw, text }, lead, url: normalizeUrl(raw.url) });
@@ -90,29 +90,46 @@ export async function ingestPosts(input: {
             { sourceId: source.id, externalUrl: { in: prepared.map((item) => item.url) } },
           ],
         },
-        select: { id: true, contentHash: true, externalUrl: true, text: true },
+        select: { id: true, contentHash: true, externalUrl: true, text: true, sourceId: true, textRevision: true, aiProvider: true },
       })
     : [];
 
-  // Expanded text for a post we stored cut off at "See more": update it in place and classify again.
+  // A partial re-read must not replace a complete capture. Full edits and expansions
+  // are one atomic revision: changing the text also invalidates any in-flight claim.
   let expanded = 0;
-  const byUrl = new Map(existing.map((row) => [row.externalUrl, row]));
+  const revisedIds: string[] = [];
+  const byUrl = new Map(existing.filter(row => row.sourceId === source.id).map(row => [row.externalUrl, row]));
   for (const item of prepared) {
     const old = byUrl.get(item.url);
-    if (!old || !isExpansionOf(old.text, item.raw.text)) continue;
-    await prisma.post.update({
-      where: { id: old.id },
-      data: {
-        text: item.raw.text.slice(0, 8000),
-        normalizedText: item.lead.normalizedText.slice(0, 8000),
-        aiProvider: "rules",
-        truncated: false,
-        refetchAfter: null,
-      },
+    if (!old || old.text === item.raw.text) continue;
+    if (isTruncatedText(item.raw.text) && (!isTruncatedText(old.text) || item.raw.text.length <= old.text.length)) continue;
+    const ids = resolveCategoryIds(rows, item.lead.categorySlug, item.lead.subcategorySlug);
+    const revised = await prisma.$transaction(async tx => {
+      const result = await tx.post.updateMany({
+        where: { id: old.id, textRevision: old.textRevision },
+        data: {
+          text: item.raw.text, normalizedText: item.lead.normalizedText,
+          contentHash: item.lead.hash, textRevision: { increment: 1 },
+          embeddingConfig: "", embeddingKey: "", embeddingRetryAt: new Date(), ocrText: "",
+          keywordHitsJson: JSON.stringify(item.lead.watch), forbiddenHit: item.lead.forbidden.length > 0,
+          truncated: isTruncatedText(item.raw.text), refetchAfter: null,
+          ...(old.aiProvider === "owner" ? {} : {
+            categoryId: ids.categoryId, subcategoryId: ids.subcategoryId,
+            intent: marketplace ? "seller" : item.lead.intent, province: item.lead.province,
+            isAd: marketplace ? false : item.lead.isAd, suggestedReply: item.lead.suggestedReply, aiProvider: "rules",
+          }),
+        },
+      });
+      if (!result.count) return false;
+      const reset = { status: old.aiProvider === "owner" ? "skipped" : "pending", claimToken: null, attempts: 0, nextAttemptAt: new Date(), lastError: "", latencyMs: null, queueWaitMs: null, createdAt: new Date() };
+      await tx.aiJob.upsert({ where: { postId: old.id }, update: reset, create: { postId: old.id, ...reset } });
+      return true;
     });
-    old.text = item.raw.text;
-    await enqueueAiJobs([old.id]);
-    expanded += 1;
+    if (revised) {
+      if (isExpansionOf(old.text, item.raw.text)) expanded += 1;
+      old.text = item.raw.text; old.contentHash = item.lead.hash; old.textRevision += 1;
+      revisedIds.push(old.id);
+    }
   }
 
   const seenHash = new Set(existing.map((item) => item.contentHash));
@@ -178,6 +195,10 @@ export async function ingestPosts(input: {
     }
   }
 
+  if (revisedIds.length) {
+    await assignProducts(revisedIds);
+    await enrichPosts(revisedIds, [], settings, { embed: false });
+  }
   const aiProvider = "rules";
   if (createdIds.length) {
     await collapseIdenticalTexts(fresh.map((item) => item.lead.normalizedText));
@@ -233,6 +254,7 @@ export async function ingestPosts(input: {
     ok: true as const,
     inserted: uniqueIds.length,
     expanded,
+    revised: revisedIds.length,
     duplicates,
     source: canonicalSourceUrl(source.url),
   };

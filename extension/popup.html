@@ -20,7 +20,7 @@
   </head>
   <body>
     <h1>MY-BOT <span id="version" class="pill"></span></h1>
-    <p>อ่านโพสต์กลุ่มที่คุณเป็นสมาชิก แล้วส่งเข้า MY-BOT ของคุณ ไม่โพสต์และไม่คอมเมนต์ให้</p>
+    <p>อ่านโพสต์ส่งเข้า MY-BOT และส่งคอมเมนต์ผ่านหน้าจอ Facebook เฉพาะกฎที่คุณเปิดและผูกกับอุปกรณ์นี้</p>
     <label for="apiBase">ที่อยู่เซิร์ฟเวอร์ MY-BOT</label>
     <input id="apiBase" placeholder="http://localhost:8001 หรือ https://xxx.onrender.com" />
     <div id="pairState" style="margin-top:8px"></div>
@@ -33,6 +33,9 @@
     </div>
     <p style="margin-top:6px;font-size:12px">จับคู่และเข้าสู่ระบบ Facebook แล้วจะเริ่มอ่านเอง ในหน้าต่าง Chrome แยกที่ย่อไว้ (minimized) ไม่เปิดแท็บในหน้าต่างที่คุณใช้อยู่ และไม่แย่งโฟกัส ปิดหน้าต่างนั้นได้ ระบบจะสร้างใหม่แบบย่อไว้เอง</p>
     <button id="save" class="ghost">บันทึก</button>
+    <div class="row"><input id="browserComments" type="checkbox" style="width:auto" /><label for="browserComments" style="margin:0">อนุญาตรับงานคอมเมนต์อัตโนมัติบนเครื่องนี้</label></div>
+    <p style="font-size:12px">ค่าเริ่มต้นปิด ต้องเปิดกฎและปิด Dry Run บนเว็บด้วย พบ Checkpoint หรือผลไม่ชัดเจนจะหยุด ไม่ส่งซ้ำอัตโนมัติ ปิดสวิตช์นี้เพื่อหยุดรับงานใหม่</p>
+    <button id="clearCommentJournal" class="ghost">ปลดล็อกบนเครื่องหลังตรวจผลเองแล้ว</button>
     <details>
       <summary>โทเคนแบบเดิม (ใช้ได้เฉพาะแอปบนเครื่อง localhost)</summary>
       <input id="token" type="password" placeholder="วางโทเคนจากหน้าตั้งค่า" style="margin-top:6px" />

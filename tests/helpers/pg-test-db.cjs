@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-require-imports -- CommonJS helper loaded by vi.hoisted */
 // Disposable Postgres schema for DB integration tests (call inside vi.hoisted, before importing prisma).
-// Uses TEST_DATABASE_URL, else DIRECT_URL from the environment or .env (session pooler / direct connection;
+// Uses only explicitly configured TEST_DATABASE_URL from the environment or .env (direct connection;
 // not the pgbouncer transaction pooler). Each run gets its own schema, dropped by dropTestSchema().
 // Without a Postgres URL the DB suites are skipped.
 const fs = require("node:fs");
@@ -16,8 +16,13 @@ function fromDotEnv(key) {
 }
 
 function setupTestDatabase(prefix) {
-  const base = process.env.TEST_DATABASE_URL || fromDotEnv("TEST_DATABASE_URL") || process.env.DIRECT_URL || fromDotEnv("DIRECT_URL");
-  if (!base || !/^postgres(ql)?:/.test(base)) return { enabled: false, schema: "" };
+  if (!/^test_[a-z0-9_]+$/.test(prefix)) throw new Error("Unsafe test schema prefix");
+  // Never silently run destructive test fixtures using the owner's production credentials.
+  const base = process.env.TEST_DATABASE_URL || fromDotEnv("TEST_DATABASE_URL");
+  if (!base || !/^postgres(ql)?:/.test(base)) {
+    if (process.env.MYBOT_REQUIRE_TEST_DB === "1") throw new Error("TEST_DATABASE_URL is required for strict integration runs");
+    return { enabled: false, schema: "" };
+  }
   const schema = `${prefix}_${Date.now().toString(36)}_${crypto.randomBytes(3).toString("hex")}`;
   const url = new URL(base);
   url.searchParams.delete("pgbouncer");

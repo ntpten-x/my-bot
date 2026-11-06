@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { prisma } from "../prisma";
 import { getSettings } from "../settings";
 import { loadCatalogFromDb, resolveCategoryIds } from "../sources";
@@ -67,32 +68,39 @@ export async function enqueueUnclassifiedPosts(reset = false) {
   return count;
 }
 
-export async function processAiQueue() {
+export async function processAiQueue(assertActive: () => Promise<void> = async () => undefined) {
   if (process.env.MYBOT_PROCESS !== "worker" || running) return 0;
   running = true;
+  const claimToken = randomUUID();
   let claimed: { id: string; postId: string; attempts: number }[] = [];
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   const retry = async (job: typeof claimed[number], message: string, delay = 0, latencyMs?: number) => {
     const attempts = job.attempts + 1;
     const status = attempts >= MAX_AI_ATTEMPTS ? "failed" : "pending";
-    await prisma.aiJob.updateMany({
-      where: { id: job.id, status: "running" },
-      data: { status, attempts, nextAttemptAt: new Date(Date.now() + Math.max(delay, backoffMs(job.attempts))), lastError: message.slice(0, 500), latencyMs },
+    const updated = await prisma.aiJob.updateMany({
+      where: { id: job.id, status: "running", claimToken },
+      data: { status, claimToken: null, attempts, nextAttemptAt: new Date(Date.now() + Math.max(delay, backoffMs(job.attempts))), lastError: message.slice(0, 500), latencyMs },
     });
+    if (!updated.count) return;
     await workerLog({ level: "error", jobId: job.id, postId: job.postId, message: status === "failed" ? "พักงาน AI หลังผิดซ้ำ กดลองใหม่ได้ที่แดชบอร์ด" : "คืนงาน AI เพื่อรอลองใหม่", error: message.slice(0, 500), latencyMs });
   };
   try {
+    await assertActive();
     const settings = await getSettings();
     await prisma.aiJob.updateMany({
       where: { status: "running", updatedAt: { lt: new Date(Date.now() - STUCK_JOB_MS) } },
-      data: { status: "pending", nextAttemptAt: new Date(), lastError: "worker หยุดตอบเกิน 2 นาที จึงคืนเข้าคิว" },
+      data: { status: "pending", claimToken: null, nextAttemptAt: new Date(), lastError: "worker หยุดตอบเกิน 2 นาที จึงคืนเข้าคิว" },
+    });
+    await prisma.aiJob.updateMany({
+      where: { status: { in: ["pending", "skipped"] }, post: { aiProvider: "owner" } },
+      data: { status: "skipped", claimToken: null, lastError: "เจ้าของจัดหมวดเอง ไม่เรียก AI ทับ" },
     });
     if (settings.aiProvider !== "rules") {
-      await prisma.aiJob.updateMany({ where: { status: "skipped" }, data: { status: "pending", nextAttemptAt: new Date() } });
+      await prisma.aiJob.updateMany({ where: { status: "skipped", post: { OR: [{ aiProvider: null }, { aiProvider: { not: "owner" } }] } }, data: { status: "pending", nextAttemptAt: new Date() } });
     }
     // Atomic claim: two instances (local + Render) never take the same job.
     const claimedIds = await prisma.$queryRaw<{ id: string }[]>`
-      UPDATE "AiJob" SET "status" = 'running', "updatedAt" = now()
+      UPDATE "AiJob" SET "status" = 'running', "updatedAt" = now(), "claimToken" = ${claimToken}
       WHERE "id" IN (
         SELECT "id" FROM "AiJob"
         WHERE "status" = 'pending' AND "nextAttemptAt" <= ${new Date()}
@@ -103,20 +111,20 @@ export async function processAiQueue() {
       RETURNING "id"`;
     const jobs = claimedIds.length
       ? await prisma.aiJob.findMany({
-        where: { id: { in: claimedIds.map(row => row.id) } },
+        where: { id: { in: claimedIds.map(row => row.id) }, claimToken },
         orderBy: [{ nextAttemptAt: "asc" }, { id: "asc" }], include: { post: { include: { source: { select: { type: true } } } } },
       })
       : [];
     if (!jobs.length) return 0;
     claimed = jobs;
     const started = Date.now();
-    await Promise.all(jobs.map(job => prisma.aiJob.update({ where: { id: job.id }, data: { queueWaitMs: Math.min(2_147_483_647, Math.max(0, started - job.createdAt.getTime())) } })));
+    await Promise.all(jobs.map(job => prisma.aiJob.updateMany({ where: { id: job.id, claimToken }, data: { queueWaitMs: Math.min(2_147_483_647, Math.max(0, started - job.createdAt.getTime())) } })));
     heartbeat = setInterval(() => {
-      void prisma.aiJob.updateMany({ where: { id: { in: claimed.map(job => job.id) }, status: "running" }, data: { updatedAt: new Date() } }).catch(() => undefined);
+      void assertActive().then(() => prisma.aiJob.updateMany({ where: { id: { in: claimed.map(job => job.id) }, status: "running", claimToken }, data: { updatedAt: new Date() } })).catch(() => undefined);
     }, 30_000);
     heartbeat.unref();
     if (settings.aiProvider === "rules") {
-      await prisma.aiJob.updateMany({ where: { id: { in: jobs.map(job => job.id) } }, data: { status: "skipped", lastError: "เจ้าของเลือกใช้กฎ ไม่เรียก AI" } });
+      await prisma.aiJob.updateMany({ where: { id: { in: jobs.map(job => job.id) }, claimToken }, data: { status: "skipped", claimToken: null, lastError: "เจ้าของเลือกใช้กฎ ไม่เรียก AI" } });
       claimed = [];
       return jobs.length;
     }
@@ -139,7 +147,7 @@ export async function processAiQueue() {
         try {
           const parsed: unknown = JSON.parse(job.post.imagesJson);
           ocrText = await ocrPostImages(Array.isArray(parsed) ? parsed.map(String) : [], settings);
-          if (ocrText) await prisma.post.update({ where: { id: job.postId }, data: { ocrText } });
+          if (ocrText) await prisma.post.updateMany({ where: { id: job.postId, textRevision: job.post.textRevision, aiJobs: { some: { claimToken, status: "running" } } }, data: { ocrText } });
         } catch {
           await workerLog({ level: "error", jobId: job.id, postId: job.postId, message: "OCR ล้มเหลว จะจัดหมวดต่อโดยไม่มีข้อความจากรูป" });
         }
@@ -159,28 +167,41 @@ export async function processAiQueue() {
     for (const item of adItems) outcome.providersById[item.id] = "rules:ad";
     const successful = [...outcome.results.filter(item => outcome.providersById[item.id] && outcome.providersById[item.id] !== "rules"), ...adItems];
     const marketplaceIds = new Set(jobs.filter(job => job.post.source?.type === "facebook_marketplace").map(job => job.postId));
-    await Promise.all(successful.map(item => {
+    const completed: AiItem[] = [];
+    for (const item of successful) {
+      await assertActive();
+      const job = jobs.find(job => job.postId === item.id)!;
       const ids = resolveCategoryIds(rows, item.categorySlug, item.subcategorySlug);
-      // Marketplace listings stay "seller" (and not ads) whatever the model says.
       if (marketplaceIds.has(item.id)) Object.assign(item, { intent: "seller", isAd: false });
-      return prisma.post.update({ where: { id: item.id }, data: { categoryId: ids.categoryId, subcategoryId: ids.subcategoryId, intent: item.intent, province: item.province, isAd: item.isAd, suggestedReply: item.suggestedReply, aiProvider: outcome.providersById[item.id] } });
-    }));
-    // Level-3 product: rules win, the AI's pick only counts if it is in the list.
-    await assignProducts(successful.map(item => item.id), new Map(successful.map(item => [item.id, item.productSlug ?? null]))).catch((error) => console.error("[products]", error));
-    // Scoring must not block completion on an embedding provider.
-    await enrichPosts(successful.map(item => item.id), successful, settings, { embed: false });
-    const successIds = new Set(successful.map(item => item.id));
+      const committed = await prisma.$transaction(async tx => {
+        // Lock post before job, the same order as ingestion's revision transaction.
+        const updated = await tx.post.updateMany({
+          where: { id: item.id, textRevision: job.post.textRevision, OR: [{ aiProvider: null }, { aiProvider: { not: "owner" } }], aiJobs: { some: { claimToken, status: "running" } } },
+          data: { categoryId: ids.categoryId, subcategoryId: ids.subcategoryId, intent: item.intent, province: item.province, isAd: item.isAd, suggestedReply: item.suggestedReply, aiProvider: outcome.providersById[item.id] },
+        });
+        if (!updated.count) return false;
+        const done = await tx.aiJob.updateMany({ where: { id: job.id, claimToken, status: "running" }, data: { status: "done", claimToken: null, lastError: "", latencyMs: Date.now() - started } });
+        if (!done.count) throw new Error("AI claim superseded");
+        return true;
+      });
+      if (committed) completed.push(item);
+    }
+    const revisions = new Map(jobs.map(job => [job.postId, job.post.textRevision]));
+    await assertActive();
+    await assignProducts(completed.map(item => item.id), new Map(completed.map(item => [item.id, item.productSlug ?? null])), revisions).catch((error) => console.error("[products]", error));
+    await enrichPosts(completed.map(item => item.id), completed, settings, { embed: false, revisions });
+    const successIds = new Set(completed.map(item => item.id));
     const retryErrors = outcome.errors.filter(error => !error.message.startsWith("ข้าม "));
     const errorText = retryErrors.map(error => `${error.name}: ${error.message}`).join("; ") || "AI ตอบไม่ครบ ยังไม่ได้ผลของโพสต์นี้";
     const delay = Math.max(0, ...retryErrors.map(error => "retryAfterMs" in error ? Number(error.retryAfterMs) || 0 : 0));
     for (const job of jobs) {
       const latencyMs = Date.now() - started;
       if (successIds.has(job.postId)) {
-        await prisma.aiJob.update({ where: { id: job.id }, data: { status: "done", lastError: "", latencyMs } });
         await workerLog({ jobId: job.id, postId: job.postId, provider: outcome.providersById[job.postId], latencyMs, message: "จัดหมวดแล้ว" });
       } else await retry(job, errorText, delay, latencyMs);
     }
     claimed = [];
+    await assertActive();
     await syncDuplicateLabels().catch(error => workerLog({ level: "error", message: "คัดลอกหมวดให้โพสต์ซ้ำไม่สำเร็จ", error: String(error).slice(0, 300) }));
     await applyAutomationRules([...successIds]).catch(error => workerLog({ level: "error", message: "ใช้กฎอัตโนมัติไม่สำเร็จ", error: String(error).slice(0, 300) }));
     const ready = await prisma.post.findMany({ where: { id: { in: [...successIds] }, duplicateOfId: null, dismissed: false }, include: { category: true, subcategory: true, source: true } });
@@ -192,6 +213,7 @@ export async function processAiQueue() {
     }
     return jobs.length;
   } catch (error) {
+    try { await assertActive(); } catch { return 0; }
     const message = error instanceof Error ? error.message : "จัดหมวดไม่สำเร็จ";
     for (const job of claimed) {
       await retry(job, message, error instanceof ProviderHttpError ? error.retryAfterMs : 0).catch(() => undefined);

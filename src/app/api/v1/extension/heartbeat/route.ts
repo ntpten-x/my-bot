@@ -1,6 +1,7 @@
 import { requireExtensionToken } from "@/lib/auth";
 import { corsPreflight, json, withCors } from "@/lib/http";
 import { heartbeatSchema, noteBadExtensionToken, recordHeartbeat, EXPECTED_EXTENSION_VERSION } from "@/lib/extension-heartbeat";
+import { verifyDeviceToken } from "@/lib/extension-devices";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +17,7 @@ export async function POST(request: Request) {
   }
   const parsed = heartbeatSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return withCors(json({ error: "รูปแบบข้อมูลไม่ถูกต้อง" }, 400));
-  await recordHeartbeat(parsed.data);
+  const deviceId = await verifyDeviceToken((request.headers.get("authorization") || "").replace(/^Bearer\s+/i, ""));
+  await recordHeartbeat(parsed.data, deviceId || undefined);
   return withCors(json({ ok: true, expectedVersion: EXPECTED_EXTENSION_VERSION }));
 }

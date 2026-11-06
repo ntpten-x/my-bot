@@ -173,7 +173,7 @@ export async function guardedCall<T>(
     const cooldownUntil = failure.cooldownMs > 0 ? new Date(end.getTime() + failure.cooldownMs) : null;
     if (cooldownUntil) provider.cooldownUntil = cooldownUntil;
     await deps.store.recordFailure(provider.id, { ...failure, now: end, day, cooldownUntil }).catch(() => undefined);
-    throw new AiCallError(`${provider.name}: ${failure.message}`, error instanceof AiCallError ? error.status : 0);
+    throw new AiCallError(`${provider.name}: ${failure.message}`, error instanceof AiCallError ? error.status : 0, error instanceof AiCallError ? error.retryAfterMs : 0);
   }
 }
 

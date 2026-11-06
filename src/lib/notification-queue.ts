@@ -12,7 +12,7 @@ export async function queueExternalNotification(postId: string, title: string) {
   if (!pending) await prisma.notification.create({ data: { postId, title, channel: "external_pending", body: "0", read: true } });
 }
 
-export async function processNotificationQueue(limit = 10) {
+export async function processNotificationQueue(limit = 10, assertActive: () => Promise<void> = async () => undefined) {
   if (process.env.MYBOT_PROCESS !== "worker") return 0;
   const settings = await getSettings();
   await prisma.notification.updateMany({
@@ -25,6 +25,7 @@ export async function processNotificationQueue(limit = 10) {
     include: { post: { include: { category: true, subcategory: true, source: true } } },
   });
   for (const job of jobs) {
+    await assertActive();
     const claimed = await prisma.notification.updateMany({ where: { id: job.id, channel: "external_pending" }, data: { channel: "external_sending", createdAt: new Date() } });
     if (!claimed.count) continue;
     const post = job.post;
@@ -36,6 +37,7 @@ export async function processNotificationQueue(limit = 10) {
       continue;
     }
     const sent = await prisma.notification.findMany({ where: { postId: post.id, channel: { in: ["line", "discord", "email"] } }, select: { channel: true } });
+    await assertActive();
     const result = await dispatchNotification(post, settings, job.title, { external: true, skipInApp: true, skipChannels: sent.map(row => row.channel) });
     const failed = Object.values(result.channels).some(channel => !channel.ok && !channel.skipped);
     const attempts = (Number(job.body) || 0) + 1;

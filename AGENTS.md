@@ -6,7 +6,7 @@ Thai notes: the product UI, seed copy, and owner-facing docs are Thai. Reply to 
 
 ## What this is
 
-MY-BOT is a local, single-owner lead radar. The owner logs into Facebook in Chrome. A read-only extension sends group posts to this app. The app dedupes, scores, classifies (buyer / seller / ad), and drafts a reply the owner copies by hand.
+MY-BOT is a local, single-owner lead radar. The owner logs into Facebook in Chrome. The extension sends group posts to this app. Browser comment delivery is an explicit owner opt-in (see docs/BROWSER-COMMENTS.th.md). The app dedupes, scores, classifies (buyer / seller / ad), and drafts a reply the owner copies by hand.
 
 Stack: Next.js App Router, TypeScript, Tailwind, Prisma on Supabase Postgres (`DATABASE_URL` transaction pooler 6543 with `pgbouncer=true`, `DIRECT_URL` 5432 for migrations, RLS on every table), an in-process Node worker. Default web port **8001**. AI order: Ollama, then Gemini, then Groq, then rules. Only the worker consumes the AI queue (`MYBOT_PROCESS=worker`).
 
@@ -69,7 +69,7 @@ Done when `npm run doctor` has no FAIL, `GET http://127.0.0.1:8001/api/v1/health
 | `npm run db:clean-samples` | Delete posts from the disabled sample source |
 | `npm run db:renormalize` | Rebuild Thai normalized text and hashes |
 
-Backup: the worker exports every table after 03:00 Asia/Bangkok once per day to `data/backups/YYYY-MM-DD.json.gz` and keeps 14 days. `npm run db:backup` makes a manual export; `npm run db:restore -- <file> --replace` restores (stop the app first). `npm run db:migrate-from-sqlite` is the one-time SQLite to Postgres copy (Node 22.5+). DB tests run in a throwaway `test_*` schema on `TEST_DATABASE_URL` or `DIRECT_URL` and skip without one. Never commit `.env`. Daily summary runs after the configured time (default 08:00) once per day. New migrations must stay Postgres and add `ENABLE ROW LEVEL SECURITY` for new tables.
+Backup: the worker exports every table after 03:00 Asia/Bangkok once per day to `data/backups/YYYY-MM-DD.json.gz` and keeps 14 days. `npm run db:backup` makes a manual export; `npm run db:restore -- <file> --check` validates without a database, and `--replace` restores atomically (stop all app/worker hosts first). Legacy v1 backups require `--allow-legacy`. `npm run db:migrate-from-sqlite` is the one-time SQLite to Postgres copy (Node 22.5+). DB tests run in a throwaway `test_*` schema using explicitly configured `TEST_DATABASE_URL` only and skip without one; never fall back to production credentials. Never commit `.env`. Daily summary runs after the configured time (default 08:00) once per day. New migrations must stay Postgres and add `ENABLE ROW LEVEL SECURITY` for new tables.
 
 ## Update an existing machine
 
@@ -109,10 +109,17 @@ Restart the app (or the Startup launcher). Then, if older posts need it: `npm ru
 ## Hard rules
 
 - Commit `.env.example` only. Leave `.env`, `data/*.db`, `data/*.log`, `data/backups/`, and `*.traineddata` untracked.
-- The extension reads posts the owner can already see and POSTs them to this app. It does not publish, comment, or call Facebook's private GraphQL.
+- The extension reads posts the owner can already see and POSTs them to this app. Per the latest owner instruction, optional browser comment delivery uses visible UI only, with per-rule consent, pinned device/account, Dry Run, quotas, durable sending and no ambiguous retries. It never calls private GraphQL, bypasses CAPTCHA/checkpoints or posts outside the configured group allowlist. See docs/BROWSER-COMMENTS.th.md.
 - **Scrape scheduling (v1.4.0)** — `GET /api/v1/extension-config` (`src/lib/scrape-runs.ts`) returns enabled `facebook_group` + `facebook_marketplace` sources sorted by priority (สูง/ปกติ/ต่ำ = 3/10/30 min) with `due`, `knownKeys` (recent post keys) and the scroll settings (`scroll_screens` 0–10, `max_post_age_hours`, `max_posts_per_run` ≤40, `max_groups_per_cycle` default 5). The extension opens one inactive tab at a time, scrolls with `scrollTop` only (1.5–4 s waits, no clicks — "ดูเพิ่มเติม" text is read as-is), stops on known posts / too-old posts / cap / end, then POSTs `/api/v1/extension/scrape-result`. The server adapts `currentIntervalMinutes` (×0.6 when ≥5 new, min 2 min; ×1.5 when none, max 3× base ≤180) and stores `nextRunAt` + `lastRun*` stats shown on แหล่งข้อมูล and ภาพรวมระบบ. Pure logic: `src/lib/scrape-plan.ts` and `extension/scrape.js` (post keys must stay identical).
 - **Marketplace sources** — search/category URLs (`/marketplace/...`, not `/marketplace/item/`) are canonicalized without `sortBy`; listing cards (title, price, location, image) become posts with intent `seller`. Parser fixtures in `extension/fixtures/` marked SYNTHETIC are hand-written, not captured from Facebook.
 - Leave audio devices and OS sound settings alone.
 - `scripts/windows/*.ps1` stay ASCII so Windows PowerShell 5.1 can parse them.
 - Run `npm test` and `npm run build` before every commit. Fix failures first.
 - Ask the owner for secrets. Do not invent keys, and do not put secrets in git, logs, or chat transcripts.
+
+## Optional Auto Comment Engine
+
+Current runtime uses Extension v1.9.0 delivery per the owner's latest instruction; see `docs/BROWSER-COMMENTS.th.md`. Graph transport below is retained only for legacy regression tests and is not invoked by normal worker ticks. Browser grants already issued may still click for up to 3 seconds after Stop; never promise immediate distributed cancellation. Do not send real Facebook comments without separate explicit approval.
+
+
+Owner-enabled server-side Graph API comments live in `src/lib/auto-comment`, `/api/auto-comment`, and `/auto-comment`. Default is stopped + Dry Run. Only worker consumes jobs. Allow only verified Page-owned published posts through official API; groups/Marketplace remain unsupported drafts. Collector and assisted replies stay read-only; only the separately opted-in browser comment worker may click a verified comment submit button. Keep durable sending markers, global control locks, generation/revision fencing and unique live post keys; ambiguous sends must never auto-retry. Backup includes all four AutoComment tables and Restore must disable automation. See `docs/AUTO-COMMENT.th.md` for capability limits, safe rollout, rollback and validation. Tests must use mock Meta transport and disposable TEST_DATABASE_URL, never actual comment sends.

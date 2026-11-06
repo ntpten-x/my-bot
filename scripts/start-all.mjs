@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { childEnvironment } from "./runtime-env.mjs";
 
 function loadEnv() {
   if (!existsSync(".env")) return;
@@ -58,7 +59,7 @@ for (const level of ["log", "error", "warn"]) {
 function run(args, extraEnv = {}) {
   const child = spawn(node, args, {
     stdio: ["inherit", "pipe", "pipe"],
-    env: { ...process.env, ...extraEnv },
+    env: childEnvironment(process.env, prod, extraEnv),
     shell: false,
     windowsHide: true,
   });

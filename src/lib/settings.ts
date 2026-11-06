@@ -2,6 +2,7 @@ import { resolveGroqModel } from "./ai/models";
 import { prisma } from "./prisma";
 import { parseProvinceList } from "./service-area";
 import { parseTimes } from "./reply-queue-core";
+import { decodeSetting, encodeSetting } from "./setting-secrets";
 
 export type AiProviderName = "auto" | "ollama" | "gemini" | "groq" | "rules";
 
@@ -80,7 +81,7 @@ function num(value: string | undefined, fallback: number, min: number, max: numb
 
 export async function readSettingMap() {
   const rows = await prisma.setting.findMany();
-  return Object.fromEntries(rows.map((row) => [row.key, row.value]));
+  return Object.fromEntries(rows.map((row) => [row.key, decodeSetting(row.key, row.value)]));
 }
 
 export async function getSettings(): Promise<AppSettings> {
@@ -152,13 +153,15 @@ export async function getSettings(): Promise<AppSettings> {
 
 export async function upsertSettings(entries: Record<string, string>) {
   await prisma.$transaction(
-    Object.entries(entries).map(([key, value]) =>
+    Object.entries(entries).map(([key, plain]) => {
+      const value = encodeSetting(key, plain);
+      return (
       prisma.setting.upsert({
         where: { key },
         update: { value },
         create: { key, value },
-      }),
-    ),
+      }));
+    }),
   );
 }
 
@@ -180,7 +183,8 @@ export function publicSettings(settings: AppSettings) {
     extensionToken: settings.extensionToken,
     lineUserId: settings.lineUserId,
     lineTokenSet: Boolean(settings.lineToken),
-    discordWebhook: settings.discordWebhook,
+    discordWebhook: "",
+    discordWebhookSet: Boolean(settings.discordWebhook),
     notifyEmailTo: settings.notifyEmailTo,
     smtpHost: settings.smtpHost,
     smtpPort: settings.smtpPort,

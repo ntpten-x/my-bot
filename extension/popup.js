@@ -3,6 +3,17 @@ const apiBase = document.getElementById("apiBase");
 const token = document.getElementById("token");
 const code = document.getElementById("code");
 const enabled = document.getElementById("enabled");
+const browserComments = document.getElementById("browserComments");
+chrome.storage.local.get({ browserCommentsEnabled: false }, cfg => { browserComments.checked = cfg.browserCommentsEnabled; });
+browserComments.addEventListener("change", async () => {
+  await chrome.storage.local.set({ browserCommentsEnabled: browserComments.checked });
+  chrome.runtime.sendMessage({ type: "heartbeat-now" }, () => void chrome.runtime.lastError);
+});
+document.getElementById("clearCommentJournal").addEventListener("click", async () => {
+  if (!confirm("ตรวจผลบน Facebook และประวัติงานแล้วใช่ไหม? งานเดิมจะไม่ส่งซ้ำ ปุ่มนี้ล้างเฉพาะตัวล็อกบนเครื่อง ไม่ล้างประวัติเซิร์ฟเวอร์")) return;
+  await chrome.storage.local.remove("commentJournal");
+  status.textContent = "ปลดล็อกบนเครื่องแล้ว ตรวจและบันทึกกฎที่พักไว้บนเว็บก่อน Start ใหม่";
+});
 const status = document.getElementById("status");
 const pairState = document.getElementById("pairState");
 document.getElementById("version").textContent = "v" + chrome.runtime.getManifest().version;
