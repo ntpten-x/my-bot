@@ -46,6 +46,19 @@ beforeEach(async () => {
 afterAll(async () => { if (fixture.enabled) await fixture.drop(prisma, fixture.schema); await prisma.$disconnect(); });
 
 describe.skipIf(!fixture.enabled)("auto comment isolated Postgres queue and migration", () => {
+  it("renders an empty dashboard before the first Start using a database-supported default date", async () => {
+    const dashboard = await autoCommentDashboard();
+    expect(dashboard.control).toMatchObject({ state: "stopped", dryRun: true });
+    expect(dashboard.observed).toBe(0); expect(dashboard.matched).toBe(0);
+  });
+  it("safely normalizes a previously stored maximum-JavaScript-date sentinel", async () => {
+    const control = await readCommentControl();
+    await prisma.setting.create({ data: { key: "auto_comment_control", value: JSON.stringify({ ...control, startedAt: new Date(8640000000000000).toISOString() }) } });
+    const dashboard = await autoCommentDashboard();
+    expect(dashboard.control).toMatchObject({ state: "stopped", dryRun: true });
+    expect(Date.parse(dashboard.control.startedAt)).toBeLessThanOrEqual(Date.parse("9999-12-31T23:59:59.999Z"));
+    expect(dashboard.observed).toBe(0);
+  });
   it("migrates all four tables with RLS and unique post idempotency", async () => {
     const rows = await prisma.$queryRaw<{ relname: string; relrowsecurity: boolean }[]>`SELECT c.relname,c.relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=${fixture.schema} AND c.relname IN ('AutoCommentRule','AutoCommentTemplate','AutoCommentJob','AutoCommentLog')`;
     expect(rows).toHaveLength(4); expect(rows.every(row => row.relrowsecurity)).toBe(true);

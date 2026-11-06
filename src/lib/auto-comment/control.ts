@@ -10,13 +10,14 @@ export type CommentControl = {
 };
 export const defaultControl: CommentControl = {
   state: "stopped", dryRun: true, emergency: false, hourlyLimit: 5, dailyLimit: 20,
-  generation: "disabled", startedAt: new Date(8640000000000000).toISOString(), cooldownUntil: null,
+  generation: "disabled", startedAt: "9999-12-31T23:59:59.999Z", cooldownUntil: null,
 };
 export function parseControl(value?: string | null): CommentControl {
   try {
     const data = JSON.parse(value || "null");
     if (!data || !["stopped", "running", "paused"].includes(data.state) || typeof data.dryRun !== "boolean"
       || typeof data.emergency !== "boolean" || typeof data.generation !== "string" || !Number.isFinite(Date.parse(data.startedAt))
+      || Date.parse(data.startedAt) > Date.parse(defaultControl.startedAt) || Date.parse(data.startedAt) < Date.parse("0001-01-01T00:00:00.000Z")
       || !Number.isInteger(data.hourlyLimit) || data.hourlyLimit < 1 || data.hourlyLimit > 50
       || !Number.isInteger(data.dailyLimit) || data.dailyLimit < 1 || data.dailyLimit > 200) return { ...defaultControl };
     return { ...defaultControl, ...data };

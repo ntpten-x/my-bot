@@ -66,3 +66,21 @@ Extension ใน branch แก้ไขเป็น v1.9.1 การตรวจ
 3. เมื่อได้รับอนุญาตจึงเผยแพร่ patch นี้และโหลด Extension 1.9.1 ใหม่
 4. ทดสอบหนึ่งแหล่งที่อนุญาต ตรวจ inserted/dedupe/AI แล้ว Start ใน Dry Run ตรวจข้อความ/อุปกรณ์/บัญชี
 5. การกดส่งจริงต้องมีคำอนุมัติแยกและระบุกลุ่ม/โพสต์ทดสอบ สิทธิ์ในกลุ่มและข้อความให้ชัดเจน ขณะนี้ยังไม่รับรองว่า Auto Comment ใช้งานจริงสำเร็จ
+
+## อัปเดตหลังเจ้าของอนุญาตให้ดำเนินการ Production
+
+เจ้าของอนุญาตให้ Push/Merge master และทำ migration จากเครื่องนี้ ตรวจ credential เฉพาะใน `.env` ที่ chmod 600 และ gitignore ไม่บันทึกค่าลับในเอกสารหรือ Git
+
+- ตรวจเทียบแหล่งข้อมูลกับเว็บจริงแล้ว เป็นฐานเดียวกัน `prisma migrate status` ยืนยันว่ามี 3 รายการ pending ไม่ใช่การคาดเดา
+- สำรอง 34 ตารางเดิมก่อนเปลี่ยน schema ด้วย read-only repeatable-read transaction และตรวจผ่าน `validateBackup(..., true)` สำรองเข้ากับ schema เก่าโดยละเฉพาะ 4 ตาราง Auto Comment ที่ยังไม่มี ไฟล์ใน `data/backups/` ถูก gitignore และจำกัดสิทธิ์ 600
+- Backup: `pre-migration-2026-11-06T09-57-30-312Z.json.gz`, SHA-256 `0cc2f1dff17c8d01c5cae9f2cd1096a93e0cf4f517d133403166d79ea79d4f66` ไม่มีการ restore/replace ข้อมูล
+- Apply `20261109100000_security_stability`, `20261110100000_auto_comment`, `20261111100000_browser_comments` สำเร็จ `migrate status` ยืนยัน up to date และ schema readiness ไม่มี field ขาด
+- ตรวจ RLS ของตารางที่เกี่ยวข้องผ่านทั้งหมด และตรวจว่าคีย์ที่เข้ารหัสเดิม 4 รายการอ่านได้ด้วย master key เดิม ก่อนย้ายค่าลับ Settings เดิมอีก 2 รายการเป็น AES-GCM; หลังย้าย legacy secret count เป็น 0
+
+พบและแก้บั๊กเพิ่มเติมหลัง schema พร้อม: `defaultControl.startedAt` เดิมใช้ JavaScript maximum date ปี +275760 ซึ่ง Prisma แปลงเป็น DateTime ไม่ได้ แม้ PostgreSQL มีช่วง timestamp กว้าง ทำให้ dashboard ล้มที่ `autoCommentLog.count()` ก่อน Start ครั้งแรก เปลี่ยน sentinel เป็น `9999-12-31T23:59:59.999Z` และให้ parser ปฏิเสธค่าที่พ้นช่วงด้วยค่าเริ่มต้น Stopped/Dry Run ที่ปลอดภัย รองรับฐานที่เคยบันทึก sentinel เดิม
+
+Regression 2 กรณี (ยังไม่มี control row / เคยเก็บ sentinel เดิม) ล้มเหลวก่อนแก้และผ่านหลังแก้ บน Production ซ่อมเฉพาะ sentinel ภายใต้ transaction/compare-and-set โดยยืนยันว่า control เป็น Stopped + Dry Run ก่อน และบันทึก audit `settings_repair` ไม่เปิดส่งหรือสร้างงาน
+
+หลังปรับฐานและ sentinel เว็บจริงตอบ `/api/automation-readiness`, `/api/auto-comment`, `/api/sources` เป็น HTTP 200 ทั้งหมด Worker พร้อม, Secret พร้อม, Auto Comment ยัง Stopped + Dry Run, ไม่มีกฎส่ง สังเกตยอดโพสต์เพิ่มจาก 202 เป็น 208 ระหว่างตรวจ แต่ยังไม่ใช้เป็นหลักฐานว่าเก็บครบทุกโพสต์หรือคอมเมนต์สำเร็จ
+
+ผลตรวจ patch รวมบั๊ก sentinel: **58 files, 465 tests passed, 0 failed, 0 skipped; lint exit 0; build exit 0** ทดสอบฐานที่แยกบน localhost เท่านั้น ไม่ใช้ Production สำหรับ fixtures
