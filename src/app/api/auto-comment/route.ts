@@ -4,11 +4,16 @@ import { json } from "@/lib/http";
 import { autoCommentDashboard } from "@/lib/auto-comment/engine";
 import { commentControlSchema } from "@/lib/auto-comment/schema";
 import { updateCommentControl } from "@/lib/auto-comment/control";
+import { schemaReadiness } from "@/lib/schema-readiness";
 
 export const dynamic = "force-dynamic";
 export async function GET() {
   const { error } = await authed(); if (error) return error;
-  return json(await autoCommentDashboard());
+  try {
+    const schema = await schemaReadiness();
+    if (!schema.ready) return json({ error: "ฐานข้อมูลคอมเมนต์ยังไม่พร้อม ต้องรัน migration บนเซิร์ฟเวอร์", code: "SCHEMA_NOT_READY", schema }, 503);
+    return json(await autoCommentDashboard());
+  } catch { return json({ error: "โหลดระบบคอมเมนต์ไม่สำเร็จ กรุณาตรวจฐานข้อมูล" }, 503); }
 }
 export async function PUT(request: Request) {
   const error = await commentMutationGuard(request); if (error) return error;

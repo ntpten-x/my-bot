@@ -178,7 +178,7 @@ async function queueOutbox(item) {
 
 let flushing = false;
 async function flushOutbox(cfg) {
-  if (flushing || !cfg.token) return;
+  if (flushing || cfg.paused || !cfg.token) return;
   flushing = true;
   try {
     let outbox = await loadOutbox();
@@ -661,8 +661,8 @@ async function scrapeGroup(cfg, group, remote, options) {
     result.stoppedBy = run.stoppedBy || "end";
     result.postsFound = run.found;
     const picked = run.fresh;
-    for (let i = 0; i < picked.length; i += 50) {
-      const response = await sendPosts(cfg, group.url, picked.slice(i, i + 50).map(cleanPost));
+    for (let i = 0; i < picked.length; i += 40) {
+      const response = await sendPosts(cfg, group.url, picked.slice(i, i + 40).map(cleanPost));
       const data = response && response.ok ? await response.clone().json().catch(() => ({})) : {};
       result.newPosts += Number(data.inserted) || 0;
     }
@@ -817,7 +817,7 @@ async function forwardManual(message, sender) {
   // Pages opened by the background scrape report through scrapeGroup, not here.
   if (sender && sender.tab && (scrapingTabs.has(sender.tab.id) || isScrapeWindowTab(sender.tab))) return;
   const cfg = await loadConfig();
-  if (!cfg.token) return;
+  if (cfg.paused || !cfg.token) return;
   const key = message.sourceUrl;
   const last = recentManual.get(key) || 0;
   if (Date.now() - last < 20000) return;
@@ -833,7 +833,7 @@ async function forwardManual(message, sender) {
 async function pollTasks() {
   if (cycling) return;
   const cfg = await loadConfig();
-  if (!cfg.token) return;
+  if (cfg.paused || !cfg.token) return;
   if (!(await takeRunLock("tasks"))) return;
   try {
     const response = await getJson(cfg, "/api/v1/extension/tasks", { timeoutMs: 20000, retries: 0 });

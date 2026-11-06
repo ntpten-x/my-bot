@@ -3,6 +3,7 @@ import { APP_VERSION } from "@/lib/version";
 import { orderAvailable, sharedMinuteWindow } from "@/lib/ai/router";
 import { ollamaReachable } from "@/lib/ai/ollama-url";
 import { buildHealth, createHealthCache, httpStatusFor } from "@/lib/public-health";
+import { schemaReadiness } from "./schema-readiness";
 
 const startedAt = Date.now();
 const cache = createHealthCache(7000);
@@ -25,7 +26,7 @@ async function extensionLastSeen() {
 export async function healthResponse(head = false) {
   const report = await cache(() =>
     buildHealth({
-      pingDb: async () => { await prisma.$queryRaw`SELECT 1`; },
+      pingDb: async () => { if (!(await schemaReadiness()).ready) throw new Error("Database schema is not ready"); },
       availableAiProviders,
       extensionLastSeen,
       version: APP_VERSION,

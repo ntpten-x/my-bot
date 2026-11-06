@@ -1,5 +1,6 @@
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
-const mocks = vi.hoisted(() => ({ authed: vi.fn(), lease: vi.fn(), settings: vi.fn(), devices: vi.fn(), accounts: vi.fn(), sources: vi.fn(), providers: vi.fn(), counts: vi.fn() }));
+const mocks = vi.hoisted(() => ({ authed: vi.fn(), schema: vi.fn(), lease: vi.fn(), settings: vi.fn(), devices: vi.fn(), accounts: vi.fn(), sources: vi.fn(), providers: vi.fn(), counts: vi.fn() }));
+vi.mock("../../src/lib/schema-readiness", () => ({ schemaReadiness: mocks.schema }));
 vi.mock("../../src/lib/prisma", () => ({ prisma: {
   lease: { findUnique: mocks.lease }, setting: { findMany: mocks.settings }, extensionDevice: { findMany: mocks.devices },
   fbAccount: { findMany: mocks.accounts }, source: { findMany: mocks.sources }, aiProvider: { findMany: mocks.providers }, autoCommentJob: { groupBy: mocks.counts },
@@ -11,6 +12,7 @@ import { GET } from "../../src/app/api/automation-readiness/route";
 beforeEach(() => {
   vi.clearAllMocks(); vi.stubEnv("AI_KEY_SECRET", "synthetic-readiness-secret"); vi.stubEnv("GEMINI_API_KEY", ""); vi.stubEnv("GROQ_API_KEY", "");
   mocks.authed.mockResolvedValue({ error: null }); mocks.lease.mockResolvedValue(null); mocks.settings.mockResolvedValue([]);
+  mocks.schema.mockResolvedValue({ ready: true, missing: [] });
   mocks.devices.mockResolvedValue([]); mocks.accounts.mockResolvedValue([]); mocks.sources.mockResolvedValue([]); mocks.providers.mockResolvedValue([]); mocks.counts.mockResolvedValue([]);
 });
 afterEach(() => vi.unstubAllEnvs());
@@ -34,4 +36,10 @@ it("uses fresh per-device runtime for account and local comment opt-in", async (
 });
 it("redacts infrastructure errors", async () => {
   mocks.settings.mockRejectedValue(new Error("synthetic-secret-url")); const response = await GET(); expect(response.status).toBe(503); expect(await response.text()).not.toContain("synthetic-secret-url");
+});
+it("reports missing migrations before querying incomplete application tables", async () => {
+  mocks.schema.mockResolvedValue({ ready: false, missing: ["Post.textRevision"] });
+  const response = await GET(); expect(response.status).toBe(503);
+  expect(await response.json()).toMatchObject({ code: "SCHEMA_NOT_READY", schema: { missing: ["Post.textRevision"] } });
+  expect(mocks.settings).not.toHaveBeenCalled();
 });

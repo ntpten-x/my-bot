@@ -39,7 +39,11 @@ export async function POST(request: Request) {
     await countCapturedPosts(fbUserId, result.inserted).catch(() => undefined);
     return withCors(json(result, result.ok ? 200 : 404));
   } catch (error) {
-    const message = error instanceof Error ? error.message : "บันทึกไม่สำเร็จ";
-    return withCors(json({ error: message }, 500));
+    const code = error && typeof error === "object" && "code" in error ? error.code : "";
+    const schemaMissing = code === "P2021" || code === "P2022";
+    return withCors(json({
+      error: schemaMissing ? "โครงสร้างฐานข้อมูลยังไม่พร้อม กรุณารัน migration บนเซิร์ฟเวอร์" : "บันทึกโพสต์ไม่สำเร็จ กรุณาตรวจฐานข้อมูลแล้วลองใหม่",
+      code: schemaMissing ? "SCHEMA_NOT_READY" : "INGEST_FAILED",
+    }, schemaMissing ? 503 : 500));
   }
 }
