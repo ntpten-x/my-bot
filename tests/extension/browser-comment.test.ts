@@ -92,3 +92,12 @@ it("recognizes the Thai Facebook post-comment button", async () => {
  expect((await action('send',{...payload,permitUntil:2000},f.env)).ok).toBe(true);
  expect(f.click).toHaveBeenCalledTimes(1); f.dom.window.close();
 });
+
+it("retries rejected empty input rather than mistaking it for an inserted draft", async () => {
+ const f=fixture('<main><article role="article"><a href="/groups/12345/posts/8888/">post</a><form><div contenteditable="true" role="textbox" aria-label="Write a comment"></div><button type="button" aria-label="Comment">Comment</button></form></article></main>');
+ const box=f.doc.querySelector('[contenteditable]')!; let attempts=0;
+ Object.defineProperty(f.doc,'execCommand',{value:(_c: unknown,_u: unknown,text: string)=>{attempts++;if(attempts>1)box.textContent=text;return attempts>1;}});
+ expect((await action('prepare',payload,f.env)).ok).toBe(false);
+ expect((await action('prepare',payload,f.env)).ok).toBe(true);
+ expect(attempts).toBe(2);expect(f.click).not.toHaveBeenCalled();f.dom.window.close();
+});

@@ -48,9 +48,10 @@
       const box = boxes[0], form = box.closest('form,[role="form"]');
       if (!form || !article.contains(form)) return { ok: false, outcome: "failed" };
       const prior = memory.__mybotCommentSession;
-      const ownDraft = prior && prior.id === payload.id && prior.box === box && !prior.clicked && prior.message === payload.message;
+      const ownDraft = prior && prior.id === payload.id && prior.box === box && !prior.clicked && prior.message === payload.message && normalize(box.value ?? box.textContent) === normalize(payload.message);
       if (normalize(box.value ?? box.textContent) && !ownDraft) return { ok: false, outcome: "failed" };
       memory.__mybotCommentSession = { id: payload.id, box, article, before: prior?.id === payload.id ? prior.before : links(article), message: payload.message, at: now(), clicked: false };
+      if (!environment && !doc.hasFocus()) return { ok: false, outcome: "failed", reason: "editor_requires_focused_tab" };
       box.focus();
       if (!ownDraft && box.tagName === "TEXTAREA") {
         const setter = Object.getOwnPropertyDescriptor(view.HTMLTextAreaElement.prototype, "value")?.set;

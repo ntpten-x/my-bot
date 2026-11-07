@@ -18,8 +18,10 @@
       job = (await request({ action: "claim", fbUserId })).job; if (!job) return;
       // Persist before opening a tab. A service-worker restart must never re-run this job.
       await chrome.storage.local.set({ commentJournal: { id: job.id, claimToken: job.claimToken, apiBase: deps.base(cfg), state: "claimed", at: Date.now() } });
-      const tab = await chrome.tabs.create({ url: job.externalUrl, active: false }); tabId = tab.id;
+      const tab = await chrome.tabs.create({ url: job.externalUrl, active: true }); tabId = tab.id;
       await deps.waitComplete(tabId);
+      // Controlled editors require the document to own focus; do not fake input in a background tab.
+      if (tab.windowId !== undefined) await chrome.windows.update(tab.windowId, { focused: true });
       const execute = async (kind, payload = {}) => {
         const result = await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, func: root.MyBotBrowserComment.action, args: [kind, { ...job, ...payload }] });
         return result[0]?.result || { ok: false, outcome: "failed" };

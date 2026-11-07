@@ -88,3 +88,7 @@ Backup เดิมครอบคลุมตารางทั้งหมด�
 ## ผลตรวจรอบนี้
 
 ทดสอบด้วยฐาน PostgreSQL localhost/schema `test_*`, JSDOM และ mock Chrome เท่านั้น ครอบคลุม quota, device/account, consent, state/revision/lease, AI readiness, restart, Dry Run, restore, DOM ambiguous/checkpoint, click once, lost acknowledgment และ journal recovery ไม่มีการส่ง Facebook จริง ผลชุดสุดท้ายจะบันทึกใน `MYBOT-DEVELOPMENT-ROADMAP.th.md`
+
+## Patch 1.9.3: focused comment editor
+
+ตัวส่งเปิดแท็บโพสต์แบบ active และโฟกัสหน้าต่างก่อนเตรียมข้อความ Facebook editor บางแบบไม่รับ execCommand ในแท็บพื้นหลัง จึงอาจสลับแท็บที่เจ้าของกำลังใช้อยู่ Collector ยังอ่านเบื้องหลังตามเดิม แก้ retry ที่เคยถือข้อความว่างจากการใส่ไม่สำเร็จว่าเป็น ownDraft; รอบถัดไปจะใส่ใหม่เฉพาะเมื่อช่องยังว่าง ไม่เขียนทับร่างอื่น ตรวจเตรียมข้อความบน Facebook จริงผ่าน `ok:true` แล้ว ยังไม่ใช่หลักฐานการส่งผ่านคิวจริงสำเร็จ
