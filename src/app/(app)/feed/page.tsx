@@ -51,12 +51,12 @@ const INITIAL: Filters = {
   hideAds: true,
   hideForbidden: true,
   hideDuplicates: true,
-  sort: "score",
+  sort: "new",
   minScore: "",
   semantic: false,
   area: false,
   hideInactiveSources: true,
-  followedOnly: true,
+  followedOnly: false,
 };
 
 const PAGE_SIZE = 20;
@@ -73,7 +73,10 @@ function readUrl(): { filters: Filters; page: number } {
     if (value === null) continue;
     filters[key] = typeof fallback === "boolean" ? value === "1" : value;
   }
-  const next = { ...(filters as Filters), sort: sort === "score" || sort === "captured" ? sort : INITIAL.sort };
+  const next = {
+    ...(filters as Filters),
+    sort: sort === "score" || sort === "captured" || sort === "new" ? sort : INITIAL.sort,
+  };
   // Booleans that default to true are stored as 0 when off (same pattern as hideAds).
   if (params.get("hideInactiveSources") === "0") next.hideInactiveSources = false;
   if (params.get("followedOnly") === "0") next.followedOnly = false;
@@ -317,7 +320,10 @@ export default function FeedPage() {
       {!loading && !posts.length ? (
         <div className="mt-8 rounded-2xl border border-dashed border-line bg-card p-8 text-center">
           <p className="font-medium">ยังไม่มีลีดในมุมนี้</p>
-          <p className="mt-2 text-sm text-muted">ลองปลดตัวกรอง หรือเพิ่มกลุ่ม Facebook ในหน้าแหล่งข้อมูล แล้วเปิดส่วนขยายขณะล็อกอินเฟซบุ๊ก</p>
+          <p className="mt-2 text-sm text-muted">
+            ลองปลดตัวกรอง{filters.followedOnly ? " (โดยเฉพาะ 「เฉพาะที่ติดตาม」ถ้ายังไม่ได้ติดดาวหมวดนั้น)" : ""}
+            หรือเพิ่มกลุ่ม Facebook ในหน้าแหล่งข้อมูล แล้วเปิดส่วนขยายขณะล็อกอินเฟซบุ๊ก
+          </p>
         </div>
       ) : null}
       <div className="mt-4 space-y-3">

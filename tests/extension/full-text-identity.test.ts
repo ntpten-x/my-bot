@@ -10,26 +10,33 @@ it("never relabels an unrelated article as the requested full-text post", async 
 });
 it("processes durable detail work fairly and retains failed targets", async () => {
  const source=readFileSync("extension/background.js","utf8");
- let backlog:Record<string,unknown>={a:{groupId:"g",addedAt:1},b:{groupId:"g",addedAt:2},c:{groupId:"g",addedAt:3},d:{groupId:"h",addedAt:4}};
+ let backlog:Record<string,any>={a:{groupId:"g",addedAt:1},b:{groupId:"g",addedAt:2},c:{groupId:"g",addedAt:3},d:{groupId:"h",addedAt:4}};
  const read:string[]=[];
- const context=vm.createContext({chrome:{storage:{local:{get:async()=>({}),set:async()=>{}}}},Date,Map,fullTextBudget:10,loadFullTextBacklog:async()=>backlog,saveFullTextBacklog:async(b:Record<string,unknown>)=>{backlog=b},loadConfig:async()=>({token:"same"}),base:()=>"server",openReader:async(url:string)=>({tabId:url}),closeReader:async()=>{},sourceKind:()=>"group",readFullTexts:async(_tab:string,_kind:string,urls:string[])=>{read.push(urls[0]);return {found:[],failed:urls}},sendPosts:async()=>{throw Error("must not send")},cleanPost:(x:unknown)=>x});
+ const context=vm.createContext({chrome:{storage:{local:{get:async()=>({}),set:async()=>{}}}},Date,Map,fullTextBudget:10,loadFullTextBacklog:async()=>backlog,saveFullTextBacklog:async(b:Record<string,unknown>)=>{backlog=b},updateFullTextBacklog:async(mutator:(b:Record<string,any>)=>Promise<void>|void)=>{await mutator(backlog);},loadConfig:async()=>({token:"same"}),base:()=>"server",openReader:async(url:string)=>({tabId:url}),closeReader:async()=>{},sourceKind:()=>"group",readFullTexts:async(_tab:string,_kind:string,urls:string[])=>{read.push(urls[0]);return {found:[],failed:urls}},sendPosts:async()=>{throw Error("must not send")},cleanPost:(x:unknown)=>x});
  vm.runInContext(source.slice(source.indexOf("async function processFullTextQueue("),source.indexOf("let cycling = false;")),context);
  await vm.runInContext('processFullTextQueue({token:"same"},[{id:"g"},{id:"h"}])',context);
  expect(read).toEqual(["a","d","b"]);expect(Object.keys(backlog)).toHaveLength(4);
 });
-it("drains newly discovered detail work before discovering the next group", async () => {
+it("discovers every due group with bounded parallelism then drains detail work once", async () => {
  const source=readFileSync("extension/background.js","utf8"); const events:string[]=[];
- const context=vm.createContext({Date,Math,cycling:false,RUN_LOCK_MS:720000,
+ async function mapPool(items: {id:string}[], _concurrency:number, worker:(g:{id:string},i:number)=>Promise<unknown>) {
+   return Promise.all(items.map((item, index) => worker(item, index)));
+ }
+ const context=vm.createContext({Date,Math,cycling:false,RUN_LOCK_MS:720000,Promise,PARALLEL_SCRAPE:3,mapPool,
  chrome:{storage:{local:{get:async(d:object)=>({...d,outboxBlocked:false,fbIdentity:null,throttledAt:0}),set:async()=>{}}}},
  loadConfig:async()=>({token:"synthetic",paused:false,schedules:{}}),takeRunLock:async()=>true,releaseRunLock:async()=>{},
  probeFacebookIdentity:async()=>null,
- getJson:async()=>({ok:true,json:async()=>({groups:[{id:"a"},{id:"b"}],maxGroupsPerCycle:2,jitterMinutes:0})}),
+ getJson:async()=>({ok:true,json:async()=>({groups:[{id:"a"},{id:"b"}],maxGroupsPerCycle:20,jitterMinutes:0})}),
  quietReason:async()=>null,setQuiet:async()=>{},loadFullTextBacklog:async()=>({}),sleep:async()=>{},rememberError:async()=>{},
  scrapeGroup:async(_cfg:unknown,g:{id:string})=>{events.push(`feed:${g.id}`);return {}},
- processFullTextQueue:async(_cfg:unknown,_groups:unknown,options?:{maxItems:number})=>{events.push(options?.maxItems===1?"detail:slice":"detail:tail")}});
- vm.runInContext(source.slice(source.indexOf("async function cycle()"),source.indexOf("const recentManual")),context);
+ processFullTextQueue:async()=>{events.push("detail:tail")},
+ scheduleDueWake:async()=>{}});
+ vm.runInContext(source.slice(source.indexOf("async function cycle()"),source.indexOf("const DUE_ALARM")),context);
  await vm.runInContext("cycle()",context);
- expect(events).toEqual(["feed:a","detail:slice","feed:b","detail:slice","detail:tail"]);
+ expect(events.filter((e)=>e.startsWith("feed:")).sort()).toEqual(["feed:a","feed:b"]);
+ expect(events.filter((e)=>e==="detail:tail")).toHaveLength(1);
+ expect(events.indexOf("detail:tail")).toBeGreaterThan(events.indexOf("feed:a"));
+ expect(events.indexOf("detail:tail")).toBeGreaterThan(events.indexOf("feed:b"));
 });
 it("waits for delayed exact-target content rather than failing after navigation", async () => {
  const source=readFileSync("extension/background.js","utf8"); let reads=0;

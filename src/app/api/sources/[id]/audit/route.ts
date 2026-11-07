@@ -5,7 +5,7 @@ import { isExtensionSource } from "@/lib/scrape-plan";
 
 export const dynamic = "force-dynamic";
 
-// Coverage audit: the extension scrolls this source much deeper (read-only, up to 72 h back) and
+// Coverage audit: the extension scrolls this source deeper (read-only, up to 24 h back) and
 // every post it finds that MY-BOT did not have yet is counted as a missed post.
 export async function POST(_request: Request, context: { params: Promise<{ id: string }> }) {
   const { error } = await authed();
@@ -18,7 +18,7 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
   if (pending) return json({ queued: true, taskId: pending.id, message: "มีงานตรวจความครบของแหล่งนี้รออยู่แล้ว" });
   const task = await prisma.fetchTask.create({ data: { sourceId: id, status: "pending", mode: "audit" } });
   await prisma.fetchLog.create({
-    data: { sourceId: id, status: "queued", message: "สั่งตรวจความครบ (เลื่อนลึกย้อนหลัง 72 ชม. แบบอ่านอย่างเดียว)", postsFound: 0 },
+    data: { sourceId: id, status: "queued", message: "สั่งตรวจความครบ (เลื่อนลึกย้อนหลังไม่เกิน 24 ชม. แบบอ่านอย่างเดียว)", postsFound: 0 },
   });
   return json({ queued: true, taskId: task.id, message: "ส่งงานตรวจความครบให้ส่วนขยายแล้ว ใช้เวลาไม่กี่นาที" });
 }

@@ -162,7 +162,7 @@ export default function DashboardPage() {
                   stats.recent.map((lead) => (
                     <Link key={lead.id} href="/feed" className="block rounded-xl bg-paper px-3 py-2">
                       <div className="text-xs text-muted">
-                        {INTENT_LABEL[lead.intent]} · {lead.province || "ไม่ระบุจังหวัด"} · {timeAgo(lead.createdAt)}
+                        {INTENT_LABEL[lead.intent]} · {lead.province || "ไม่ระบุจังหวัด"} · {timeAgo(lead.postedAt ?? lead.createdAt)}
                       </div>
                       <div className="mt-1 line-clamp-2 text-sm">{lead.text}</div>
                     </Link>

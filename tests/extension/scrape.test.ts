@@ -103,29 +103,27 @@ describe("scroll scrape plan (extension/scrape.js)", () => {
     expect(scrape.addStep(empty, [])).toBe("end");
   });
 
-  it("plans normal runs, hourly sweeps, 72 h catch-up and audits", () => {
+  it("plans normal runs, hourly sweeps, 24 h catch-up and audits", () => {
     const recent = new Date(NOW - 10 * 60_000).toISOString();
     expect(scrape.planRun({ now: NOW, group: { lastFetchedAt: recent, intervalMinutes: 15 }, lastSweepAt: NOW - 5 * 60_000 })).toMatchObject({ mode: "normal", knownStreak: 3, maxScrolls: 15, maxPosts: 200 });
-    expect(scrape.planRun({ now: NOW, group: { lastFetchedAt: recent, intervalMinutes: 15 }, lastSweepAt: NOW - 61 * 60_000 })).toMatchObject({ mode: "sweep", maxScrolls: 30 });
-    // Chrome was closed for 30 h: read back to the newest stored post (+1 h).
+    expect(scrape.planRun({ now: NOW, group: { lastFetchedAt: recent, intervalMinutes: 15 }, lastSweepAt: NOW - 61 * 60_000 })).toMatchObject({ mode: "sweep", maxScrolls: 30, maxAgeMs: 24 * 3600_000 });
+    // Chrome was closed for 30 h: still capped at 24 h (owner rule).
     const closed = scrape.planRun({ now: NOW, group: { lastFetchedAt: new Date(NOW - 30 * 3600_000).toISOString(), lastSeenAt: new Date(NOW - 31 * 3600_000).toISOString() } });
     expect(closed).toMatchObject({ mode: "catchup", maxScrolls: 30, knownStreak: 3 });
-    expect(closed.maxAgeMs).toBe(32 * 3600_000);
-    // Never further than 72 h.
+    expect(closed.maxAgeMs).toBe(24 * 3600_000);
     const week = scrape.planRun({ now: NOW, group: { lastFetchedAt: new Date(NOW - 7 * 24 * 3600_000).toISOString() } });
-    expect(week.maxAgeMs).toBe(72 * 3600_000);
+    expect(week.maxAgeMs).toBe(24 * 3600_000);
     expect(scrape.planRun({ now: NOW, group: {} }).mode).toBe("catchup");
     const audit = scrape.planRun({ now: NOW, group: { lastFetchedAt: recent }, audit: true });
-    expect(audit).toMatchObject({ mode: "audit", knownStreak: Infinity, maxAgeMs: 72 * 3600_000 });
+    expect(audit).toMatchObject({ mode: "audit", knownStreak: Infinity, maxAgeMs: 24 * 3600_000 });
   });
 
-  it("catch-up keeps reading new posts older than 24 h until it reaches known posts", () => {
+  it("catch-up stops on posts older than 24 h instead of reading further back", () => {
     const plan = scrape.planRun({ now: NOW, group: { lastFetchedAt: new Date(NOW - 40 * 3600_000).toISOString(), lastSeenAt: new Date(NOW - 41 * 3600_000).toISOString() } });
     const run = scrape.createRun({ knownKeys: ["p:8", "p:9", "p:10"], now: NOW, ...plan });
-    expect(scrape.addStep(run, [post(1, 1), post(2, 10), post(3, 26)])).toBe("");
-    expect(scrape.addStep(run, [post(4, 30), post(5, 39)])).toBe("");
-    expect(scrape.addStep(run, [post(8, 41), post(9, 42), post(10, 43)])).toBe("seen");
-    expect(run.fresh).toHaveLength(5);
+    expect(scrape.addStep(run, [post(1, 1), post(2, 10), post(3, 20)])).toBe("");
+    expect(scrape.addStep(run, [post(4, 25), post(5, 26), post(6, 27)])).toBe("old");
+    expect(run.fresh).toHaveLength(3);
   });
 
   it("an audit never stops on known posts", () => {

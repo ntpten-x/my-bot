@@ -105,8 +105,8 @@ async function main() {
     gemini_model: "gemini-2.0-flash",
     groq_model: DEFAULT_GROQ_MODEL,
     fetch_interval_minutes: "10",
-    jitter_minutes: "5",
-    max_groups_per_cycle: "3",
+    jitter_minutes: "1",
+    max_groups_per_cycle: "20",
     extension_token: token,
     notify_sound: "true",
   };

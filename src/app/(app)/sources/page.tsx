@@ -257,7 +257,7 @@ export default function SourcesPage() {
                   <Button
                     size="sm"
                     variant="outline"
-                    title="ให้ส่วนขยายเลื่อนลึกย้อนหลัง 72 ชม. (อ่านอย่างเดียว) แล้วนับโพสต์ที่ระบบยังไม่มี"
+                    title="ให้ส่วนขยายเลื่อนลึกย้อนหลังไม่เกิน 24 ชม. (อ่านอย่างเดียว) แล้วนับโพสต์ที่ระบบยังไม่มี"
                     onClick={async () => {
                       setInfo("");
                       setError("");

@@ -42,21 +42,22 @@
     const source = remote || {};
     return {
       screens: clampInt(source.scrollScreens, DEFAULT_SCREENS, 0, MAX_SCREENS),
-      maxAgeMs: clampInt(source.maxAgeHours, 24, 1, 168) * 3600 * 1000,
+      maxAgeMs: clampInt(source.maxAgeHours, 24, 1, 24) * 3600 * 1000,
       maxPosts: clampInt(source.maxPostsPerRun, MAX_POSTS_PER_RUN, 1, MAX_POSTS_PER_RUN),
     };
   }
 
   const HOUR = 3600 * 1000;
-  const CATCHUP_MAX_MS = 72 * HOUR;
+  // Owner rule: never ingest posts older than 24 h, including catch-up / sweep / audit.
+  const CATCHUP_MAX_MS = 24 * HOUR;
   const SWEEP_EVERY_MS = 60 * 60 * 1000;
 
   /**
    * Decide how deep one run goes.
    * - normal:  stop after KNOWN_STREAK consecutive known posts (max NORMAL_SCROLLS screens)
    * - sweep:   once an hour per source, keep going past 8 known posts (max MAX_SCROLLS)
-   * - catchup: the last run is long ago (Chrome was closed) → read back to the newest stored post, up to 72 h
-   * - audit:   coverage check, never stops on known posts, reads up to 72 h back
+   * - catchup: the last run is long ago (Chrome was closed) → read back up to 24 h
+   * - audit:   coverage check, never stops on known posts, reads up to 24 h back
    */
   function planRun(input) {
     const opts = input || {};
@@ -66,7 +67,7 @@
     const lastRun = Date.parse(group.lastFetchedAt || "") || 0;
     const lastSeen = Date.parse(group.lastSeenAt || "") || 0;
     const interval = Math.max(5, Number(group.intervalMinutes) || 15) * 60 * 1000;
-    const base = { maxPosts: MAX_POSTS_PER_RUN, maxScrolls: NORMAL_SCROLLS, knownStreak: KNOWN_STREAK, maxAgeMs: Math.max(settings.maxAgeMs, 24 * HOUR) };
+    const base = { maxPosts: MAX_POSTS_PER_RUN, maxScrolls: NORMAL_SCROLLS, knownStreak: KNOWN_STREAK, maxAgeMs: Math.min(CATCHUP_MAX_MS, Math.max(settings.maxAgeMs, HOUR)) };
     if (opts.audit) return { ...base, mode: "audit", maxScrolls: MAX_SCROLLS, knownStreak: Infinity, maxAgeMs: CATCHUP_MAX_MS };
     const gap = lastRun ? now - lastRun : Infinity;
     if (gap > Math.max(2 * HOUR, 3 * interval)) {
@@ -74,7 +75,7 @@
       return { ...base, mode: "catchup", maxScrolls: MAX_SCROLLS, knownStreak: KNOWN_STREAK, maxAgeMs: Math.min(CATCHUP_MAX_MS, Math.max(base.maxAgeMs, back)) };
     }
     const lastSweep = Number(opts.lastSweepAt) || 0;
-    if (now - lastSweep >= SWEEP_EVERY_MS) return { ...base, mode: "sweep", maxScrolls: MAX_SCROLLS, knownStreak: SWEEP_STREAK, maxAgeMs: Math.max(base.maxAgeMs, 48 * HOUR) };
+    if (now - lastSweep >= SWEEP_EVERY_MS) return { ...base, mode: "sweep", maxScrolls: MAX_SCROLLS, knownStreak: SWEEP_STREAK, maxAgeMs: CATCHUP_MAX_MS };
     return { ...base, mode: "normal" };
   }
 

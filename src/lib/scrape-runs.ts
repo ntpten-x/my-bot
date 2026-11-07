@@ -104,8 +104,8 @@ export async function buildExtensionConfig(now = new Date()) {
   const ordered = [...due, ...sources.filter((source) => !due.includes(source))];
   // Known post keys for the sources the extension is likely to open this cycle, so it can stop scrolling early.
   const hints = new Map<string, { keys: string[]; lastSeenAt: string | null; refetch: string[] }>();
-  // 72 h of keys so catch-up and hourly sweeps also stop on known posts.
-  const since = new Date(now.getTime() - Math.max(72, settings.maxPostAgeHours) * 3600_000);
+  // Keep keys for the ingest window (≤24 h) so catch-up / sweeps stop on known posts.
+  const since = new Date(now.getTime() - Math.max(24, settings.maxPostAgeHours) * 3600_000);
   for (const source of due.slice(0, settings.maxGroupsPerCycle + 2)) {
     const rows = await prisma.post.findMany({
       where: { sourceId: source.id, createdAt: { gte: since } },

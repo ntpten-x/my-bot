@@ -168,6 +168,36 @@ let outboxLock = Promise.resolve();
 function withOutboxLock(fn) {
   const task = outboxLock.then(fn); outboxLock = task.catch(() => undefined); return task;
 }
+// Serialize chrome.storage read-modify-write for parallel scrapes (backlog / sweeps / reader window).
+let backlogLock = Promise.resolve();
+function withBacklogLock(fn) {
+  const task = backlogLock.then(fn); backlogLock = task.catch(() => undefined); return task;
+}
+let sweepsLock = Promise.resolve();
+function withSweepsLock(fn) {
+  const task = sweepsLock.then(fn); sweepsLock = task.catch(() => undefined); return task;
+}
+let scrapeWindowLock = Promise.resolve();
+function withScrapeWindowLock(fn) {
+  const task = scrapeWindowLock.then(fn); scrapeWindowLock = task.catch(() => undefined); return task;
+}
+// Cap true parallelism so Facebook is not hit by every due group at once (batch can still be larger).
+const PARALLEL_SCRAPE = 3;
+async function mapPool(items, concurrency, worker) {
+  const list = items || [];
+  const results = new Array(list.length);
+  let cursor = 0;
+  async function workerLoop() {
+    while (cursor < list.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await worker(list[index], index);
+    }
+  }
+  const n = Math.max(1, Math.min(concurrency, list.length || 1));
+  await Promise.all(Array.from({ length: n }, () => workerLoop()));
+  return results;
+}
 function outboxId() { return typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => { const n = Math.floor(Math.random() * 16); return (c === "x" ? n : (n & 3) | 8).toString(16); }); }
 async function loadOutbox() {
   const stored = await chrome.storage.local.get({ outbox: [] });
@@ -214,7 +244,15 @@ async function flushOutbox(cfg) {
         else entries.splice(index, 1); // compatibility for batches saved by older extension
         await chrome.storage.local.set({ outbox: entries, outboxBlocked: entries.length >= OUTBOX_MAX });
       });
-      if (!response.ok) { await rememberError(`ข้อมูลถูกปฏิเสธ HTTP ${response.status} เก็บไว้ให้ตรวจ ไม่ลบออกจากคิว`); continue; }
+      if (!response.ok) {
+        // Permanent client errors: keep in outbox marked, but do not re-alert every heartbeat.
+        if (response.status === 404 || response.status === 400) {
+          await rememberError(`คิวข้อมูลถูกปฏิเสธ HTTP ${response.status} (${String(item.sourceUrl || "").slice(0, 80)}) — ทำเครื่องหมายแล้ว ไม่ส่งซ้ำ`).catch(() => undefined);
+        } else {
+          await rememberError(`ข้อมูลถูกปฏิเสธ HTTP ${response.status} เก็บไว้ให้ตรวจ ไม่ลบออกจากคิว`);
+        }
+        continue;
+      }
       results[item.batchId] = data;
       await countSent(Number(data.inserted) || 0);
     }
@@ -449,6 +487,24 @@ async function saveFullTextBacklog(backlog) {
   if (dropped.length) await rememberError("คิวอ่านข้อความเต็มเกิน 200 รายการ มีงานไม่รับเพิ่ม กรุณาตรวจสถิติคิวและลดจำนวนกลุ่ม");
 }
 
+async function updateFullTextBacklog(mutator) {
+  return withBacklogLock(async () => {
+    const backlog = await loadFullTextBacklog();
+    await mutator(backlog);
+    await saveFullTextBacklog(backlog);
+    return backlog;
+  });
+}
+
+async function noteSweepAt(groupId) {
+  return withSweepsLock(async () => {
+    const stored = await chrome.storage.local.get({ sweeps: {} });
+    const sweeps = { ...(stored.sweeps || {}) };
+    sweeps[groupId] = Date.now();
+    await chrome.storage.local.set({ sweeps });
+  });
+}
+
 function postKey(url) {
   try {
     const parsed = new URL(String(url || ""));
@@ -657,13 +713,19 @@ async function parkOffscreen(windowId) {
 }
 
 // Returns { windowId, tabId } of the background reader window, creating it if needed.
+// tabId is the anchor blank tab; parallel scrapes add more tabs and must not remove active ones.
 async function ensureScrapeWindow() {
   const ref = await loadScrapeWindow();
   if (ref) {
     const win = await chrome.windows.get(ref.windowId, { populate: true }).catch(() => null);
     if (win && win.tabs && win.tabs.length) {
       const keep = win.tabs.find((tab) => tab.id === ref.tabId) || win.tabs[0];
-      for (const tab of win.tabs) if (tab.id !== keep.id) await chrome.tabs.remove(tab.id).catch(() => undefined);
+      for (const tab of win.tabs) {
+        if (tab.id === keep.id || scrapingTabs.has(tab.id)) continue;
+        // Drop stray idle tabs only — never tabs mid-scrape.
+        if (tab.url && tab.url !== "about:blank") continue;
+        await chrome.tabs.remove(tab.id).catch(() => undefined);
+      }
       if (!win.focused) await parkOffscreen(win.id);
       const next = { windowId: win.id, tabId: keep.id, usedAt: Date.now() };
       await saveScrapeWindow(next);
@@ -743,22 +805,39 @@ async function closeOrphanReaders() {
   if (changed) await chrome.storage.session.set({ readers });
 }
 
-// Loads a feed in the background reader tab (never in the owner's windows, never focused).
+// Loads a feed in its own background tab inside the reader window (never focused).
+// Window create + tab create are serialized so parallel scrapes do not race blank-tab cleanup.
 async function openReader(url) {
-  const ref = await ensureScrapeWindow();
-  const reader = { tabId: ref.tabId, windowId: ref.windowId };
-  scrapingTabs.add(reader.tabId);
-  await chrome.tabs.update(reader.tabId, { url });
-  await parkOffscreen(ref.windowId);
+  const reader = await withScrapeWindowLock(async () => {
+    const ref = await ensureScrapeWindow();
+    const tab = await chrome.tabs.create({ windowId: ref.windowId, url, active: false });
+    const tabId = tab.id;
+    scrapingTabs.add(tabId);
+    // Track for orphan cleanup if the service worker restarts mid-scrape.
+    const stored = await chrome.storage.session.get({ readers: {} }).catch(() => ({ readers: {} }));
+    const readers = stored.readers || {};
+    readers[String(tabId)] = { tabId, windowId: ref.windowId, boot: BOOT_ID, at: Date.now() };
+    await chrome.storage.session.set({ readers }).catch(() => undefined);
+    await parkOffscreen(ref.windowId);
+    return { tabId, windowId: ref.windowId, ephemeral: true };
+  });
   await sleep(400);
   return reader;
 }
 
-// Sends the tab back to about:blank (frees Facebook's memory) but keeps the off-screen window for reuse.
+// Removes the scrape tab (anchor blank tab stays so the reader window survives).
 async function closeReader(reader) {
   if (!reader) return;
-  if (reader.tabId !== undefined) await chrome.tabs.update(reader.tabId, { url: "about:blank" }).catch(() => undefined);
   scrapingTabs.delete(reader.tabId);
+  if (reader.tabId !== undefined) {
+    await chrome.tabs.remove(reader.tabId).catch(() => undefined);
+    const stored = await chrome.storage.session.get({ readers: {} }).catch(() => ({ readers: {} }));
+    const readers = stored.readers || {};
+    if (readers[String(reader.tabId)]) {
+      delete readers[String(reader.tabId)];
+      await chrome.storage.session.set({ readers }).catch(() => undefined);
+    }
+  }
   const ref = await loadScrapeWindow();
   if (ref) await saveScrapeWindow({ ...ref, usedAt: Date.now() });
 }
@@ -813,7 +892,7 @@ async function scrapeGroup(cfg, group, remote, options) {
   const kind = sourceKind(group);
   const settings = await scrapeSettingsFor(remote);
   const stored = await chrome.storage.local.get({ sweeps: {} });
-  const plan = Scrape.planRun({ group, settings, lastSweepAt: stored.sweeps[group.id], audit: Boolean(options && options.audit) });
+  const plan = Scrape.planRun({ group, settings, lastSweepAt: (stored.sweeps || {})[group.id], audit: Boolean(options && options.audit) });
   const result = { ok: true, postsFound: 0, newPosts: 0, scrolls: 0, stoppedBy: "", message: "", nextRunAt: null, mode: plan.mode, stats: null };
   const startedAt = Date.now();
   let reader;
@@ -850,23 +929,15 @@ async function scrapeGroup(cfg, group, remote, options) {
       const data = response && response.ok ? await response.clone().json().catch(() => ({})) : {};
       result.newPosts += Number(data.inserted) || 0;
     }
-    if (plan.mode !== "normal") {
-      stored.sweeps[group.id] = Date.now();
-      await chrome.storage.local.set({ sweeps: stored.sweeps });
-    }
+    if (plan.mode !== "normal") await noteSweepAt(group.id);
     if (kind !== "marketplace") {
-      // Order: newest posts cut off in this run, then the server's backlog (newest/high score), then the local backlog.
-      const backlog = await loadFullTextBacklog();
-      const now = Date.now();
-      const local = Object.entries(backlog)
-        .filter(([, item]) => item.groupId === group.id && (item.after || 0) <= now)
-        .sort((a, b) => (b[1].addedAt || 0) - (a[1].addedAt || 0))
-        .map(([url]) => url);
-      const freshCut = picked.filter((post) => post.truncated).map((post) => String(post.url));
-      const urls = [...new Set([...freshCut, ...(group.refetchUrls || []).map(String), ...local])];
-      // Discovery only persists work. Detail reading runs after all discovery groups.
-      for (const url of urls) if (!backlog[url]) backlog[url] = { groupId: group.id, sourceUrl: group.url, tries: 0, addedAt: now, after: 0 };
-      await saveFullTextBacklog(backlog);
+      // Discovery only enqueues work under a lock so parallel groups do not clobber each other.
+      await updateFullTextBacklog(async (backlog) => {
+        const now = Date.now();
+        const freshCut = picked.filter((post) => post.truncated).map((post) => String(post.url));
+        const urls = [...new Set([...freshCut, ...(group.refetchUrls || []).map(String)])];
+        for (const url of urls) if (!backlog[url]) backlog[url] = { groupId: group.id, sourceUrl: group.url, tries: 0, addedAt: now, after: 0 };
+      });
     }
     await postJson(cfg, "/api/v1/extension/sample", { sourceUrl: group.url, posts: result.sample || [] }).catch(() => undefined);
     result.message = `อ่านได้ ${run.found} โพสต์ ใหม่ ${result.newPosts} · เลื่อน ${result.scrolls} หน้าจอ (${plan.mode})`;
@@ -885,11 +956,11 @@ async function scrapeGroup(cfg, group, remote, options) {
 async function processFullTextQueue(cfg, groups, options = {}) {
   const metrics = { at: Date.now(), tried: 0, succeeded: 0, failed: 0, remaining: 0, durationMs: 0 };
   const detailDeadline = Date.now() + (options.budgetMs || 60_000);
-  const backlog = await loadFullTextBacklog();
+  let backlogSnapshot = await loadFullTextBacklog();
   const now = Date.now();
   // Oldest due first; cap per group so a busy source cannot monopolize details.
   const used = new Map();
-  const pending = Object.entries(backlog).filter(([, item]) => !item.problem && (item.after || 0) <= now)
+  const pending = Object.entries(backlogSnapshot).filter(([, item]) => !item.problem && (item.after || 0) <= now)
     .sort((a, b) => (a[1].lastTriedAt || 0) - (b[1].lastTriedAt || 0) || (a[1].addedAt || 0) - (b[1].addedAt || 0));
   // Round robin sources: two consecutive slow items cannot consume the whole budget.
   const queues = new Map();
@@ -906,29 +977,37 @@ async function processFullTextQueue(cfg, groups, options = {}) {
     try {
       reader = await openReader("about:blank");
       metrics.tried += 1;
-      item.lastTriedAt = Date.now();
-      await saveFullTextBacklog(backlog);
+      await updateFullTextBacklog(async (backlog) => {
+        if (!backlog[url]) return;
+        backlog[url].lastTriedAt = Date.now();
+      });
       const read = await readFullTexts(reader.tabId, sourceKind(group), [url]);
-      if (read.found.length) {
-        await sendPosts(cfg, group.url, read.found.map(cleanPost));
-        metrics.succeeded += 1;
-        delete backlog[url];
-      } else {
-        metrics.failed += 1;
-        item.lastReason = read.failures?.[url] || "target_not_found";
-        item.tries = (item.tries || 0) + 1; item.after = Date.now() + Math.min(6 * 3600000, 60000 * 2 ** item.tries);
-      }
-      await saveFullTextBacklog(backlog);
+      await updateFullTextBacklog(async (backlog) => {
+        if (read.found.length) {
+          metrics.succeeded += 1;
+          delete backlog[url];
+        } else if (backlog[url]) {
+          metrics.failed += 1;
+          backlog[url].lastReason = read.failures?.[url] || "target_not_found";
+          backlog[url].tries = (backlog[url].tries || 0) + 1;
+          backlog[url].after = Date.now() + Math.min(6 * 3600000, 60000 * 2 ** backlog[url].tries);
+        }
+      });
+      if (read.found.length) await sendPosts(cfg, group.url, read.found.map(cleanPost));
     } catch {
       metrics.failed += 1;
-      item.tries = (item.tries || 0) + 1; item.after = Date.now() + 5 * 60_000;
-      await saveFullTextBacklog(backlog);
+      await updateFullTextBacklog(async (backlog) => {
+        if (!backlog[url]) return;
+        backlog[url].tries = (backlog[url].tries || 0) + 1;
+        backlog[url].after = Date.now() + 5 * 60_000;
+      });
     } finally { await closeReader(reader); }
   }
-  metrics.remaining = Object.keys(backlog).length; metrics.durationMs = Date.now() - metrics.at;
-  metrics.reasons = Object.values(backlog).reduce((counts, item) => { if (item.lastReason) counts[item.lastReason] = (counts[item.lastReason] || 0) + 1; return counts; }, {});
-  metrics.review = Object.values(backlog).filter(item => item.problem).length;
-  metrics.oldestAgeMs = Object.values(backlog).reduce((age, item) => Math.max(age, Date.now() - (item.addedAt || Date.now())), 0);
+  backlogSnapshot = await loadFullTextBacklog();
+  metrics.remaining = Object.keys(backlogSnapshot).length; metrics.durationMs = Date.now() - metrics.at;
+  metrics.reasons = Object.values(backlogSnapshot).reduce((counts, item) => { if (item.lastReason) counts[item.lastReason] = (counts[item.lastReason] || 0) + 1; return counts; }, {});
+  metrics.review = Object.values(backlogSnapshot).filter(item => item.problem).length;
+  metrics.oldestAgeMs = Object.values(backlogSnapshot).reduce((age, item) => Math.max(age, Date.now() - (item.addedAt || Date.now())), 0);
   const { fullTextTotals: previous = {} } = await chrome.storage.local.get({ fullTextTotals: {} });
   await chrome.storage.local.set({ fullTextMetrics: metrics, fullTextTotals: { tried: (previous.tried || 0) + metrics.tried, succeeded: (previous.succeeded || 0) + metrics.succeeded, failed: (previous.failed || 0) + metrics.failed } });
 }
@@ -977,38 +1056,64 @@ async function cycle() {
     if (reason) return;
     const now = Date.now();
     const schedules = { ...cfg.schedules };
-    // The server decides what is due (priority + adaptive interval); the local schedule is only a short lock.
-    const due = (remote.groups || []).filter(
-      (group) => (!remote.serverScheduling || group.due !== false) && (!schedules[group.id] || now >= schedules[group.id]),
-    );
-    // Chrome throttled the minimized window recently: read fewer groups per cycle.
+    // Local nextRunAt / in-flight lock always wins — prevents re-scraping every tick when server due is stale.
+    const INFLIGHT_MS = 2 * 60 * 1000;
+    const due = (remote.groups || []).filter((group) => {
+      if (remote.serverScheduling && group.due === false) return false;
+      const until = schedules[group.id] || 0;
+      if (until > now) return false;
+      return true;
+    });
+    // Chrome throttled recently → smaller batch. Otherwise take every due group (up to maxGroupsPerCycle).
     const { throttledAt } = await chrome.storage.local.get({ throttledAt: 0 });
-    const limit = remote.maxGroupsPerCycle || 5;
+    const limit = remote.maxGroupsPerCycle || 20;
     const batch = due.slice(0, Date.now() - throttledAt < 30 * 60 * 1000 ? Math.min(limit, 2) : limit);
     if (Object.keys(await loadFullTextBacklog()).length >= 10) await processFullTextQueue(cfg, remote.groups || [], { budgetMs: 20000, maxItems: 2 });
-    for (const group of batch) {
-      schedules[group.id] = Date.now() + RUN_LOCK_MS;
-      await chrome.storage.local.set({ schedules });
+    const started = Date.now();
+    for (const group of batch) schedules[group.id] = started + INFLIGHT_MS;
+    await chrome.storage.local.set({ schedules });
+    // Up to PARALLEL_SCRAPE tabs at once, staggered; remaining due groups queue in the same cycle.
+    const settled = await mapPool(batch, PARALLEL_SCRAPE, async (group, index) => {
+      if (index > 0) await sleep(1200 * Math.min(index, PARALLEL_SCRAPE));
+      if (await quietReason(remote.quiet)) return { group, result: { ok: false, message: "quiet", nextRunAt: Date.now() + 60_000 } };
       const result = await scrapeGroup(cfg, group, remote);
-      // Release discovery's reader before a bounded detail slice. Shared round
-      // quota remains unchanged; never race two navigations on the same tab.
-      if (!await quietReason(remote.quiet)) await processFullTextQueue(cfg, remote.groups || [], { budgetMs: 15000, maxItems: 1 });
+      return { group, result };
+    });
+    for (const { group, result } of settled) {
+      if (!result) continue;
       const interval = group.currentIntervalMinutes || group.intervalMinutes || remote.defaultIntervalMinutes || 10;
-      const jitter = Math.random() * Math.min(remote.jitterMinutes ?? 5, interval * 0.25);
-      schedules[group.id] = result.nextRunAt ? Math.min(result.nextRunAt, Date.now() + 180 * 60 * 1000) : Date.now() + (interval + jitter) * 60 * 1000;
-      await chrome.storage.local.set({ schedules });
-      if (batch.indexOf(group) < batch.length - 1) {
-        await sleep(4000 + Math.random() * 6000);
-        if (await quietReason(remote.quiet)) break;
-      }
+      schedules[group.id] = result.nextRunAt
+        ? Math.min(result.nextRunAt, Date.now() + 180 * 60 * 1000)
+        : Date.now() + interval * 60 * 1000;
     }
-    await processFullTextQueue(cfg, remote.groups || []);
+    await chrome.storage.local.set({ schedules });
+    if (!await quietReason(remote.quiet)) await processFullTextQueue(cfg, remote.groups || []);
+    await scheduleDueWake(remote.groups || [], schedules);
   } catch (error) {
     // เปิดแอปไม่ติดหรือเน็ตหลุด — รอรอบถัดไป
     await rememberError(`รอบอ่านอัตโนมัติไม่สำเร็จ: ${String(error && error.message ? error.message : error).slice(0, 160)}`).catch(() => undefined);
   } finally {
     await releaseRunLock();
   }
+}
+
+const DUE_ALARM = "mybot-due";
+
+// Wake near the earliest nextRunAt so a due round starts without waiting for the 1-min tick phase.
+async function scheduleDueWake(groups, schedules) {
+  const now = Date.now();
+  let soonest = Infinity;
+  for (const group of groups || []) {
+    const fromLocal = schedules && schedules[group.id] ? Number(schedules[group.id]) : NaN;
+    const fromServer = Date.parse(group.nextRunAt || "");
+    // Prefer fresh local schedules from this cycle; fall back to server nextRunAt.
+    const at = Number.isFinite(fromLocal) && fromLocal > now ? fromLocal : fromServer;
+    if (Number.isFinite(at) && at > now && at < soonest) soonest = at;
+  }
+  await chrome.alarms.clear(DUE_ALARM).catch(() => undefined);
+  if (!Number.isFinite(soonest) || soonest === Infinity) return;
+  // Chrome MV3 may clamp delays under 1 minute; still align to the due instant when it is further out.
+  await chrome.alarms.create(DUE_ALARM, { when: Math.max(soonest, now + 1000) }).catch(() => undefined);
 }
 
 const recentManual = new Map();
@@ -1109,7 +1214,7 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === "mybot-tick") void cycle();
+  if (alarm.name === "mybot-tick" || alarm.name === DUE_ALARM) void cycle();
   if (alarm.name === "mybot-tasks") void pollTasks();
   if (alarm.name === "mybot-tasks") {
     const deps = { loadConfig, postJson, currentFbUserId, base, waitComplete, sleep, rememberError };

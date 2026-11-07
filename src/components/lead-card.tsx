@@ -199,7 +199,9 @@ export function LeadCard({
         {lead.province ? <Badge tone="amber">{lead.province}</Badge> : null}
         {lead.isAd ? <Badge tone="danger">โฆษณา</Badge> : null}
         {lead.forbiddenHit ? <Badge tone="danger">คำต้องห้าม</Badge> : null}
-        <span className="ml-auto text-xs text-muted">{timeAgo(lead.createdAt)}</span>
+        <span className="ml-auto text-xs text-muted" title={lead.postedAt ? "เวลาที่โพสต์บน Facebook" : "ยังไม่อ่านเวลาโพสต์ ใช้เวลาที่เก็บเข้าแทน"}>
+          {timeAgo(lead.postedAt ?? lead.createdAt)}
+        </span>
       </div>
       {lead.scoreReason ? <p className="mt-2 text-xs text-muted">{lead.scoreReason}</p> : null}
       {lead.duplicateOfId ? <p className="mt-1 text-xs text-clay">โพสต์คล้ายของเดิมใน 7 วัน</p> : null}

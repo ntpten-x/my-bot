@@ -219,16 +219,16 @@ export default function SettingsPage() {
               <Input type="number" min={0} max={30} value={settings.jitterMinutes} onChange={(event) => setSettings({ ...settings, jitterMinutes: Number(event.target.value) })} />
             </div>
             <div>
-              <Label>กลุ่มสูงสุดต่อรอบ</Label>
-              <Input type="number" min={1} max={10} value={settings.maxGroupsPerCycle} onChange={(event) => setSettings({ ...settings, maxGroupsPerCycle: Number(event.target.value) })} />
+              <Label>กลุ่มสูงสุดต่อรอบ (ดึงพร้อมกัน)</Label>
+              <Input type="number" min={1} max={20} value={settings.maxGroupsPerCycle} onChange={(event) => setSettings({ ...settings, maxGroupsPerCycle: Number(event.target.value) })} />
             </div>
             <div>
               <Label>เลื่อนลงกี่หน้าจอต่อกลุ่ม (0–10)</Label>
               <Input type="number" min={0} max={10} value={settings.scrollScreens} onChange={(event) => setSettings({ ...settings, scrollScreens: Number(event.target.value) })} />
             </div>
             <div>
-              <Label>เก็บโพสต์อายุไม่เกิน (ชั่วโมง)</Label>
-              <Input type="number" min={1} max={168} value={settings.maxPostAgeHours} onChange={(event) => setSettings({ ...settings, maxPostAgeHours: Number(event.target.value) })} />
+              <Label>เก็บโพสต์อายุไม่เกิน (ชั่วโมง, สูงสุด 24)</Label>
+              <Input type="number" min={1} max={24} value={settings.maxPostAgeHours} onChange={(event) => setSettings({ ...settings, maxPostAgeHours: Number(event.target.value) })} />
             </div>
             <div>
               <Label>โพสต์สูงสุดต่อรอบ</Label>

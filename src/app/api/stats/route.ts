@@ -35,7 +35,7 @@ async function loadStats() {
       }),
       prisma.post.findMany({
         where: { isAd: false, forbiddenHit: false, duplicateOfId: null },
-        orderBy: { createdAt: "desc" },
+        orderBy: [{ sortAt: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }],
         take: 6,
         include: postInclude,
         relationLoadStrategy: "join",
