@@ -55,3 +55,9 @@ Strict regression 61 files / 519 tests ผ่าน ไม่มี skip แล�
 เพิ่ม problem=expired/retry_exhausted แทนกรองงานออกเงียบ ๆ รายการมีปัญหาไม่ถูก retry อัตโนมัติ เพิ่มตัวนับ overflow เมื่อเกิน 200 รายการ แจ้งเตือนให้ลดแหล่ง/ตรวจคิว เพิ่ม metrics review/oldestAgeMs และยอดสะสม tried/succeeded/failed ระดับติดตั้ง งานหมดอายุยังบล็อกการคอมเมนต์ด้วย full_text gate ตามเดิม ต้องตรวจเอง ไม่อ้างว่าระบายคิวได้ครบเพราะจำนวน pending ลดลง
 
 Strict tests 61 files / 519 tests ผ่าน และ Lint ผ่าน ยังต้อง deploy และวัดคิวจริงก่อนรับรอง throughput
+
+## แก้การรอท้ายรอบเมื่อคิวเริ่มว่าง
+
+เพิ่ม detail slice หลัง discovery ทุกกลุ่ม สูงสุดหนึ่งรายการ/งบ cooperative 15 วินาที ตรวจ quiet ก่อนเริ่ม ใช้ fullTextBudget ร่วมทั้งรอบและ reader ทีละงาน ไม่ใช้ Promise.race ปล่อยงานเดิมนำทางต่อขณะเปิดกลุ่มใหม่ ยังคงข้อจำกัดว่า Chrome API ที่รออยู่ไม่ถูกยกเลิกกลางทาง จึงต้องวัด wall clock จริงหลัง deploy
+
+เพิ่ม runnable VM regression ตรวจลำดับ feed:a → detail slice → feed:b → detail slice → tail queue Strict tests 61 files / 520 tests ผ่าน ไม่มี skip; Lint ผ่าน ไม่มีการแก้ Production หรือส่งคอมเมนต์จริงในรอบนี้

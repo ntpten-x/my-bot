@@ -823,6 +823,9 @@ async function cycle() {
       schedules[group.id] = Date.now() + RUN_LOCK_MS;
       await chrome.storage.local.set({ schedules });
       const result = await scrapeGroup(cfg, group, remote);
+      // Release discovery's reader before a bounded detail slice. Shared round
+      // quota remains unchanged; never race two navigations on the same tab.
+      if (!await quietReason(remote.quiet)) await processFullTextQueue(cfg, remote.groups || [], { budgetMs: 15000, maxItems: 1 });
       const interval = group.currentIntervalMinutes || group.intervalMinutes || remote.defaultIntervalMinutes || 10;
       const jitter = Math.random() * Math.min(remote.jitterMinutes ?? 5, interval * 0.25);
       schedules[group.id] = result.nextRunAt ? Math.min(result.nextRunAt, Date.now() + 180 * 60 * 1000) : Date.now() + (interval + jitter) * 60 * 1000;

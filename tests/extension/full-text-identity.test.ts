@@ -17,3 +17,16 @@ it("processes durable detail work fairly and retains failed targets", async () =
  await vm.runInContext('processFullTextQueue({token:"same"},[{id:"g"},{id:"h"}])',context);
  expect(read).toEqual(["a","d","b"]);expect(Object.keys(backlog)).toHaveLength(4);
 });
+it("drains newly discovered detail work before discovering the next group", async () => {
+ const source=readFileSync("extension/background.js","utf8"); const events:string[]=[];
+ const context=vm.createContext({Date,Math,cycling:false,RUN_LOCK_MS:720000,
+ chrome:{storage:{local:{get:async(d:object)=>({...d,outboxBlocked:false,fbIdentity:null,throttledAt:0}),set:async()=>{}}}},
+ loadConfig:async()=>({token:"synthetic",paused:false,schedules:{}}),takeRunLock:async()=>true,releaseRunLock:async()=>{},
+ getJson:async()=>({ok:true,json:async()=>({groups:[{id:"a"},{id:"b"}],maxGroupsPerCycle:2,jitterMinutes:0})}),
+ quietReason:async()=>null,setQuiet:async()=>{},loadFullTextBacklog:async()=>({}),sleep:async()=>{},rememberError:async()=>{},
+ scrapeGroup:async(_cfg:unknown,g:{id:string})=>{events.push(`feed:${g.id}`);return {}},
+ processFullTextQueue:async(_cfg:unknown,_groups:unknown,options?:{maxItems:number})=>{events.push(options?.maxItems===1?"detail:slice":"detail:tail")}});
+ vm.runInContext(source.slice(source.indexOf("async function cycle()"),source.indexOf("const recentManual")),context);
+ await vm.runInContext("cycle()",context);
+ expect(events).toEqual(["feed:a","detail:slice","feed:b","detail:slice","detail:tail"]);
+});
