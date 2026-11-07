@@ -85,15 +85,28 @@ function harness(pages: Page[], local: Storage = {}, session: Storage = {}) {
   return {
     local, session, tabs, accepted, sent, events, errors, openReader, reload,
     pause: () => { paused = true; }, offline: (value: boolean) => { offline = value; }, rejectOutbox: (value: boolean) => { rejectOutbox = value; },
-    slowSleep: () => { sleepJump = 100_000; },
+    slowSleep: (value = 100_000) => { sleepJump = value; },
     onReload: (value: Page[]) => { reloadPages = value; },
-    run: (target = group) => (context.scrapeGroup as any)(cfg, target, {}),
+    now: () => now,
+    run: (target = group, options = {}) => (context.scrapeGroup as any)(cfg, target, {}, options),
     recover: () => (context.closeOrphanReaders as any)(),
     flush: () => (context.flushOutbox as any)(cfg),
   };
 }
 
 describe("continuous read-only collection", () => {
+  it("uses the caller's deadline and verifies no progress across short slices", async () => {
+    const h = harness([{posts:[post(1),post(2),post(3)]}]);
+    let result;
+    for(let i=0;i<8 && (!result || h.tabs.size);i++) {
+      const started=h.now();
+      result=await h.run(group,{deadlineMs:started+16_000});
+      expect(h.now()-started).toBeLessThanOrEqual(16_000);
+    }
+    expect(result.stoppedBy).toBe("exhausted");
+    expect(h.accepted.size).toBe(3);
+    expect(h.openReader).toHaveBeenCalledTimes(1);
+  });
   it("marks a time-budget yield incomplete even after productive reads, without reloading", async () => {
     const h = harness([{posts:[post(1),post(2),post(3)]},{posts:[post(4),post(5),post(6)]}]);
     h.slowSleep();
@@ -102,8 +115,10 @@ describe("continuous read-only collection", () => {
     expect(result.stats.hitLimit).toBe(true);
     expect(result.scrolls).toBeLessThan(3);
     expect(h.reload).not.toHaveBeenCalled();
-    expect(h.accepted.size).toBe(6);
+    expect(h.local.outbox.flatMap((item:any)=>item.posts)).toHaveLength(3);
     expect(h.tabs.size).toBe(1);
+    h.slowSleep(0); await h.run();
+    expect(h.accepted.size).toBe(6);
   });
 
   it("stops reading while the durable outbox is blocked", async () => {
@@ -128,7 +143,7 @@ describe("continuous read-only collection", () => {
     expect(result.ok).toBe(true);
     expect(result.stoppedBy).toBe("limit");
     expect(result.stats.hitLimit).toBe(true);
-    expect(h.accepted.size).toBeGreaterThan(200);
+    expect(h.accepted.size).toBeGreaterThan(0);
     expect(h.reload).not.toHaveBeenCalled();
     for (let round = 0; round < 5 && h.tabs.size; round++) result = await h.run();
     expect(h.accepted.size).toBe(360);

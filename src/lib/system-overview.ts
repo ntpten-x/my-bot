@@ -14,6 +14,7 @@ import { coverageBySource } from "./coverage-data";
 import type { Coverage } from "./coverage";
 import { parseWatchState } from "./watchdog";
 import { classificationStats } from "./classification-stats";
+import { classifyAvailability } from "./ai/run";
 import {
   ageMs,
   bangkokLabel,
@@ -187,7 +188,7 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
     "watchdog_checked_at",
     "worker_leader",
   ];
-  const [map, accounts, installs, facebookSources, postsToday, leadsToday, lastFbPost, fbErrors24h, aiQueue, failed24h, doneJobs, ollama, groq, gemini] =
+  const [map, accounts, installs, facebookSources, postsToday, leadsToday, lastFbPost, fbErrors24h, aiQueue, failed24h, doneJobs, ollama, groq, gemini, aiAvailability] =
     await Promise.all([
       readSettingsMap(keys),
       prisma.fbAccount.findMany({ orderBy: { lastSeenAt: "desc" } }),
@@ -208,6 +209,7 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
       ollamaStatus(settings),
       liveTestProvider("groq", settings, options.fresh),
       liveTestProvider("gemini", settings, options.fresh),
+      classifyAvailability(settings),
     ]);
 
   // ---------- Facebook accounts ----------
@@ -340,7 +342,7 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
         level: (!r || !r.total ? "off" : stallPct >= 0.3 || r.throttled > 0 ? "warn" : "ok") as "ok" | "warn" | "off",
         value: r && r.total ? `${r.total} รอบ · นอกจอ/ย่อ ${r.minimized} · ค้าง ${r.stalled} (ขณะพื้นหลัง ${r.stalledMinimized}) · รีโหลดซ้ำ ${r.reloaded} · หน่วง ${r.throttled}` : "ยังไม่มีข้อมูล",
         detail: r && r.total
-          ? `เฉพาะส่วนขยาย v${ver} · พบใหม่ ${r.fresh} · ${r.freshPerMinute} โพสต์/นาทีอ่าน · อ่านยังไม่ครบ ${r.incomplete} รอบ · ผิดพลาด ${r.errors} รอบ · เฉลี่ย ${r.avgSeconds} วินาที/รอบ`
+          ? `เฉพาะส่วนขยาย v${ver} · พบใหม่ ${r.fresh} · ${r.freshPerMinute} โพสต์/นาทีอ่าน · จบตรวจ ${r.completed} · นัดอ่านต่อ ${r.continuations} · กู้ฟีด ${r.recovering} · ผิดพลาด ${r.errors} รอบ · เฉลี่ย ${r.avgSeconds} วินาที/รอบ`
           : `ยังไม่มีรอบจากส่วนขยาย v${ver} ใน 24 ชม. (ไม่นับเวอร์ชันเก่า)`,
         hint: r && stallPct >= 0.3 ? "Chrome หน่วงแท็บพื้นหลังบ่อย — ลดจำนวนกลุ่มที่เปิด และเปิด Chrome ทิ้งไว้ (อย่าย่อหน้าต่าง Facebook ทั้งบาน)" : undefined,
       };
@@ -465,13 +467,21 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
   const embedReady = hasModel(ollama.installed, settings.embedModel);
   const cloudCheck = (name: string, label: string, test: Awaited<ReturnType<typeof liveTestProvider>>): Check => ({
     key: `ai-${name}`,
-    label,
-    level: !test.configured ? "off" : test.ok ? (test.latencyMs != null && test.latencyMs > 8000 ? "warn" : "ok") : "bad",
-    value: !test.configured ? "ยังไม่ได้ใส่คีย์" : test.ok ? `ใช้งานได้ · ${test.latencyMs} ms` : test.message,
+    label: `${label} — ผลทดสอบการเชื่อมต่อ`,
+    level: !test.configured ? "off" : !aiAvailability.names.some(provider => provider === name || provider.startsWith(`${name}:`)) ? "warn" : test.ok ? (test.latencyMs != null && test.latencyMs > 8000 ? "warn" : "ok") : "bad",
+    value: !test.configured ? "ยังไม่ได้ใส่คีย์" : test.ok ? `ทดสอบผ่าน · ${test.latencyMs} ms${!aiAvailability.names.some(provider => provider === name || provider.startsWith(`${name}:`)) ? " · ยังไม่พร้อมจัดหมวดตามการตั้งค่า/โควตา" : ""}` : test.message,
     detail: `คีย์: ${test.configured ? "ตั้งค่าแล้ว (ซ่อนไว้)" : "ไม่มี"} · โมเดล ${test.model}${test.testedAt ? ` · ทดสอบ ${thaiAgo(ageMs(test.testedAt, now))}` : ""}`,
     hint: test.ok ? undefined : test.hint,
   });
   const aiChecks: Check[] = [
+    {
+      key: "ai-ready-now",
+      label: "AI พร้อมจัดหมวดตอนนี้",
+      level: aiAvailability.rulesOnly ? "off" : aiAvailability.ready ? "ok" : "warn",
+      value: aiAvailability.rulesOnly ? "เจ้าของเลือกใช้กฎ" : aiAvailability.ready ? `พร้อม ${aiAvailability.ready} ผู้ให้บริการ` : "รอผู้ให้บริการพร้อม — คิวไม่เพิ่มจำนวนครั้งล้มเหลวขณะพัก",
+      detail: aiAvailability.ready ? aiAvailability.names.join(" · ") : aiAvailability.waiting.map(provider => `${provider.name}: ${provider.reason}`).join(" · ") || "ตรวจการตั้งค่าและการเชื่อมต่อ AI",
+      hint: !aiAvailability.ready && aiAvailability.nextReadyAt ? `ตรวจพร้อมอีกครั้ง ${bangkokLabel(new Date(aiAvailability.nextReadyAt))}` : undefined,
+    },
     {
       key: "ai-ollama",
       label: "Ollama (AI ในเครื่อง)",
@@ -627,6 +637,11 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
     detail: item.level === "ok" ? `ตรวจล่าสุด ${thaiAgo(ageMs(map.watchdog_checked_at, now))}` : `เป็นแบบนี้มา ${thaiAgo(ageMs(item.since, now))} · ปกติล่าสุด ${item.lastOkAt ? thaiAgo(ageMs(item.lastOkAt, now)) : "ไม่เคย"}`,
     hint: item.level === "ok" ? undefined : item.hint || undefined,
   }));
+  const boardAi = boardChecks.find(check => check.key === "watch_ai");
+  if (boardAi) {
+    const currentAi = aiChecks.find(check => check.key === "ai-ready-now")!;
+    Object.assign(boardAi, { level: currentAi.level, value: currentAi.value, detail: currentAi.detail, hint: currentAi.hint });
+  }
   const checkedAge = ageMs(map.watchdog_checked_at, now);
   if (!boardChecks.length || (checkedAge ?? Infinity) > 20 * 60_000) {
     boardChecks.unshift({

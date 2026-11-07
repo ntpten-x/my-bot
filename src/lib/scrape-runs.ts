@@ -76,6 +76,9 @@ export function summarizeReaderRuns(runs: ReaderRun[]) {
     inserted: runs.reduce((sum, run) => sum + (run.inserted || 0), 0),
     freshPerMinute: durationMs > 0 ? Math.round(fresh * 60_000 / durationMs * 10) / 10 : 0,
     incomplete: runs.filter(run => isIncompleteScrape({ ok: run.ok !== false, postsFound: run.found || 0, stoppedBy: run.stoppedBy || "", hitLimit: run.hitLimit })).length,
+    completed: runs.filter(run => run.ok !== false && !run.hitLimit && ["seen", "old", "exhausted"].includes(run.stoppedBy || "")).length,
+    continuations: runs.filter(run => run.ok !== false && ["cap", "limit", "screens", "yield"].includes(run.stoppedBy || "")).length,
+    recovering: runs.filter(run => run.ok !== false && ["loading", "stalled"].includes(run.stoppedBy || "")).length,
     errors: runs.filter(run => run.ok === false).length,
   };
 }
@@ -252,9 +255,10 @@ export async function recordScrapeRun(input: ScrapeRunInput, now = new Date(), r
     ok: input.ok,
     incomplete,
   });
-  // A productive slice is a continuation, not a new poll. Loading/stalls retain normal backoff.
+  // Productive slices continue after 30 s; stalled feeds yield to others and retry after 60 s.
   const continuing = input.ok && incomplete && ["cap", "limit", "screens", "yield"].includes(input.stoppedBy);
-  const nextRunAt = nextRunAfter(now, continuing ? 0.5 : interval, continuing ? 0 : settings.jitterMinutes, random);
+  const recovering = input.ok && incomplete && ["loading", "stalled"].includes(input.stoppedBy);
+  const nextRunAt = nextRunAfter(now, continuing ? 0.5 : recovering ? 1 : interval, continuing || recovering ? 0 : settings.jitterMinutes, random);
   const stop = input.ok || ["logged_out", "checkpoint"].includes(input.stoppedBy) ? input.stoppedBy : "error";
   await prisma.source.update({
     where: { id: source.id },
@@ -306,7 +310,7 @@ export async function recordScrapeRun(input: ScrapeRunInput, now = new Date(), r
       sourceId: source.id,
       status: input.ok ? "ok" : "error",
       message: input.ok
-        ? `${prefix}เห็น ${input.postsFound} ใหม่ ${input.newPosts} · เลื่อน ${input.scrolls} หน้าจอ · หยุดเพราะ${reason} · ${continuing ? "อ่านต่อใน ~30 วินาที" : `รอบหน้าอีก ~${interval} นาที`}${flags ? ` · ${flags}` : ""}`
+        ? `${prefix}เห็น ${input.postsFound} ใหม่ ${input.newPosts} · เลื่อน ${input.scrolls} หน้าจอ · หยุดเพราะ${reason} · ${continuing ? "อ่านต่อใน ~30 วินาที" : recovering ? "นัดกู้ฟีดอีก ~1 นาที" : `รอบหน้าอีก ~${interval} นาที`}${flags ? ` · ${flags}` : ""}`
         : (input.message || "ดึงไม่สำเร็จ").slice(0, 500),
       postsFound: input.ok ? input.newPosts : 0,
     },

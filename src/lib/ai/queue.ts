@@ -95,15 +95,15 @@ export async function processAiQueue(assertActive: () => Promise<void> = async (
   const claimToken = randomUUID();
   let claimed: { id: string; postId: string; attempts: number }[] = [];
   let heartbeat: ReturnType<typeof setInterval> | undefined;
-  const retry = async (job: typeof claimed[number], message: string, delay = 0, latencyMs?: number) => {
-    const attempts = job.attempts + 1;
-    const status = attempts >= MAX_AI_ATTEMPTS ? "failed" : "pending";
+  const retry = async (job: typeof claimed[number], message: string, delay = 0, latencyMs?: number, attempted = true) => {
+    const attempts = job.attempts + (attempted ? 1 : 0);
+    const status = attempted && attempts >= MAX_AI_ATTEMPTS ? "failed" : "pending";
     const updated = await prisma.aiJob.updateMany({
       where: { id: job.id, status: "running", claimToken },
-      data: { status, claimToken: null, attempts, nextAttemptAt: new Date(Date.now() + Math.max(delay, backoffMs(job.attempts))), lastError: message.slice(0, 500), latencyMs },
+      data: { status, claimToken: null, attempts, nextAttemptAt: new Date(Date.now() + (attempted ? Math.max(delay, backoffMs(job.attempts)) : Math.max(1000, delay || 60_000))), lastError: message.slice(0, 500), latencyMs: attempted ? latencyMs : null },
     });
     if (!updated.count) return;
-    await workerLog({ level: "error", jobId: job.id, postId: job.postId, message: status === "failed" ? "พักงาน AI หลังผิดซ้ำ กดลองใหม่ได้ที่แดชบอร์ด" : "คืนงาน AI เพื่อรอลองใหม่", error: message.slice(0, 500), latencyMs });
+    await workerLog({ level: attempted ? "error" : "info", jobId: job.id, postId: job.postId, message: !attempted ? "รอผู้ให้บริการ AI พร้อม โดยไม่เพิ่มจำนวนครั้งล้มเหลว" : status === "failed" ? "พักงาน AI หลังผิดซ้ำ กดลองใหม่ได้ที่แดชบอร์ด" : "คืนงาน AI เพื่อรอลองใหม่", error: message.slice(0, 500), latencyMs: attempted ? latencyMs : undefined });
   };
   try {
     await assertActive();
@@ -205,13 +205,17 @@ export async function processAiQueue(assertActive: () => Promise<void> = async (
     await enrichPosts(completed.map(item => item.id), completed, settings, { embed: false, revisions });
     const successIds = new Set(completed.map(item => item.id));
     const retryErrors = outcome.errors.filter(error => !error.message.startsWith("ข้าม "));
-    const errorText = retryErrors.map(error => `${error.name}: ${error.message}`).join("; ") || "AI ตอบไม่ครบ ยังไม่ได้ผลของโพสต์นี้";
+    const errorText = retryErrors.map(error => `${error.name}: ${error.message}`).join("; ") || (outcome.attemptedIds?.length === 0 ? "ยังไม่มีผู้ให้บริการพร้อมตามการตั้งค่าและโควตา" : "AI ตอบไม่ครบ ยังไม่ได้ผลของโพสต์นี้");
     const delay = Math.max(0, ...retryErrors.map(error => "retryAfterMs" in error ? Number(error.retryAfterMs) || 0 : 0));
     for (const job of jobs) {
       const latencyMs = Date.now() - started;
       if (successIds.has(job.postId)) {
         await workerLog({ jobId: job.id, postId: job.postId, provider: outcome.providersById[job.postId], latencyMs, message: "จัดหมวดแล้ว" });
-      } else await retry(job, errorText, delay, latencyMs);
+      } else {
+        const attempted = !outcome.attemptedIds || outcome.attemptedIds.includes(job.postId);
+        const wait = attempted ? delay : Math.max(0, (outcome.retryAt || Date.now() + 60_000) - Date.now());
+        await retry(job, attempted ? errorText : `รอผู้ให้บริการ AI: ${errorText}`, wait, latencyMs, attempted);
+      }
     }
     claimed = [];
     await assertActive();

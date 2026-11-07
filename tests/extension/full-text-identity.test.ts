@@ -67,3 +67,28 @@ it("matches equivalent Facebook permalinks while rejecting ambiguous or foreign 
  expect(key("https://www.facebook.com/groups/999/?multi_permalinks=456")).not.toBe(key(target));
  for(const url of ["https://evil.test/groups/123/posts/456", "https://www.facebook.com/groups/123/?multi_permalinks=456,789", "https://www.facebook.com/groups/123/posts/456?multi_permalinks=789", "https://www.facebook.com/groups/123/posts/456?comment_id=1", "https://www.facebook.com/groups/123/?multi_permalinks=456&multi_permalinks=789"]) expect(key(url)).toBe("");
 });
+it("gives four due groups bounded slices within the shared cycle budget",async()=>{
+ const source=readFileSync("extension/background.js","utf8");const started=Date.now();let now=started;
+ const calls:{id:string;deadlineMs:number}[]=[];
+ class Clock extends Date{static now(){return now;}}
+ const context=vm.createContext({Date:Clock,Math,cycling:false,PARALLEL_SCRAPE:2,
+ chrome:{storage:{local:{get:async(d:object)=>({...d}),set:async()=>{}}}},
+ loadConfig:async()=>({token:"synthetic",paused:false,schedules:{}}),takeRunLock:async()=>true,releaseRunLock:async()=>{},
+ probeFacebookIdentity:async()=>null,currentFbUserId:async()=>"",base:()=>"server",pruneContinuations:async()=>{},recoveryKey:()=>"key",
+ getJson:async()=>({ok:true,json:async()=>({groups:["a","b","c","d"].map(id=>({id})),maxGroupsPerCycle:20})}),
+ quietReason:async()=>"",setQuiet:async()=>{},loadFullTextBacklog:async()=>({}),sleep:async(ms:number)=>{now+=ms;},rememberError:async()=>{},
+ mapPool:async(items:any[],_parallel:number,worker:any)=>{const out=[];for(let i=0;i<items.length;i++)out.push(await worker(items[i],i));return out;},
+ scrapeGroup:async(_cfg:unknown,g:{id:string},_remote:unknown,options:{deadlineMs:number})=>{calls.push({id:g.id,deadlineMs:options.deadlineMs});expect(options.deadlineMs-now).toBeLessThanOrEqual(45_000);now=options.deadlineMs;return {ok:true,nextRunAt:now+30_000};},
+ processFullTextQueue:async()=>{},scheduleDueWake:async()=>{},
+ MyBotScrape:{orderDueGroups:(g:any[])=>g,throttleLevel:()=>"none",cycleBatchLimit:()=>20,cycleParallel:()=>1},
+ });
+ vm.runInContext(source.slice(source.indexOf("async function cycle()"),source.indexOf("const DUE_ALARM")),context);
+ await vm.runInContext("cycle()",context);
+ expect(calls.map(g=>g.id)).toEqual(["a","b","c","d"]);
+ expect(now-started).toBeLessThanOrEqual(180_000);
+});
+it("bounds an unresponsive executeScript without discarding reader state",async()=>{
+ const source=readFileSync("extension/background.js","utf8");const context=vm.createContext({setTimeout,clearTimeout,chrome:{scripting:{executeScript:()=>new Promise(()=>{})}}});
+ vm.runInContext(source.slice(source.indexOf("async function executeReaderScript("),source.indexOf("async function readPage(")),context);
+ await expect(vm.runInContext("executeReaderScript({},10)",context)).rejects.toThrow("แท็บอ่านไม่ตอบ");
+});

@@ -10,7 +10,7 @@ async (page) => {
   const result = await page.evaluate(async () => {
     const source = document.querySelector('script[type="text/plain"]').textContent;
     const helpers = source.slice(source.indexOf('async function waitForGrowth('), source.indexOf('/** Briefly activate'));
-    const pageReader = source.slice(source.indexOf('async function readPage('), source.indexOf('async function scrapeSettingsFor('));
+    const pageReader = source.slice(source.indexOf('async function executeReaderScript('), source.indexOf('async function scrapeSettingsFor('));
     const root = globalThis;
     // The executeScript transport runs the actual injected functions on this isolated document.
     root.chrome = { scripting: { executeScript: async ({func, args}) => [{ result: await func(...(args || [])) }] } };
@@ -38,7 +38,18 @@ async (page) => {
     root.MyBotScrape.resumeRun(run);
     root.MyBotScrape.addStep(run, second.posts);
     if (run.newCount !== 6) throw Error('Snapshot batching dropped posts');
-    return {firstKeys:keys, secondKeys:second.posts.map(post=>root.MyBotScrape.postKey(post.url)), growth, detectionMs:ms, scrollMoved:scrolled.moved, captured:run.newCount};
+    document.body.innerHTML='<header><div role="progressbar" style="height:20px;width:20px">outside feed</div></header><main role="main"><div role="feed"><div id="nested" style="height:300px;overflow-y:auto"><article role="article" style="height:3000px">SYNTHETIC<div role="progressbar" style="height:20px;width:20px">media inside post</div></article></div></div></main>';
+    document.scrollingElement.scrollTop=0;
+    const falseLoaderDetected=root.MyBotScrape.feedStatus(document,'group').loading;
+    const nestedScroll=await api.scrollOneScreen(1,'group');
+    const pageScrollUnchanged=document.scrollingElement.scrollTop===0;
+    const feed=document.querySelector('[role="feed"]');
+    const loader=document.createElement('div');loader.setAttribute('role','progressbar');loader.style.cssText='height:20px;width:20px';feed.prepend(loader);
+    const visibleLoaderDetected=root.MyBotScrape.feedStatus(document,'group').loading;
+    loader.style.display='none';
+    const hiddenLoaderIgnored=!root.MyBotScrape.feedStatus(document,'group').loading;
+    if(falseLoaderDetected || !visibleLoaderDetected || !hiddenLoaderIgnored || !pageScrollUnchanged || nestedScroll.moved<=0) throw Error('Scoped loader or nested scrolling regression');
+    return {firstKeys:keys, secondKeys:second.posts.map(post=>root.MyBotScrape.postKey(post.url)), growth, detectionMs:ms, scrollMoved:scrolled.moved, captured:run.newCount,nestedScrollMoved:nestedScroll.moved,pageScrollUnchanged,falseLoaderDetected,visibleLoaderDetected,hiddenLoaderIgnored};
   });
   if (errors.length) throw Error(errors.join('; '));
   return {...result, pageErrors:errors};

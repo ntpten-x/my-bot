@@ -7,6 +7,7 @@ import { effectiveGroqModel, pickGroqModel, rememberGroqChoice } from "./models"
 import { OLLAMA_KEEP_ALIVE, resolveOllamaBaseUrl } from "./ollama-url";
 import { extractAiItems } from "./parse";
 import { AI_SYSTEM, userPrompt } from "./prompt";
+import { AiCallError, AiUnavailableError, bodyHint, classifyFailure } from "./router";
 
 const CLASSIFY_TIMEOUT_MS = 12_000;
 export const OLLAMA_CLASSIFY_TIMEOUT_MS = 60_000;
@@ -35,7 +36,9 @@ async function postJson(url: string, init: RequestInit, timeoutMs = CLASSIFY_TIM
     const header = response.headers.get("retry-after") || "";
     const seconds = Number(header);
     const retryAfterMs = Number.isFinite(seconds) ? seconds * 1000 : Math.max(0, Date.parse(header) - Date.now()) || 0;
-    // Provider bodies can contain credentials. Persist status only; the queue owns retries.
+    // Scan quota hints without persisting a provider body (it can contain credentials).
+    const failure = classifyFailure(new AiCallError(`HTTP ${response.status}`, response.status, retryAfterMs, bodyHint(await response.text().catch(() => ""))), new Date());
+    if (failure.kind === "rate" || failure.kind === "quota") throw new AiUnavailableError(`HTTP ${response.status} ${failure.message}`, Date.now() + failure.cooldownMs, response.status, retryAfterMs);
     throw new ProviderHttpError(`HTTP ${response.status} ผู้ให้บริการปฏิเสธคำขอ`, response.status === 429 ? Math.max(5000, retryAfterMs) : 0);
   }
   return response.json() as Promise<Record<string, never>>;
@@ -43,7 +46,7 @@ async function postJson(url: string, init: RequestInit, timeoutMs = CLASSIFY_TIM
 
 function assertRate(name: string) {
   const ticket = takeToken(name);
-  if (!ticket.ok) throw new ProviderHttpError(`${name} rate limit`, ticket.retryAfterMs);
+  if (!ticket.ok) throw new AiUnavailableError(`${name} rate limit`, Date.now() + ticket.retryAfterMs, 0, ticket.retryAfterMs);
 }
 
 export async function ollamaClassify(posts: ClassifyInput[], catalog: CatNode[], settings: AppSettings) {

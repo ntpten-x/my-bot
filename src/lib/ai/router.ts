@@ -32,6 +32,12 @@ export class AiCallError extends Error {
   }
 }
 
+/** Capacity is unavailable; waiting (including a 429/quota response) is not a job failure. */
+export class AiUnavailableError extends AiCallError {
+  readonly deferred = true;
+  constructor(message: string, readonly retryAt: number, status = 0, retryAfterMs = 0) { super(message, status, retryAfterMs); }
+}
+
 export const COOLDOWN = {
   rateDefaultMs: 60_000,
   serverMs: 60_000,
@@ -62,6 +68,9 @@ export function classifyFailure(error: unknown, now: Date, resetHourUtc = 0): Fa
   const raw = error instanceof Error ? error.message : String(error);
   if (error instanceof AiCallError) {
     const { status, retryAfterMs, hint } = error;
+    if (status === 429 && retryAfterMs > 0) {
+      return { kind: "rate", cooldownMs: retryAfterMs, message: "HTTP 429 รอตาม Retry-After ของผู้ให้บริการ" };
+    }
     if (status === 402 || (hint === "quota" && (status === 429 || status === 403 || status === 400))) {
       return { kind: "quota", cooldownMs: untilReset, message: `HTTP ${status} โควตา/เครดิตหมด รอรอบรีเซ็ต` };
     }
@@ -99,11 +108,23 @@ export class MinuteWindow {
   clear() {
     this.hits.clear();
   }
+  retryAt(id: string, limit: number, now: Date) {
+    const count = this.count(id, now);
+    return count < limit ? now.getTime() : this.hits.get(id)![count - limit] + 60_000;
+  }
 }
 
 export const sharedMinuteWindow = new MinuteWindow();
 
-export type Unavailable = { id: string; name: string; reason: string };
+export type Unavailable = { id: string; name: string; reason: string; retryAt: number };
+
+/** All restrictions on one provider must expire; callers choose the earliest usable provider. */
+export function providerRetryAt(provider: RouterProvider, now: Date, minute: MinuteWindow) {
+  let at = Math.max(now.getTime(), provider.cooldownUntil?.getTime() || 0);
+  if (provider.limitPerDay && provider.usageDay === dayKey(now, provider.resetHourUtc) && provider.requestsToday >= provider.limitPerDay) at = Math.max(at, nextReset(now, provider.resetHourUtc).getTime());
+  if (provider.limitPerMinute) at = Math.max(at, minute.retryAt(provider.id, provider.limitPerMinute, now));
+  return at;
+}
 
 export function availability(provider: RouterProvider, task: string, now: Date, minute: MinuteWindow): string | null {
   if (!provider.enabled) return "ปิดอยู่";
@@ -126,7 +147,7 @@ export function orderAvailable<T extends RouterProvider>(providers: T[], task: s
   for (const provider of [...providers].sort((a, b) => a.priority - b.priority)) {
     const reason = availability(provider, task, now, minute);
     if (reason) {
-      if (provider.enabled && provider.tasks.includes(task)) skipped.push({ id: provider.id, name: provider.name, reason });
+      if (provider.enabled && provider.tasks.includes(task)) skipped.push({ id: provider.id, name: provider.name, reason, retryAt: providerRetryAt(provider, now, minute) });
     } else ready.push(provider);
   }
   return { ready, skipped };
@@ -153,7 +174,7 @@ export async function guardedCall<T>(
   const minute = deps.minute ?? sharedMinuteWindow;
   const start = clock();
   const reason = availability(provider, task, start, minute);
-  if (reason) throw new AiCallError(`${provider.name}: ${reason}`);
+  if (reason) throw new AiUnavailableError(`${provider.name}: ${reason}`, providerRetryAt(provider, start, minute));
   const day = dayKey(start, provider.resetHourUtc);
   if (provider.usageDay !== day) {
     provider.usageDay = day;
@@ -173,6 +194,9 @@ export async function guardedCall<T>(
     const cooldownUntil = failure.cooldownMs > 0 ? new Date(end.getTime() + failure.cooldownMs) : null;
     if (cooldownUntil) provider.cooldownUntil = cooldownUntil;
     await deps.store.recordFailure(provider.id, { ...failure, now: end, day, cooldownUntil }).catch(() => undefined);
+    if (failure.kind === "rate" || failure.kind === "quota") {
+      throw new AiUnavailableError(`${provider.name}: ${failure.message}`, end.getTime() + failure.cooldownMs, error instanceof AiCallError ? error.status : 0, error instanceof AiCallError ? error.retryAfterMs : 0);
+    }
     throw new AiCallError(`${provider.name}: ${failure.message}`, error instanceof AiCallError ? error.status : 0, error instanceof AiCallError ? error.retryAfterMs : 0);
   }
 }

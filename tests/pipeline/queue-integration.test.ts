@@ -197,7 +197,7 @@ it("honors provider retry-after without blocking the batch with inline retries",
   const start = Date.now();
   await processAiQueue();
   const job = await prisma.aiJob.findFirstOrThrow();
-  expect(job.status).toBe("pending"); expect(job.attempts).toBe(1);
+  expect(job.status).toBe("pending"); expect(job.attempts).toBe(0);
   expect(job.nextAttemptAt.getTime()).toBeGreaterThanOrEqual(start + 120_000);
   expect(network.mock.calls.filter(([url]) => String(url).endsWith("/api/chat"))).toHaveLength(1);
 });

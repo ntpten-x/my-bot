@@ -365,7 +365,8 @@
     run.now = now;
     run.stoppedBy = "";
     run.hitLimit = false;
-    run.emptySteps = 0;
+    // Keep no-progress verification across slices so short budgets can finish a quiet feed.
+    run.emptySteps = Math.max(0, run.emptySteps || 0);
     run.endSignals = 0;
     return run;
   }
@@ -403,11 +404,39 @@
       .trim();
   }
 
+  function feedRoot(doc, kind) {
+    const article = doc.querySelector(kind === "marketplace" ? 'a[href*="/marketplace/item/"]' : '[role="article"], [aria-posinset]');
+    const main = article?.closest('[role="main"]') || doc.querySelector('[role="main"]');
+    return main?.querySelector('[role="feed"]') || main || doc.querySelector('[role="feed"]');
+  }
+
+  function scrollRoot(doc, kind) {
+    const article = doc.querySelector(kind === "marketplace" ? 'a[href*="/marketplace/item/"]' : '[role="article"], [aria-posinset]');
+    for (let node = article?.parentElement; node && node !== doc.body; node = node.parentElement) {
+      if (node.scrollHeight > node.clientHeight + 100 && /^(auto|scroll)$/.test(doc.defaultView.getComputedStyle(node).overflowY)) return node;
+    }
+    return doc.scrollingElement || doc.documentElement;
+  }
+
+  function feedStatus(doc, kind) {
+    const feed = feedRoot(doc, kind);
+    if (!feed) return { loading: false, endOfFeed: false };
+    const visible = node => {
+      if (node.closest('[hidden], [aria-hidden="true"], [role="article"], [aria-posinset], [role="dialog"], [role="navigation"], [role="complementary"]')) return false;
+      const style = doc.defaultView.getComputedStyle(node), rect = node.getBoundingClientRect();
+      return style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0" && rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < doc.defaultView.innerHeight;
+    };
+    return {
+      loading: (feed.getAttribute('aria-busy') === 'true' && visible(feed)) || [...feed.querySelectorAll('[role="progressbar"], [aria-busy="true"]')].some(visible),
+      endOfFeed: [...feed.querySelectorAll('[role="status"]')].some(node => visible(node) && /no more (?:posts|results)|you're all caught up|ไม่มีโพสต์เพิ่มเติม|ไม่มีผลลัพธ์เพิ่มเติม/i.test(node.textContent || "")),
+    };
+  }
+
   const api = {
     postKey, scrapeSettings, planRun, scrollBudget, feedBudgetMs, scrollWaitMs, scrapeUrl, createRun, addStep, emptyBudget, isShallowRun,
     isDeepMode, shouldAbortDeadFeed, postWakeSettleMs, throttleLevel, cycleBatchLimit, cycleParallel, shouldKeepAwake, shouldHoldForeground, shouldPulseWake,
     prioritizeCoverageDue, rotateDue, orderDueGroups,
-    runStats, cleanupText, resumeRun, snapshotRun, restoreRun, yieldRun,
+    runStats, cleanupText, resumeRun, snapshotRun, restoreRun, yieldRun, feedRoot, scrollRoot, feedStatus,
     MAX_SCROLLS, MIN_SCROLLS, KNOWN_STREAK, DEFAULT_SCREENS, MAX_SCREENS, MAX_POSTS_PER_RUN,
     EMPTY_STREAK, COLD_EMPTY_STREAK, MIN_FOUND_BEFORE_END, THROTTLE_HARD_MS, THROTTLE_SOFT_MS,
   };

@@ -20,9 +20,9 @@ it.each(["cap","limit","screens","yield"])("schedules %s continuation in 30 seco
   expect(mocks.log.mock.calls[0][0].data.message).toContain("30 วินาที");
 });
 
-it("backs off for loading rather than looping every 30 seconds", async () => {
+it("spaces loading recovery at one minute instead of a productive 30-second continuation", async () => {
   const result = await recordScrapeRun({sourceUrl:source.url,ok:true,postsFound:3,newPosts:0,scrolls:20,stoppedBy:"loading",coverage:{hitLimit:true}},now,()=>0);
-  expect(result!.nextRunAt.getTime()-now.getTime()).toBeGreaterThanOrEqual(2*60_000);
+  expect(result!.nextRunAt.getTime()-now.getTime()).toBe(60_000);
 });
 
 it("keeps hints for sources beyond the first cycle and bounds concurrent hint queries", async () => {

@@ -3,6 +3,7 @@ import { claimOnce } from "./lease";
 import { dispatchNotification } from "./notify";
 import { getSettings, upsertSettings, type AppSettings } from "./settings";
 import { EXTENSION_SOURCE_TYPES } from "./scrape-plan";
+import { classifyAvailability } from "./ai/run";
 
 export type WatchLevel = "ok" | "warn" | "bad" | "off";
 export type WatchCondition = { key: string; label: string; level: WatchLevel; message: string; hint: string };
@@ -126,7 +127,7 @@ async function collectFacts(now: number, settings: AppSettings): Promise<WatchFa
     prisma.post.findFirst({ where: { source: { type: { in: [...EXTENSION_SOURCE_TYPES] } } }, orderBy: { createdAt: "desc" }, select: { createdAt: true } }),
     parseQuery(recentSince, new Date(now + 60_000)),
     parseQuery(baseSince, recentSince),
-    prisma.aiProvider.findMany({ where: { enabled: true }, select: { cooldownUntil: true } }),
+    classifyAvailability(settings),
     prisma.aiJob.findFirst({ where: { status: "pending" }, orderBy: { createdAt: "asc" }, select: { createdAt: true } }),
     prisma.setting.findUnique({ where: { key: "worker_last_tick" } }),
   ]);
@@ -148,8 +149,8 @@ async function collectFacts(now: number, settings: AppSettings): Promise<WatchFa
     parseRecent: pick(recent),
     parseBaseline: pick(base),
     aiMode: settings.aiProvider,
-    aiProvidersEnabled: providers.length,
-    aiProvidersReady: providers.filter((row) => !row.cooldownUntil || row.cooldownUntil.getTime() <= now).length,
+    aiProvidersEnabled: providers.ready + providers.waiting.length,
+    aiProvidersReady: providers.ready,
     oldestPendingAiJobAt: pending?.createdAt.getTime() ?? null,
     workerLastTickAt: Number.isFinite(tickAt) ? tickAt : null,
     dbTransientErrors: Math.max(0, transientDelta),

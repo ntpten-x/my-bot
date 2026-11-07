@@ -79,12 +79,12 @@ function sourceKind(group) {
   }
 }
 
-function waitComplete(tabId) {
+function waitComplete(tabId, timeoutMs = 25000) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       chrome.tabs.onUpdated.removeListener(listener);
       reject(new Error("แท็บกลุ่มโหลดไม่ทัน"));
-    }, 25000);
+    }, Math.max(1, timeoutMs));
     function listener(id, info) {
       if (id === tabId && info.status === "complete") {
         clearTimeout(timer);
@@ -234,11 +234,11 @@ async function queueOutbox(item) {
   });
 }
 let flushing = false;
-async function flushOutbox(cfg) {
+async function flushOutbox(cfg, options = {}) {
   if (flushing || cfg.paused || !cfg.token) return;
   flushing = true;
   const results = {};
-  const deadline = Date.now() + 20_000;
+  const deadline = Math.min(Date.now() + 20_000, options.deadlineMs || Infinity);
   try {
     for (let sent = 0; sent < 10 && Date.now() < deadline; sent++) {
       const item = (await loadOutbox()).find(entry => !entry.problem);
@@ -445,8 +445,18 @@ async function heartbeat() {
 const scrapingTabs = new Set();
 const activeReaderTabs = new Set();
 
+async function executeReaderScript(details, timeoutMs = 5000) {
+  let timer;
+  try {
+    return await Promise.race([
+      chrome.scripting.executeScript(details),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("แท็บอ่านไม่ตอบภายในเวลาที่กำหนด จะเก็บสถานะไว้ลองต่อ")), Math.max(1, timeoutMs)); }),
+    ]);
+  } finally { clearTimeout(timer); }
+}
+
 async function readPage(tabId, kind) {
-  const [executed] = await chrome.scripting.executeScript({
+  const [executed] = await executeReaderScript({
     target: { tabId },
     args: [kind],
     func: (pageKind) => ({
@@ -456,19 +466,19 @@ async function readPage(tabId, kind) {
           : globalThis.MyBotParser.parseFacebookPosts(document),
       identity: globalThis.MyBotIdentity ? globalThis.MyBotIdentity.readFacebookIdentity(document) : null,
       groupId: pageKind === "marketplace" || !globalThis.MyBotParser.readGroupId ? "" : globalThis.MyBotParser.readGroupId(document),
-      loading: Boolean(document.querySelector('[role="progressbar"], [aria-busy="true"]')),
+      ...globalThis.MyBotScrape.feedStatus(document, pageKind),
       checkpoint: /^\/(checkpoint|challenge)(\/|$)/i.test(location.pathname) || Boolean(document.querySelector('form[action*="/checkpoint/"]')),
-      endOfFeed: [...document.querySelectorAll('[role="status"]')].some(node => /no more (?:posts|results)|you're all caught up|ไม่มีโพสต์เพิ่มเติม|ไม่มีผลลัพธ์เพิ่มเติม/i.test(node.textContent || "")),
     }),
   });
   return executed && executed.result ? executed.result : { posts: [], identity: null, groupId: "" };
 }
 
-async function scrollOneScreen(tabId) {
-  const [executed] = await chrome.scripting.executeScript({
+async function scrollOneScreen(tabId, kind = "group") {
+  const [executed] = await executeReaderScript({
     target: { tabId },
-    func: () => {
-      const page = document.scrollingElement || document.documentElement;
+    args: [kind],
+    func: pageKind => {
+      const page = globalThis.MyBotScrape.scrollRoot(document, pageKind);
       const before = page.scrollTop;
       page.scrollTop = before + Math.max(window.innerHeight || 0, 800);
       return { moved: page.scrollTop - before, height: page.scrollHeight };
@@ -487,7 +497,7 @@ async function scrapeSettingsFor(remote) {
   return globalThis.MyBotScrape.scrapeSettings(stored.scrapeSettings);
 }
 
-async function reportRun(cfg, group, run) {
+async function reportRun(cfg, group, run, options = {}) {
   try {
     const response = await postJson(cfg, "/api/v1/extension/scrape-result", {
       sourceUrl: group.url,
@@ -500,7 +510,7 @@ async function reportRun(cfg, group, run) {
       mode: run.mode,
       coverage: run.stats ? { ...run.stats, newCount: Math.min(1000, run.stats.newCount), stalls: Math.min(1000, run.stats.stalls) } : undefined,
       message: run.ok ? undefined : run.message,
-    }, { timeoutMs: 10000, retries: 0 });
+    }, { timeoutMs: Math.max(1, Math.min(10000, (options.deadlineMs || Infinity) - Date.now())), retries: 0 });
     if (!response.ok) return null;
     const data = await response.json().catch(() => ({}));
     const next = Date.parse(data.nextRunAt || "");
@@ -615,20 +625,21 @@ async function readFullTexts(tabId, kind, urls) {
 // Wait (read-only) until the feed shows more posts or grows, using a MutationObserver in the page.
 async function waitForGrowth(tabId, kind, before, timeoutMs, knownKeys = []) {
   if (timeoutMs <= 0) return { count: before || 0, grew: false, height: 0 };
-  const [executed] = await chrome.scripting.executeScript({
+  const [executed] = await executeReaderScript({
     target: { tabId },
     args: [kind, before || 0, timeoutMs, knownKeys],
     func: (pageKind, prev, limit, previousKeys) =>
       new Promise((resolve) => {
         const selector = pageKind === "marketplace" ? 'a[href*="/marketplace/item/"]' : '[role="article"], [aria-posinset]';
-        const count = () => document.querySelectorAll(selector).length;
-        const page = document.scrollingElement || document.documentElement;
+        const feed = globalThis.MyBotScrape?.feedRoot(document, pageKind) || document;
+        const count = () => feed.querySelectorAll(selector).length;
+        const page = globalThis.MyBotScrape?.scrollRoot(document, pageKind) || document.scrollingElement || document.documentElement;
         const startHeight = page.scrollHeight;
         let done = false;
         let settleTimer, timeoutTimer;
         const known = new Set(previousKeys);
         const hasNewKey = () => known.size > 0 && Boolean(globalThis.MyBotScrape) &&
-          [...document.querySelectorAll(pageKind === "marketplace" ? selector : 'a[href*="/posts/"], a[href*="/permalink/"], a[href*="story_fbid="], a[href*="multi_permalinks="]')]
+          [...feed.querySelectorAll(pageKind === "marketplace" ? selector : 'a[href*="/posts/"], a[href*="/permalink/"], a[href*="story_fbid="], a[href*="multi_permalinks="]')]
             .some(link => { const key = globalThis.MyBotScrape.postKey(link.href); return key && !known.has(key); });
         const finish = (grew) => {
           if (done) return;
@@ -647,7 +658,7 @@ async function waitForGrowth(tabId, kind, before, timeoutMs, knownKeys = []) {
         timeoutTimer = setTimeout(() => finish(false), limit);
         check();
       }),
-  });
+  }, timeoutMs + 500);
   return executed && executed.result ? executed.result : { count: 0, grew: false, height: 0 };
 }
 
@@ -687,15 +698,17 @@ async function withReaderForeground(reader, work) {
 }
 
 // Lazy loading stalled: scroll up a little and back to the bottom so the feed asks for more (scrollTop only).
-async function nudgeScroll(tabId) {
-  await chrome.scripting.executeScript({
+async function nudgeScroll(tabId, kind = "group") {
+  await executeReaderScript({
     target: { tabId },
-    func: () => {
-      const page = document.scrollingElement || document.documentElement;
-      page.scrollTop = Math.max(0, page.scrollTop - 900);
+    args: [kind],
+    func: pageKind => {
+      const page = globalThis.MyBotScrape.scrollRoot(document, pageKind);
+      const before = page.scrollTop;
+      page.scrollTop = Math.max(0, before - 400);
       setTimeout(() => {
-        page.scrollTop = page.scrollHeight;
-      }, 600);
+        page.scrollTop = before + Math.max(window.innerHeight || 0, 800);
+      }, 300);
       return true;
     },
   });
@@ -975,7 +988,7 @@ async function readFeed(reader, kind, plan, knownKeys, result, options = {}) {
   const sliceStart = run.steps;
   const checkpoint = options.checkpoint || (async () => undefined);
   const drain = options.drain || (async () => undefined);
-  const feedDeadline = Date.now() + Math.max(20_000, Number(options.budgetMs) || 40_000);
+  const feedDeadline = Math.min(Date.now() + Math.max(0, Number(options.budgetMs) || 40_000), options.deadlineMs || Infinity);
   const remaining = cap => Math.max(0, Math.min(cap, feedDeadline - Date.now()));
   const consume = async (page, step = true) => {
     if (page.checkpoint || page.identity?.loggedIn === false) {
@@ -1005,8 +1018,28 @@ async function readFeed(reader, kind, plan, knownKeys, result, options = {}) {
     if (!reason && run.steps - sliceStart > plan.maxScrolls) { Scrape.yieldRun(run); reason = "limit"; }
     return reason;
   };
+  const recoverEnd = async page => {
+    if (!run.recoveredEnd) {
+      if (remaining(5000) < 5000) { Scrape.yieldRun(run); return "limit"; }
+      run.recoveredEnd = true;
+      run.stoppedBy = "";
+      run.emptySteps = 0;
+      await wakeReaderTab(reader, 450);
+      await nudgeScroll(tabId, kind);
+      await sleep(remaining(1200));
+      state = await waitForGrowth(tabId, kind, state.count, remaining(3000), [...run.seen].slice(-1000));
+      return consume(await readPage(tabId, kind), false);
+    }
+    if (page.loading || (run.found < Scrape.MIN_FOUND_BEFORE_END && !page.endOfFeed)) {
+      const reason = page.loading ? "loading" : "stalled";
+      Scrape.yieldRun(run, reason); return reason;
+    }
+    run.stoppedBy = "exhausted";
+    return run.stoppedBy;
+  };
   if (options.canRead && await options.canRead()) { Scrape.yieldRun(run, "yield"); await checkpoint(run); return run; }
-  await waitComplete(tabId);
+  if (remaining(1) === 0) { Scrape.yieldRun(run); await checkpoint(run); return run; }
+  await waitComplete(tabId, remaining(25000));
   await injectReaders(tabId);
   let state = await waitForGrowth(tabId, kind, 0, remaining(8000));
   if (!state.count) {
@@ -1027,6 +1060,7 @@ async function readFeed(reader, kind, plan, knownKeys, result, options = {}) {
     first = await readPage(tabId, kind);
     stop = await consume(first, false);
   }
+  if (stop === "end") stop = await recoverEnd(first);
   const keepAwake = Boolean(options.keepAwake);
   const holdForeground = Boolean(options.holdForeground);
   const pulseWake = typeof options.pulseWake === "function" ? options.pulseWake : null;
@@ -1046,8 +1080,9 @@ async function readFeed(reader, kind, plan, knownKeys, result, options = {}) {
     }
     const before = state.count;
     const previousKeys = new Set(run.seen);
-    await scrollOneScreen(tabId);
+    await scrollOneScreen(tabId, kind);
     await sleep(remaining(Scrape.scrollWaitMs(undefined, { growing: run.found >= 3 })));
+    if (Date.now() >= feedDeadline) break;
     state = await waitForGrowth(tabId, kind, before, remaining(run.found >= 3 ? 2200 : 3000), [...run.seen].slice(-1000));
     const immediate = await readPage(tabId, kind);
     if ((immediate.posts || []).some(post => { const key = Scrape.postKey(post.url); return key && !previousKeys.has(key); })) state.grew = true;
@@ -1056,8 +1091,8 @@ async function readFeed(reader, kind, plan, knownKeys, result, options = {}) {
     if (stop && stop !== "end") break;
     for (let retry = 0; !state.grew && retry < 1 && remaining(1) > 0; retry += 1) {
       run.stalls += 1;
-      await nudgeScroll(tabId);
-      state = await waitForGrowth(tabId, kind, before, remaining(2500));
+      await nudgeScroll(tabId, kind);
+      state = await waitForGrowth(tabId, kind, before, remaining(2500), [...run.seen].slice(-1000));
     }
     if (!state.grew || stop === "end") {
       const page = await readPage(tabId, kind);
@@ -1065,24 +1100,7 @@ async function readFeed(reader, kind, plan, knownKeys, result, options = {}) {
       if (page.checkpoint || page.identity?.loggedIn === false || page.posts?.some(post => !run.seen.has(Scrape.postKey(post.url)))) {
         stop = await consume(page, false);
       }
-      if (stop === "end") {
-        if (!run.recoveredEnd && remaining(6000) > 0) {
-          run.recoveredEnd = true;
-          run.stoppedBy = "";
-          run.emptySteps = 0;
-          await wakeReaderTab(reader, 450);
-          await nudgeScroll(tabId);
-          await sleep(remaining(2000));
-          state = await waitForGrowth(tabId, kind, state.count, remaining(3500));
-          stop = await consume(await readPage(tabId, kind), false);
-        } else if (page.loading || !run.recoveredEnd || (run.found < Scrape.MIN_FOUND_BEFORE_END && !page.endOfFeed)) {
-          stop = page.loading ? "loading" : "stalled";
-          Scrape.yieldRun(run, stop);
-        } else {
-          stop = "exhausted";
-          run.stoppedBy = stop;
-        }
-      }
+      if (stop === "end") stop = await recoverEnd(page);
     }
   }
   if (!stop && Date.now() >= feedDeadline) Scrape.yieldRun(run);
@@ -1100,6 +1118,7 @@ async function setReadingStatus(status) {
 }
 
 async function scrapeGroup(cfg, group, remote, options) {
+  options = options || {};
   const Scrape = globalThis.MyBotScrape;
   const kind = sourceKind(group);
   const settings = await scrapeSettingsFor(remote);
@@ -1110,6 +1129,8 @@ async function scrapeGroup(cfg, group, remote, options) {
   const plan = Scrape.planRun({ group: { ...group, needsCoverage: group.needsCoverage || recovering }, settings, lastSweepAt: (stored.sweeps || {})[group.id], audit: Boolean(options && options.audit) });
   const result = { ok: true, postsFound: 0, newPosts: 0, scrolls: 0, stoppedBy: "", message: "", nextRunAt: null, mode: plan.mode, stats: null };
   const startedAt = Date.now();
+  const deadlineMs = Math.min(options.deadlineMs || Infinity, startedAt + 45_000);
+  const feedDeadlineMs = deadlineMs - 10_000;
   let reader;
   let run;
   let retain = false;
@@ -1172,7 +1193,8 @@ async function scrapeGroup(cfg, group, remote, options) {
     const runPass = (pass, hold, current) => {
       const exec = () =>
         readFeed(reader, kind, plan, knownKeys, result, {
-          budgetMs: Scrape.feedBudgetMs(plan, pass),
+          budgetMs: Math.min(Scrape.feedBudgetMs(plan, pass), Math.max(1, feedDeadlineMs - Date.now())),
+          deadlineMs: feedDeadlineMs,
           keepAwake: hold,
           holdForeground: hold,
           // Pulse only when we are not already holding the tab in the foreground.
@@ -1187,7 +1209,7 @@ async function scrapeGroup(cfg, group, remote, options) {
     reading.stallsFirst = run.stalls || 0;
     const needsRetry =
       ["stalled", "loading"].includes(run.stoppedBy) && run.newCount === startCounters.fresh;
-    if (needsRetry && !await canRead()) {
+    if (needsRetry && feedDeadlineMs - Date.now() >= 12_000 && !await canRead()) {
       reading.reloaded = true;
       reading.heldForeground = true;
       // Shallow recovery always holds foreground for reload + pass 2 (hydrate beats pulse).
@@ -1195,7 +1217,8 @@ async function scrapeGroup(cfg, group, remote, options) {
         await chrome.tabs.reload(reader.tabId).catch(() => undefined);
         await sleep(Scrape.postWakeSettleMs(plan, 2));
         return readFeed(reader, kind, { ...plan, knownStreak: Infinity }, [...new Set([...knownKeys, ...run.seen])], result, {
-          budgetMs: Scrape.feedBudgetMs(plan, 2),
+          budgetMs: Math.min(Scrape.feedBudgetMs(plan, 2), Math.max(1, feedDeadlineMs - Date.now())),
+          deadlineMs: feedDeadlineMs,
           keepAwake: true,
           holdForeground: true,
           pulseWake: null,
@@ -1222,7 +1245,7 @@ async function scrapeGroup(cfg, group, remote, options) {
     result.stoppedBy = run.stoppedBy || "end";
     result.postsFound = observed.size || Math.max(0, run.found - startCounters.found);
     const latest = await loadConfig();
-    const flushed = !latest.paused && latest.token === cfg.token && base(latest) === base(cfg) ? await flushOutbox(latest) : {};
+    const flushed = !latest.paused && latest.token === cfg.token && base(latest) === base(cfg) ? await flushOutbox(latest, { deadlineMs: deadlineMs - 5000 }) : {};
     result.newPosts = batchIds.reduce((sum, id) => sum + (Number(flushed?.[id]?.inserted) || 0), 0);
     retain = run.hitLimit || ["limit", "cap", "yield", "stalled", "loading"].includes(run.stoppedBy);
     if (!retain && ["end", "exhausted", "seen", "old"].includes(run.stoppedBy)) {
@@ -1242,7 +1265,7 @@ async function scrapeGroup(cfg, group, remote, options) {
         for (const url of urls) if (!backlog[url]) backlog[url] = { groupId: group.id, sourceUrl: group.url, tries: 0, addedAt: now, after: 0 };
       });
     }
-    await postJson(cfg, "/api/v1/extension/sample", { sourceUrl: group.url, posts: result.sample || [] }, { timeoutMs: 5000, retries: 0 }).catch(() => undefined);
+    if (deadlineMs - Date.now() > 8000) await postJson(cfg, "/api/v1/extension/sample", { sourceUrl: group.url, posts: result.sample || [] }, { timeoutMs: Math.min(3000, deadlineMs - Date.now() - 5000), retries: 0 }).catch(() => undefined);
     if (result.ok) result.message = `อ่านเพิ่ม ${result.postsFound} โพสต์ เก็บใหม่ ${stats.newCount} · เลื่อน ${result.scrolls} หน้าจอ (${plan.mode})${retain ? " · รออ่านต่อจากเดิม" : ""}`;
   } catch (error) {
     const message = String(error && error.message ? error.message : error).slice(0, 300);
@@ -1256,8 +1279,9 @@ async function scrapeGroup(cfg, group, remote, options) {
   }
   delete result.sample;
   if (result.stats) result.stats.durationMs = Date.now() - startedAt;
-  result.nextRunAt = await reportRun(cfg, group, result);
+  result.nextRunAt = await reportRun(cfg, group, result, { deadlineMs });
   if (retain && result.ok && ["limit", "cap", "yield"].includes(result.stoppedBy)) result.nextRunAt = Date.now() + 30_000;
+  if (retain && result.ok && ["loading", "stalled"].includes(result.stoppedBy)) result.nextRunAt = Date.now() + 60_000;
   return result;
 }
 async function processFullTextQueue(cfg, groups, options = {}) {
@@ -1412,10 +1436,10 @@ async function cycle() {
     await chrome.storage.local.set({ schedules });
     // Up to PARALLEL_SCRAPE tabs at once (1 while throttled/coverage), staggered; remaining due groups wait for the next wake.
     const settled = await mapPool(batch, parallel, async (group, index) => {
-      if (Date.now() >= cycleDeadline) return { group, result: { ok: false, message: "yield", nextRunAt: Date.now() + 1000, skipped: true } };
+      if (cycleDeadline - Date.now() < 15_000) return { group, result: { ok: false, message: "yield", nextRunAt: Date.now() + 1000, skipped: true } };
       if (index > 0) await sleep(1200 * Math.min(index, Math.max(1, parallel)));
       if (await quietReason(remote.quiet)) return { group, result: { ok: false, message: "quiet", nextRunAt: Date.now() + 60_000 } };
-      const result = await scrapeGroup(cfg, group, remote);
+      const result = await scrapeGroup(cfg, group, remote, { deadlineMs: Math.min(cycleDeadline, Date.now() + 45_000) });
       return { group, result };
     });
     for (const { group, result } of settled) {

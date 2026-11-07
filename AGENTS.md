@@ -117,6 +117,13 @@ Restart the app (or the Startup launcher). Then, if older posts need it: `npm ru
 - Run `npm test` and `npm run build` before every commit. Fix failures first.
 - Ask the owner for secrets. Do not invent keys, and do not put secrets in git, logs, or chat transcripts.
 
+## Reader and AI reliability update (extension v1.11.1)
+
+- The v1.11.0 scheduling description above is extended by v1.11.1: each group shares a 45-second deadline across discovery, recovery, outbox and reporting; the cycle budget is 3 minutes. Productive continuations are due in 30 seconds; loading/stalled recovery is due in 60 seconds, subject to quiet settings and queued groups. Preserve no-progress checks across slices. Reader scripts have host-side timeouts; timeouts do not cancel every operation Chrome already accepted.
+- Detect visible loaders only inside the relevant feed/main, excluding hidden UI, dialogs, sidebars and media inside articles. Use the actual scrollable ancestor for nested feeds and small relative nudges; never jump to the end to recover. Keep pending posts/checkpoints on timeout.
+- Quota/cooldown/minute limits and HTTP 429 are deferred AI work, not job failure attempts. Carry structured retryAt/deferred metadata; wait until all restrictions on one provider expire and choose the earliest usable provider. Honor Retry-After. Actual classification failures retain the 10-attempt cap and claim/lease fencing. Do not automatically reset historical failed jobs or change owner quotas.
+- Worker classification, public health, watchdog and overview use the same classification plan. Read-only availability must not seed the provider registry. A successful key/model probe must not override an active routing quota/cooldown. See `docs/RELIABILITY-FIXES-1.11.1.th.md` and the synthetic browser verifier.
+
 ## Optional Auto Comment Engine
 
 Current runtime uses Extension v1.9.0 delivery per the owner's latest instruction; see `docs/BROWSER-COMMENTS.th.md`. Graph transport below is retained only for legacy regression tests and is not invoked by normal worker ticks. Browser grants already issued may still click for up to 3 seconds after Stop; never promise immediate distributed cancellation. Do not send real Facebook comments without separate explicit approval.

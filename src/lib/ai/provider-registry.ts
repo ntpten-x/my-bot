@@ -192,8 +192,8 @@ function asItems(raw: string): LooseAiItem[] {
  * Classify attempts for the existing chain, one per available provider in priority order.
  * Returns null when the table has no enabled classify provider, so the old env chain runs.
  */
-export async function routedClassifyAttempts(settings: AppSettings, store: RouterStore = dbRouterStore) {
-  await ensureSeeded(settings);
+export async function routedClassifyAttempts(settings: AppSettings, store: RouterStore = dbRouterStore, options: { initialize?: boolean } = {}) {
+  if (options.initialize !== false) await ensureSeeded(settings);
   const allRows = await listProviders();
   if (!allRows.length) return null;
   // Skip (never cool down: the DB is shared with other hosts) Ollama rows when this server has no Ollama.
@@ -210,7 +210,7 @@ export async function routedClassifyAttempts(settings: AppSettings, store: Route
         return { value: items, tokens: result.tokens };
       }),
   }));
-  return { providers, managedPresets: allRows.map(row => row.preset), errors: skipped.map((item) => ({ name: item.name, message: item.reason })) };
+  return { providers, managedPresets: allRows.map(row => row.preset), errors: skipped.map((item) => ({ name: item.name, message: item.reason, deferred: true, retryAt: item.retryAt })) };
 }
 
 /** Owner pressed "ทดสอบ": one tiny real call. Success clears a cooldown; failure only notes the error. */

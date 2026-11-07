@@ -1,6 +1,7 @@
 import type { AppSettings } from "../settings";
 import { groqAvailability, rememberGroqChoice } from "./models";
 import { resolveOllamaBaseUrl } from "./ollama-url";
+import type { ProviderIssue } from "../pipeline/classify";
 
 type Health = { ok: boolean; message: string; at: number };
 
@@ -79,19 +80,19 @@ export async function selectReadyProviders(
   probe: (name: ProviderName, settings: AppSettings) => Promise<{ ok: boolean; message: string }> = probeProvider,
 ) {
   const ready: ProviderName[] = [];
-  const errors: { name: string; message: string }[] = [];
+  const errors: ProviderIssue[] = [];
   for (const name of order) {
     if (name === "gemini" && !settings.geminiApiKey) {
-      errors.push({ name, message: "ข้าม Gemini เพราะไม่มี GEMINI_API_KEY" });
+      errors.push({ name, message: "ข้าม Gemini เพราะไม่มี GEMINI_API_KEY", deferred: true });
       continue;
     }
     if (name === "groq" && !settings.groqApiKey) {
-      errors.push({ name, message: "ข้าม Groq เพราะไม่มี GROQ_API_KEY" });
+      errors.push({ name, message: "ข้าม Groq เพราะไม่มี GROQ_API_KEY", deferred: true });
       continue;
     }
     const health = await probe(name, settings);
     if (!health.ok) {
-      errors.push({ name, message: health.message });
+      errors.push({ name, message: health.message, deferred: true, retryAt: name === "ollama" && process.env.OLLAMA_DISABLED === "1" ? undefined : Date.now() + BAD_TTL_MS });
       continue;
     }
     ready.push(name);

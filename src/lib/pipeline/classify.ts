@@ -8,6 +8,8 @@ export type ProviderAttempt = {
   classify: (posts: ClassifyInput[], catalog: CatNode[]) => Promise<LooseAiItem[]>;
 };
 
+export type ProviderIssue = { name: string; message: string; retryAfterMs?: number; deferred?: boolean; retryAt?: number };
+
 export type CacheHit = { provider: string; item: Omit<AiItem, "id"> };
 
 export type AiCacheStore = {
@@ -27,7 +29,7 @@ export async function classifyWithChain(options: {
   catalog: CatNode[];
   providers: ProviderAttempt[];
   cache?: AiCacheStore;
-}): Promise<{ provider: string; providersById: Record<string, string>; results: AiItem[]; errors: { name: string; message: string; retryAfterMs?: number }[] }> {
+}): Promise<{ provider: string; providersById: Record<string, string>; results: AiItem[]; errors: ProviderIssue[]; attemptedIds: string[] }> {
   const { posts, catalog, providers, cache } = options;
   const byId = new Map<string, AiItem>();
   const fromCache = new Set<string>();
@@ -50,12 +52,14 @@ export async function classifyWithChain(options: {
   }
 
   let used = fromCache.size === posts.length && posts.length > 0 ? "cache" : "rules";
-  const errors: { name: string; message: string; retryAfterMs?: number }[] = [];
+  const errors: ProviderIssue[] = [];
+  const attemptedIds = new Set<string>();
 
   for (const provider of providers) {
     if (!pending.length) break;
     try {
       const output = await provider.classify(pending, catalog);
+      for (const post of pending) attemptedIds.add(post.id);
       if (!output?.length) throw new Error("empty");
       let accepted = 0;
       for (const item of output) {
@@ -86,10 +90,14 @@ export async function classifyWithChain(options: {
       used = provider.name;
       pending = pending.filter((post) => !byId.has(post.id));
     } catch (error) {
+      const wait = error && typeof error === "object" && "deferred" in error && error.deferred === true;
+      if (!wait) for (const post of pending) attemptedIds.add(post.id);
       errors.push({
         name: provider.name,
         message: error instanceof Error ? error.message : "เรียกผู้ให้บริการไม่สำเร็จ",
         retryAfterMs: error && typeof error === "object" && "retryAfterMs" in error ? Number(error.retryAfterMs) || 0 : 0,
+        deferred: Boolean(wait),
+        retryAt: error && typeof error === "object" && "retryAt" in error ? Number(error.retryAt) || undefined : undefined,
       });
     }
   }
@@ -106,5 +114,6 @@ export async function classifyWithChain(options: {
     providersById,
     results: posts.map((post) => byId.get(post.id)!),
     errors,
+    attemptedIds: [...attemptedIds],
   };
 }
