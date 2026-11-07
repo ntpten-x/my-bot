@@ -1,7 +1,11 @@
-import { readFileSync, readdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { readFileSync, readdirSync, mkdtempSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
+// Windows' WSL bash.exe can consume redirected stdin before the command starts.
+// Use Git Bash when available so this test exercises the same piped input as Unix.
+const gitBash = path.join(process.env.ProgramFiles || "C:/Program Files", "Git/bin/bash.exe");
+const bash = process.platform === "win32" && existsSync(gitBash) ? gitBash : "bash";
 import { describe, expect, it } from "vitest";
 import { BACKUP_TABLES } from "../../src/lib/backup";
 import { aiCacheKey } from "../../src/lib/pipeline/classify";
@@ -26,7 +30,7 @@ describe("security and recovery regression gates", () => {
     const script = readFileSync("scripts/setup.sh", "utf8");
     const fn = script.slice(script.indexOf("read_secret()"), script.indexOf("set_env()"));
     for (const answer of ["", "fake-test-value"]) {
-      const result = execFileSync("bash", ["-c", `${fn}\nstty() { :; }\nread_secret TEST_KEY`], {
+      const result = execFileSync(bash, ["-c", `${fn}\nstty() { :; }\nread_secret TEST_KEY`], {
         input: `${answer}\n`, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
       });
       expect(result).toBe(answer);

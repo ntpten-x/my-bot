@@ -93,6 +93,18 @@ function waitComplete(tabId) {
       }
     }
     chrome.tabs.onUpdated.addListener(listener);
+    // A parked reader is already complete and will not emit another onUpdated event.
+    chrome.tabs.get(tabId).then(tab => {
+      if (tab.status === "complete") {
+        clearTimeout(timer);
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }
+    }).catch(error => {
+      clearTimeout(timer);
+      chrome.tabs.onUpdated.removeListener(listener);
+      reject(error);
+    });
   });
 }
 
@@ -226,15 +238,16 @@ async function flushOutbox(cfg) {
   if (flushing || cfg.paused || !cfg.token) return;
   flushing = true;
   const results = {};
+  const deadline = Date.now() + 20_000;
   try {
-    for (let sent = 0; sent < 10; sent++) {
+    for (let sent = 0; sent < 10 && Date.now() < deadline; sent++) {
       const item = (await loadOutbox()).find(entry => !entry.problem);
       if (!item || (item.apiBase && item.apiBase !== base(cfg))) break;
       if (Date.now() - item.at >= OUTBOX_MAX_AGE_MS) {
         await withOutboxLock(async () => { const entries = await loadOutbox(); const match = entries.find(e => item.batchId ? e.batchId === item.batchId : e.at === item.at && e.sourceUrl === item.sourceUrl); if (match) match.problem = "expired"; await chrome.storage.local.set({ outbox: entries }); });
         await rememberError("ข้อมูลค้างเกิน 72 ชั่วโมง เก็บไว้ให้ตรวจเอง ไม่ลบทิ้งเงียบ ๆ"); continue;
       }
-      const response = await postJson(cfg, "/api/v1/ingest", { ...(item.batchId ? { batchId: item.batchId } : {}), sourceUrl: item.sourceUrl, posts: item.posts, fbUserId: item.fbUserId || undefined }, { timeoutMs: 45000, retries: 0 }).catch(() => null);
+      const response = await postJson(cfg, "/api/v1/ingest", { ...(item.batchId ? { batchId: item.batchId } : {}), sourceUrl: item.sourceUrl, posts: item.posts, fbUserId: item.fbUserId || undefined }, { timeoutMs: Math.max(1, Math.min(15000, deadline - Date.now())), retries: 0 }).catch(() => null);
       if (!response || RETRY_STATUS.has(response.status) || response.status >= 500) break;
       if ([401, 403].includes(response.status)) { await rememberError("การเชื่อมต่อหมดสิทธิ์ ข้อมูลยังอยู่ในคิว กรุณาจับคู่ Extension ใหม่"); break; }
       const data = response.json ? await response.json().catch(() => ({})) : {};
@@ -370,9 +383,28 @@ async function heartbeat() {
   beating = true;
   try {
     await probeFacebookIdentity();
-    const stored = await chrome.storage.local.get({ fbIdentity: null, lastError: null, lastPostAt: 0, postsSent: 0, profileLabel: "", quiet: null, browserCommentsEnabled: false, commentJournal: null });
+    const stored = await chrome.storage.local.get({
+      fbIdentity: null,
+      lastError: null,
+      lastPostAt: 0,
+      postsSent: 0,
+      profileLabel: "",
+      quiet: null,
+      browserCommentsEnabled: false,
+      commentJournal: null,
+      readingStatus: null,
+    });
     const outbox = await loadOutbox();
+    const readers = await chrome.storage.session.get({ readers: {} });
     const fb = stored.fbIdentity || { loggedIn: false, id: "", name: "", at: 0 };
+    const reading = stored.readingStatus && stored.readingStatus.groupName
+      ? {
+          groupId: String(stored.readingStatus.groupId || "").slice(0, 80),
+          groupName: String(stored.readingStatus.groupName || "").slice(0, 120),
+          phase: stored.readingStatus.phase === "detail" ? "detail" : stored.readingStatus.phase === "idle" ? "idle" : "feed",
+          startedAt: Number(stored.readingStatus.startedAt) || 0,
+        }
+      : null;
     const response = await postJson(cfg, "/api/v1/extension/heartbeat", {
       installId: await installId(),
       version: chrome.runtime.getManifest().version,
@@ -386,7 +418,17 @@ async function heartbeat() {
       postsSent: stored.postsSent || 0,
       errors: await errorSummary(),
       outboxSize: outbox.length,
-      runtime: { quietReason: stored.quiet?.reason || "", commentsEnabled: Boolean(stored.browserCommentsEnabled), commentPending: Boolean(stored.commentJournal) },
+      runtime: {
+        quietReason: stored.quiet?.reason || "",
+        commentsEnabled: Boolean(stored.browserCommentsEnabled),
+        commentPending: Boolean(stored.commentJournal),
+        reading,
+        capture: {
+          pendingPosts: outbox.reduce((sum, item) => sum + (item.posts?.length || 0), 0),
+          oldestPendingAt: outbox.length ? Math.min(...outbox.map(item => Number(item.at) || Date.now())) : 0,
+          parkedFeeds: Object.values(readers.readers || {}).filter(reader => reader.continuation).length,
+        },
+      },
     }, { timeoutMs: 30000, retries: 1 });
     await chrome.storage.local.set({ lastHeartbeat: { at: Date.now(), status: response.status } });
     if (response.ok && outbox.length) await flushOutbox(cfg);
@@ -401,6 +443,7 @@ async function heartbeat() {
 // One background tab at a time (the shared `cycling` lock). Scrolls the page with scrollTop only:
 // no clicks, no key presses, no form actions, no Facebook APIs. "See more" text is read as-is, never expanded.
 const scrapingTabs = new Set();
+const activeReaderTabs = new Set();
 
 async function readPage(tabId, kind) {
   const [executed] = await chrome.scripting.executeScript({
@@ -413,6 +456,9 @@ async function readPage(tabId, kind) {
           : globalThis.MyBotParser.parseFacebookPosts(document),
       identity: globalThis.MyBotIdentity ? globalThis.MyBotIdentity.readFacebookIdentity(document) : null,
       groupId: pageKind === "marketplace" || !globalThis.MyBotParser.readGroupId ? "" : globalThis.MyBotParser.readGroupId(document),
+      loading: Boolean(document.querySelector('[role="progressbar"], [aria-busy="true"]')),
+      checkpoint: /^\/(checkpoint|challenge)(\/|$)/i.test(location.pathname) || Boolean(document.querySelector('form[action*="/checkpoint/"]')),
+      endOfFeed: [...document.querySelectorAll('[role="status"]')].some(node => /no more (?:posts|results)|you're all caught up|ไม่มีโพสต์เพิ่มเติม|ไม่มีผลลัพธ์เพิ่มเติม/i.test(node.textContent || "")),
     }),
   });
   return executed && executed.result ? executed.result : { posts: [], identity: null, groupId: "" };
@@ -447,14 +493,14 @@ async function reportRun(cfg, group, run) {
       sourceUrl: group.url,
       groupId: run.groupId || undefined,
       ok: run.ok,
-      postsFound: run.postsFound,
-      newPosts: run.newPosts,
-      scrolls: run.scrolls,
-      stoppedBy: run.ok ? run.stoppedBy || "end" : "error",
+      postsFound: Math.min(1000, run.postsFound),
+      newPosts: Math.min(1000, run.newPosts),
+      scrolls: Math.min(200, run.scrolls),
+      stoppedBy: run.ok || ["logged_out", "checkpoint"].includes(run.stoppedBy) ? run.stoppedBy || "end" : "error",
       mode: run.mode,
-      coverage: run.stats || undefined,
+      coverage: run.stats ? { ...run.stats, newCount: Math.min(1000, run.stats.newCount), stalls: Math.min(1000, run.stats.stalls) } : undefined,
       message: run.ok ? undefined : run.message,
-    });
+    }, { timeoutMs: 10000, retries: 0 });
     if (!response.ok) return null;
     const data = await response.json().catch(() => ({}));
     const next = Date.parse(data.nextRunAt || "");
@@ -567,32 +613,39 @@ async function readFullTexts(tabId, kind, urls) {
 }
 
 // Wait (read-only) until the feed shows more posts or grows, using a MutationObserver in the page.
-async function waitForGrowth(tabId, kind, before, timeoutMs) {
+async function waitForGrowth(tabId, kind, before, timeoutMs, knownKeys = []) {
   if (timeoutMs <= 0) return { count: before || 0, grew: false, height: 0 };
   const [executed] = await chrome.scripting.executeScript({
     target: { tabId },
-    args: [kind, before || 0, timeoutMs],
-    func: (pageKind, prev, limit) =>
+    args: [kind, before || 0, timeoutMs, knownKeys],
+    func: (pageKind, prev, limit, previousKeys) =>
       new Promise((resolve) => {
         const selector = pageKind === "marketplace" ? 'a[href*="/marketplace/item/"]' : '[role="article"], [aria-posinset]';
         const count = () => document.querySelectorAll(selector).length;
         const page = document.scrollingElement || document.documentElement;
         const startHeight = page.scrollHeight;
         let done = false;
+        let settleTimer, timeoutTimer;
+        const known = new Set(previousKeys);
+        const hasNewKey = () => known.size > 0 && Boolean(globalThis.MyBotScrape) &&
+          [...document.querySelectorAll(pageKind === "marketplace" ? selector : 'a[href*="/posts/"], a[href*="/permalink/"], a[href*="story_fbid="], a[href*="multi_permalinks="]')]
+            .some(link => { const key = globalThis.MyBotScrape.postKey(link.href); return key && !known.has(key); });
         const finish = (grew) => {
           if (done) return;
           done = true;
           observer.disconnect();
+          clearTimeout(settleTimer);
+          clearTimeout(timeoutTimer);
           resolve({ count: count(), grew, height: page.scrollHeight });
         };
         // Short settle so a growing feed does not idle 700 ms after every mutation.
         const check = () => {
-          if (count() > prev || page.scrollHeight > startHeight + 200) setTimeout(() => finish(true), 350);
+          if (!settleTimer && (count() > prev || page.scrollHeight > startHeight + 200 || hasNewKey())) settleTimer = setTimeout(() => finish(true), 350);
         };
         const observer = new MutationObserver(check);
         observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
+        timeoutTimer = setTimeout(() => finish(false), limit);
         check();
-        setTimeout(() => finish(false), limit);
       }),
   });
   return executed && executed.result ? executed.result : { count: 0, grew: false, height: 0 };
@@ -648,7 +701,7 @@ async function nudgeScroll(tabId) {
   });
 }
 
-const READER_FILES = ["selectors.js", "fbtime.js", "parser.js", "identity.js"];
+const READER_FILES = ["selectors.js", "fbtime.js", "parser.js", "identity.js", "scrape.js"];
 
 // Chrome sometimes fails the first executeScript with "Could not load file: 'selectors.js'"
 // right after navigation or while the extension is reloading — retry a few times.
@@ -755,10 +808,23 @@ chrome.windows.onFocusChanged.addListener((windowId) => {
 });
 
 async function closeOrphanReaders() {
+  return withScrapeWindowLock(async () => {
   const stored = await chrome.storage.session.get({ readers: {} });
   const readers = stored.readers || {};
   let changed = false;
+  const cfg = await loadConfig();
+  const fbUserId = await currentFbUserId();
   for (const [key, reader] of Object.entries(readers)) {
+    if (activeReaderTabs.has(reader.tabId)) continue;
+    const saved = reader.continuation;
+    // MV3 can restart while a feed is parked. Adopt the saved tab instead of closing it.
+    if (saved && saved.apiBase === base(cfg) && saved.fbUserId === fbUserId && Date.now() - reader.at < 2 * 3600_000) {
+      const tab = await chrome.tabs.get(reader.tabId).catch(() => null);
+      if (tab && sameReaderUrl(tab.url, saved.url)) {
+        scrapingTabs.add(reader.tabId);
+        continue;
+      }
+    }
     const orphan = reader.boot !== BOOT_ID || (!cycling && Date.now() - (reader.at || 0) > READER_MAX_AGE_MS);
     if (!orphan) continue;
     // Never close the owner's Chrome window. Restore reused Facebook tabs; only remove tabs we created.
@@ -771,15 +837,21 @@ async function closeOrphanReaders() {
     changed = true;
   }
   if (changed) await chrome.storage.session.set({ readers });
+  });
 }
 
 // Use the connected Facebook window: reuse an idle FB tab when possible, else a background tab.
-async function openReader(url) {
+async function openReader(url, dedicated = false) {
   const reader = await withScrapeWindowLock(async () => {
+    const stored = await chrome.storage.session.get({ readers: {} });
+    const readers = stored.readers || {};
+    // Protect existing cursors until they finish. Overflow sources still get a head pass,
+    // but release their temporary tab on yield instead of evicting every unfinished feed.
+    const transient = dedicated && Object.values(readers).filter(item => (item.continuation || item.dedicated) && !item.transient).length >= 20;
     const ref = await ensureScrapeWindow();
     const tabs = await chrome.tabs.query({ windowId: ref.windowId }).catch(() => []);
     // Prefer an already-open Facebook tab that the owner is not looking at (same login session).
-    const reusable = (tabs || []).find(
+    const reusable = !dedicated && (tabs || []).find(
       (tab) => tab.id !== undefined && !tab.active && !tab.pinned && !scrapingTabs.has(tab.id) && isFacebookTab(tab),
     );
     let tabId;
@@ -798,14 +870,80 @@ async function openReader(url) {
       tabId = tab.id;
     }
     scrapingTabs.add(tabId);
-    const stored = await chrome.storage.session.get({ readers: {} }).catch(() => ({ readers: {} }));
-    const readers = stored.readers || {};
-    readers[String(tabId)] = { tabId, windowId: ref.windowId, boot: BOOT_ID, at: Date.now(), previousUrl };
+    readers[String(tabId)] = { tabId, windowId: ref.windowId, boot: BOOT_ID, at: Date.now(), previousUrl, ephemeral, dedicated, transient };
     await chrome.storage.session.set({ readers }).catch(() => undefined);
-    return { tabId, windowId: ref.windowId, ephemeral, previousUrl };
+    return { tabId, windowId: ref.windowId, ephemeral, previousUrl, transient, dedicated };
   });
   await sleep(400);
   return reader;
+}
+
+function sameReaderUrl(actual, expected) {
+  try {
+    const a = new URL(actual), b = new URL(expected);
+    return a.origin === b.origin && a.pathname.replace(/\/+$/, "") === b.pathname.replace(/\/+$/, "") &&
+      ["query", "minPrice", "maxPrice", "radius", "daysSinceListed", "exact"].every(key => a.searchParams.get(key) === b.searchParams.get(key));
+  } catch { return false; }
+}
+
+function recoveryKey(cfg, group, fbUserId) {
+  return JSON.stringify([base(cfg), fbUserId, group.url]);
+}
+
+async function loadContinuation(cfg, group, url) {
+  const fbUserId = await currentFbUserId();
+  const stored = await chrome.storage.session.get({ readers: {} });
+  for (const reader of Object.values(stored.readers || {})) {
+    const saved = reader.continuation;
+    if (!saved || saved.sourceUrl !== group.url || saved.apiBase !== base(cfg) || saved.fbUserId !== fbUserId) continue;
+    const tab = await chrome.tabs.get(reader.tabId).catch(() => null);
+    if (!tab || tab.discarded || !sameReaderUrl(tab.url, url)) {
+      // A discarded/navigated tab cannot preserve the DOM cursor. Keep the durable recovery flag.
+      await closeReader(reader);
+      return null;
+    }
+    scrapingTabs.add(reader.tabId);
+    return { reader, run: globalThis.MyBotScrape.restoreRun(saved.run) };
+  }
+  return null;
+}
+
+async function saveContinuation(cfg, group, reader, run) {
+  const fbUserId = reader.fbUserId;
+  // Persist a small recovery flag across a full Chrome restart; the DOM lives only in session.
+  await withScrapeWindowLock(async () => {
+    const local = await chrome.storage.local.get({ coverageRecovery: {} });
+    const coverageRecovery = { ...local.coverageRecovery, [recoveryKey(cfg, group, fbUserId)]: { sourceUrl: group.url, apiBase: base(cfg), fbUserId, at: Date.now(), pending: run.fresh.map(cleanPost) } };
+    await chrome.storage.local.set({ coverageRecovery });
+    const stored = await chrome.storage.session.get({ readers: {} });
+    const readers = { ...stored.readers };
+    readers[String(reader.tabId)] = { ...reader, boot: BOOT_ID, at: Date.now(), continuation: {
+      sourceUrl: group.url, url: globalThis.MyBotScrape.scrapeUrl(group.url, sourceKind(group)), apiBase: base(cfg), fbUserId,
+      run: globalThis.MyBotScrape.snapshotRun(run),
+    } };
+    await chrome.storage.session.set({ readers });
+  });
+}
+
+async function finishContinuation(group, cfg, fbUserId) {
+  await withScrapeWindowLock(async () => {
+    const stored = await chrome.storage.local.get({ coverageRecovery: {} });
+    const coverageRecovery = { ...stored.coverageRecovery };
+    delete coverageRecovery[recoveryKey(cfg, group, fbUserId)];
+    await chrome.storage.local.set({ coverageRecovery });
+  });
+}
+
+// Retain at most 20 parked feeds (active reads still use at most two tabs).
+// Eviction leaves recovery flagged, so a new DOM pass never stops at known head posts.
+async function pruneContinuations(cfg, groups) {
+  const stored = await chrome.storage.session.get({ readers: {} });
+  const valid = new Set((groups || []).map(group => group.url));
+  const parked = Object.values(stored.readers || {}).filter(reader => reader.continuation).sort((a, b) => b.at - a.at);
+  for (let index = 0; index < parked.length; index++) {
+    const reader = parked[index];
+    if (!valid.has(reader.continuation.sourceUrl) || reader.continuation.apiBase !== base(cfg) || index >= 20) await closeReader(reader);
+  }
 }
 
 async function closeReader(reader) {
@@ -814,12 +952,14 @@ async function closeReader(reader) {
   if (reader.tabId !== undefined) {
     if (reader.previousUrl) await chrome.tabs.update(reader.tabId, { url: reader.previousUrl, active: false }).catch(() => undefined);
     else if (reader.ephemeral) await chrome.tabs.remove(reader.tabId).catch(() => undefined);
-    const stored = await chrome.storage.session.get({ readers: {} }).catch(() => ({ readers: {} }));
-    const readers = stored.readers || {};
-    if (readers[String(reader.tabId)]) {
-      delete readers[String(reader.tabId)];
-      await chrome.storage.session.set({ readers }).catch(() => undefined);
-    }
+    await withScrapeWindowLock(async () => {
+      const stored = await chrome.storage.session.get({ readers: {} });
+      const readers = stored.readers || {};
+      if (readers[String(reader.tabId)]) {
+        delete readers[String(reader.tabId)];
+        await chrome.storage.session.set({ readers });
+      }
+    });
   }
   const ref = await loadScrapeWindow();
   if (ref) await saveScrapeWindow({ ...ref, usedAt: Date.now() });
@@ -830,10 +970,43 @@ async function closeReader(reader) {
 async function readFeed(reader, kind, plan, knownKeys, result, options = {}) {
   const Scrape = globalThis.MyBotScrape;
   const tabId = reader.tabId;
-  const run = Scrape.createRun({ knownKeys, ...plan });
+  const run = options.run || Scrape.createRun({ knownKeys, ...plan });
+  Scrape.resumeRun(run);
+  const sliceStart = run.steps;
+  const checkpoint = options.checkpoint || (async () => undefined);
+  const drain = options.drain || (async () => undefined);
   const feedDeadline = Date.now() + Math.max(20_000, Number(options.budgetMs) || 40_000);
   const remaining = cap => Math.max(0, Math.min(cap, feedDeadline - Date.now()));
-  await waitComplete(tabId).catch(() => undefined);
+  const consume = async (page, step = true) => {
+    if (page.checkpoint || page.identity?.loggedIn === false) {
+      run.stoppedBy = page.checkpoint ? "checkpoint" : "logged_out";
+      return run.stoppedBy;
+    }
+    if (options.fbUserId && page.identity?.id && page.identity.id !== options.fbUserId) throw new Error("บัญชี Facebook เปลี่ยนระหว่างอ่าน กรุณาเริ่มรอบใหม่");
+    if (options.observe) options.observe(page.posts || []);
+    const hasUnseen = (page.posts || []).some(post => { const key = Scrape.postKey(post.url); return key && !run.seen.has(key); });
+    run.endSignals = page.endOfFeed && !page.loading ? (run.endSignals || 0) + 1 : 0;
+    if (run.endSignals >= 2 && !hasUnseen) { run.stoppedBy = "exhausted"; await checkpoint(run); return run.stoppedBy; }
+    if (!step && !hasUnseen) return run.stoppedBy;
+    const before = run.newCount;
+    const steps = run.steps;
+    let reason = Scrape.addStep(run, page.posts);
+    if (!step) run.steps = steps;
+    run.stoppedBy = reason;
+    if (run.newCount > before) run.recoveredEnd = false;
+    // Save pending posts before outbox writes; crash between writes causes a safe duplicate, never a lost post.
+    await checkpoint(run);
+    await drain(run);
+    if (reason === "cap") {
+      run.stoppedBy = "";
+      run.hitLimit = false;
+      reason = "";
+    }
+    if (!reason && run.steps - sliceStart > plan.maxScrolls) { Scrape.yieldRun(run); reason = "limit"; }
+    return reason;
+  };
+  if (options.canRead && await options.canRead()) { Scrape.yieldRun(run, "yield"); await checkpoint(run); return run; }
+  await waitComplete(tabId);
   await injectReaders(tabId);
   let state = await waitForGrowth(tabId, kind, 0, remaining(8000));
   if (!state.count) {
@@ -842,59 +1015,78 @@ async function readFeed(reader, kind, plan, knownKeys, result, options = {}) {
     state = await waitForGrowth(tabId, kind, 0, remaining(5000));
   }
   let first = await readPage(tabId, kind);
+  if (first.identity) await rememberIdentity(first.identity);
+  if (first.groupId) result.groupId = first.groupId;
+  result.sample = (first.posts || []).slice(0, 8);
+  let stop = await consume(first);
   // First paint often shows 0–1 articles. Wait once more before treating that as the whole feed.
-  if ((first.posts || []).length < 2 && remaining(4000)) {
+  if (!stop && (first.posts || []).length < 2 && remaining(4000)) {
     run.stalls += 1;
     await sleep(remaining(1200));
     state = await waitForGrowth(tabId, kind, state.count || 0, remaining(4000));
     first = await readPage(tabId, kind);
+    stop = await consume(first, false);
   }
-  if (first.identity) await rememberIdentity(first.identity);
-  if (first.groupId) result.groupId = first.groupId;
-  result.sample = (first.posts || []).slice(0, 8);
   const keepAwake = Boolean(options.keepAwake);
   const holdForeground = Boolean(options.holdForeground);
   const pulseWake = typeof options.pulseWake === "function" ? options.pulseWake : null;
-  let stop = Scrape.addStep(run, first.posts);
   while (!stop && Date.now() < feedDeadline) {
+    const pause = options.canRead ? await options.canRead() : "";
+    if (pause) { stop = "yield"; Scrape.yieldRun(run, stop); break; }
     // Dead feed: stop early so scrapeGroup can wake + reload instead of idling to the deadline.
     // Catchup/sweep/audit tolerate more stalls before aborting (see shouldAbortDeadFeed).
     if (Scrape.shouldAbortDeadFeed(run)) {
-      stop = "end";
-      run.stoppedBy = "end";
+      stop = "stalled";
+      run.stoppedBy = stop;
+      run.hitLimit = true;
       break;
     }
     if (pulseWake && Scrape.shouldPulseWake({ keepAwake, holdForeground, found: run.found, steps: run.steps })) {
       await pulseWake();
     }
     const before = state.count;
-    const previousKeys = new Set((await readPage(tabId, kind)).posts?.map(post => postKey(post.url)).filter(Boolean) || []);
+    const previousKeys = new Set(run.seen);
     await scrollOneScreen(tabId);
     await sleep(remaining(Scrape.scrollWaitMs(undefined, { growing: run.found >= 3 })));
-    state = await waitForGrowth(tabId, kind, before, remaining(run.found >= 3 ? 2200 : 3000));
+    state = await waitForGrowth(tabId, kind, before, remaining(run.found >= 3 ? 2200 : 3000), [...run.seen].slice(-1000));
     const immediate = await readPage(tabId, kind);
-    if ((immediate.posts || []).some(post => { const key = postKey(post.url); return key && !previousKeys.has(key); })) state.grew = true;
+    if ((immediate.posts || []).some(post => { const key = Scrape.postKey(post.url); return key && !previousKeys.has(key); })) state.grew = true;
+    // Virtualized feeds may replace the entire snapshot during the following wait.
+    stop = await consume(immediate);
+    if (stop && stop !== "end") break;
     for (let retry = 0; !state.grew && retry < 1 && remaining(1) > 0; retry += 1) {
       run.stalls += 1;
       await nudgeScroll(tabId);
       state = await waitForGrowth(tabId, kind, before, remaining(2500));
     }
-    const page = await readPage(tabId, kind);
-    stop = Scrape.addStep(run, page.posts);
-    // Soft end once: only when the cold budget fired and a little time remains.
-    const softStallCap = Scrape.isDeepMode(run.mode) ? 10 : 6;
-    if (stop === "end" && run.found < (Scrape.MIN_FOUND_BEFORE_END || 3) && remaining(6000) > 0 && run.stalls < softStallCap) {
-      run.stalls += 1;
-      run.stoppedBy = "";
-      run.emptySteps = Math.max(0, (run.emptySteps || 0) - 3);
-      await nudgeScroll(tabId);
-      await sleep(remaining(Scrape.isDeepMode(run.mode) ? 2500 : 1500));
-      state = await waitForGrowth(tabId, kind, state.count, remaining(Scrape.isDeepMode(run.mode) ? 5000 : 3500));
-      const again = await readPage(tabId, kind);
-      stop = Scrape.addStep(run, again.posts);
+    if (!state.grew || stop === "end") {
+      const page = await readPage(tabId, kind);
+      // A second DOM read is not a second scroll/no-progress attempt.
+      if (page.checkpoint || page.identity?.loggedIn === false || page.posts?.some(post => !run.seen.has(Scrape.postKey(post.url)))) {
+        stop = await consume(page, false);
+      }
+      if (stop === "end") {
+        if (!run.recoveredEnd && remaining(6000) > 0) {
+          run.recoveredEnd = true;
+          run.stoppedBy = "";
+          run.emptySteps = 0;
+          await wakeReaderTab(reader, 450);
+          await nudgeScroll(tabId);
+          await sleep(remaining(2000));
+          state = await waitForGrowth(tabId, kind, state.count, remaining(3500));
+          stop = await consume(await readPage(tabId, kind), false);
+        } else if (page.loading || !run.recoveredEnd || (run.found < Scrape.MIN_FOUND_BEFORE_END && !page.endOfFeed)) {
+          stop = page.loading ? "loading" : "stalled";
+          Scrape.yieldRun(run, stop);
+        } else {
+          stop = "exhausted";
+          run.stoppedBy = stop;
+        }
+      }
     }
   }
-  if (!stop && Date.now() >= feedDeadline) run.stoppedBy = "limit";
+  if (!stop && Date.now() >= feedDeadline) Scrape.yieldRun(run);
+  await checkpoint(run);
   return run;
 }
 
@@ -903,23 +1095,81 @@ function cleanPost(post) {
   return { url: post.url, authorName: post.authorName || "", text: Scrape.cleanupText(post.text), postedAt: post.postedAt || null, images: post.images || [] };
 }
 
+async function setReadingStatus(status) {
+  await chrome.storage.local.set({ readingStatus: status || null }).catch(() => undefined);
+}
+
 async function scrapeGroup(cfg, group, remote, options) {
   const Scrape = globalThis.MyBotScrape;
   const kind = sourceKind(group);
   const settings = await scrapeSettingsFor(remote);
-  const stored = await chrome.storage.local.get({ sweeps: {} });
-  const plan = Scrape.planRun({ group, settings, lastSweepAt: (stored.sweeps || {})[group.id], audit: Boolean(options && options.audit) });
+  const stored = await chrome.storage.local.get({ sweeps: {}, coverageRecovery: {} });
+  const fbUserId = await currentFbUserId();
+  const recovery = stored.coverageRecovery?.[recoveryKey(cfg, group, fbUserId)];
+  const recovering = recovery && recovery.apiBase === base(cfg) && recovery.fbUserId === fbUserId;
+  const plan = Scrape.planRun({ group: { ...group, needsCoverage: group.needsCoverage || recovering }, settings, lastSweepAt: (stored.sweeps || {})[group.id], audit: Boolean(options && options.audit) });
   const result = { ok: true, postsFound: 0, newPosts: 0, scrolls: 0, stoppedBy: "", message: "", nextRunAt: null, mode: plan.mode, stats: null };
   const startedAt = Date.now();
   let reader;
+  let run;
+  let retain = false;
+  const batchIds = [];
+  const observed = new Set();
+  const observe = posts => { for (const post of posts) { const key = Scrape.postKey(post.url); if (key) observed.add(key); } };
+  await setReadingStatus({
+    groupId: group.id || "",
+    groupName: group.name || group.url || "",
+    phase: "feed",
+    startedAt,
+  });
+  void heartbeat();
   try {
     const url = Scrape.scrapeUrl(group.url, kind);
-    reader = await openReader(url);
+    const continuation = await loadContinuation(cfg, group, url);
+    reader = continuation?.reader || await openReader(url, true);
+    activeReaderTabs.add(reader.tabId);
+    reader.fbUserId = fbUserId;
+    run = continuation?.run || Scrape.createRun({ knownKeys: group.knownKeys || [], ...plan });
+    if (!continuation && recovering && recovery.pending?.length) {
+      run.fresh = recovery.pending;
+      for (const post of run.fresh) run.seen.add(Scrape.postKey(post.url));
+      run.found = run.seen.size;
+      run.newCount = run.fresh.length;
+    }
+    if (Scrape.isDeepMode(plan.mode)) { run.knownStreak = Infinity; run.mode = plan.mode; }
+    run.maxScrolls = plan.maxScrolls;
+    run.maxPosts = plan.maxPosts;
+    run.maxAgeMs = plan.maxAgeMs;
+    const startCounters = { found: run.found, fresh: run.newCount, steps: run.steps, stalls: run.stalls };
+    const checkpoint = current => saveContinuation(cfg, group, reader, current);
+    const drain = async (current, force = false) => {
+      const batchSize = Math.min(40, plan.maxPosts);
+      if (!force && current.fresh.length < plan.maxPosts) return;
+      while (current.fresh.length && (force || current.fresh.length >= batchSize)) {
+        const picked = current.fresh.slice(0, batchSize);
+        const queued = await queueOutbox({ sourceUrl: group.url, posts: picked.map(cleanPost), fbUserId, apiBase: base(cfg) });
+        batchIds.push(queued.batchId);
+        if (kind !== "marketplace") await updateFullTextBacklog(async backlog => {
+          for (const post of picked) if (post.truncated && !backlog[post.url]) backlog[post.url] = { groupId: group.id, sourceUrl: group.url, tries: 0, addedAt: Date.now(), after: 0 };
+        });
+        current.fresh.splice(0, picked.length);
+        await checkpoint(current);
+      }
+    };
+    // Recover pending posts if MV3 stopped after the checkpoint but before the outbox write.
+    await checkpoint(run);
+    await drain(run, true);
     const win = reader.windowId !== undefined ? await chrome.windows.get(reader.windowId).catch(() => null) : null;
     const reading = { windowState: readerWindowState(win), reloaded: false, stallsFirst: 0, stallsRetry: 0, throttled: false, heldForeground: false };
     const holdFg = Scrape.shouldHoldForeground(plan, group);
     const knownKeys = group.knownKeys || [];
-    const runPass = (pass, hold) => {
+    const canRead = async () => {
+      const latest = await loadConfig();
+      const blocked = await chrome.storage.local.get({ outboxBlocked: false });
+      if (latest.paused || latest.token !== cfg.token || base(latest) !== base(cfg) || blocked.outboxBlocked) return "paused";
+      return quietReason(remote?.quiet);
+    };
+    const runPass = (pass, hold, current) => {
       const exec = () =>
         readFeed(reader, kind, plan, knownKeys, result, {
           budgetMs: Scrape.feedBudgetMs(plan, pass),
@@ -927,74 +1177,87 @@ async function scrapeGroup(cfg, group, remote, options) {
           holdForeground: hold,
           // Pulse only when we are not already holding the tab in the foreground.
           pulseWake: hold ? null : () => wakeReaderTab(reader, 450),
+          run: current, checkpoint, drain, canRead, fbUserId, observe,
         });
       return hold ? withReaderForeground(reader, exec) : exec();
     };
     // Deep / coverage: hold the reader in the foreground for the whole pass so Facebook hydrates.
     reading.heldForeground = holdFg;
-    let run = await runPass(1, holdFg);
+    run = await runPass(1, holdFg, run);
     reading.stallsFirst = run.stalls || 0;
-    const statsProbe = Scrape.runStats(run);
     const needsRetry =
-      Scrape.isShallowRun(run) ||
-      (statsProbe.hitLimit && !statsProbe.reachedKnownPost) ||
-      (run.found === 0 && run.stalls >= 2);
-    if (needsRetry && run.stoppedBy !== "seen" && run.stoppedBy !== "old") {
+      ["stalled", "loading"].includes(run.stoppedBy) && run.newCount === startCounters.fresh;
+    if (needsRetry && !await canRead()) {
       reading.reloaded = true;
       reading.heldForeground = true;
       // Shallow recovery always holds foreground for reload + pass 2 (hydrate beats pulse).
       const again = await withReaderForeground(reader, async () => {
         await chrome.tabs.reload(reader.tabId).catch(() => undefined);
         await sleep(Scrape.postWakeSettleMs(plan, 2));
-        return readFeed(reader, kind, plan, knownKeys, result, {
+        return readFeed(reader, kind, { ...plan, knownStreak: Infinity }, [...new Set([...knownKeys, ...run.seen])], result, {
           budgetMs: Scrape.feedBudgetMs(plan, 2),
           keepAwake: true,
           holdForeground: true,
           pulseWake: null,
+          checkpoint, drain, canRead, fbUserId, observe,
         });
       });
       reading.stallsRetry = again.stalls || 0;
       again.stalls += run.stalls;
-      if (again.found >= run.found) run = again;
-      const after = Scrape.runStats(run);
-      if (Scrape.isShallowRun(run) || (after.hitLimit && !after.reachedKnownPost)) {
+      again.seen = new Set([...run.seen, ...again.seen]);
+      again.found = again.seen.size;
+      again.newCount += run.newCount;
+      again.steps += run.steps;
+      run = again;
+      await checkpoint(run);
+      if (["stalled", "loading"].includes(run.stoppedBy)) {
         reading.throttled = true;
         await chrome.storage.local.set({ throttledAt: Date.now() }).catch(() => undefined);
       }
     }
-    const stats = Scrape.runStats(run);
+    await drain(run, true);
+    const stats = { ...Scrape.runStats(run), newCount: run.newCount - startCounters.fresh, scrolls: Math.max(0, run.steps - startCounters.steps - 1), stalls: Math.max(0, run.stalls - startCounters.stalls) };
     result.stats = { ...stats, usedWindow: false, ...reading, fullTried: 0, fullOk: 0, durationMs: 0, extVersion: chrome.runtime.getManifest().version };
     result.scrolls = stats.scrolls;
     result.stoppedBy = run.stoppedBy || "end";
-    result.postsFound = run.found;
-    const picked = run.fresh;
-    for (let i = 0; i < picked.length; i += 40) {
-      const response = await sendPosts(cfg, group.url, picked.slice(i, i + 40).map(cleanPost));
-      const data = response && response.ok ? await response.clone().json().catch(() => ({})) : {};
-      result.newPosts += Number(data.inserted) || 0;
+    result.postsFound = observed.size || Math.max(0, run.found - startCounters.found);
+    const latest = await loadConfig();
+    const flushed = !latest.paused && latest.token === cfg.token && base(latest) === base(cfg) ? await flushOutbox(latest) : {};
+    result.newPosts = batchIds.reduce((sum, id) => sum + (Number(flushed?.[id]?.inserted) || 0), 0);
+    retain = run.hitLimit || ["limit", "cap", "yield", "stalled", "loading"].includes(run.stoppedBy);
+    if (!retain && ["end", "exhausted", "seen", "old"].includes(run.stoppedBy)) {
+      await finishContinuation(group, cfg, fbUserId);
+      if (plan.mode !== "normal") await noteSweepAt(group.id);
     }
-    if (plan.mode !== "normal") await noteSweepAt(group.id);
+    if (["logged_out", "checkpoint"].includes(run.stoppedBy)) {
+      result.ok = false;
+      result.message = run.stoppedBy === "checkpoint" ? "Facebook ขอให้เจ้าของตรวจสอบบัญชีใน Chrome" : "กรุณาเข้าสู่ระบบ Facebook ใหม่";
+      await rememberError(result.message);
+    }
     if (kind !== "marketplace") {
       // Discovery only enqueues work under a lock so parallel groups do not clobber each other.
       await updateFullTextBacklog(async (backlog) => {
         const now = Date.now();
-        const freshCut = picked.filter((post) => post.truncated).map((post) => String(post.url));
-        const urls = [...new Set([...freshCut, ...(group.refetchUrls || []).map(String)])];
+        const urls = [...new Set((group.refetchUrls || []).map(String))];
         for (const url of urls) if (!backlog[url]) backlog[url] = { groupId: group.id, sourceUrl: group.url, tries: 0, addedAt: now, after: 0 };
       });
     }
-    await postJson(cfg, "/api/v1/extension/sample", { sourceUrl: group.url, posts: result.sample || [] }).catch(() => undefined);
-    result.message = `อ่านได้ ${run.found} โพสต์ ใหม่ ${result.newPosts} · เลื่อน ${result.scrolls} หน้าจอ (${plan.mode})`;
+    await postJson(cfg, "/api/v1/extension/sample", { sourceUrl: group.url, posts: result.sample || [] }, { timeoutMs: 5000, retries: 0 }).catch(() => undefined);
+    if (result.ok) result.message = `อ่านเพิ่ม ${result.postsFound} โพสต์ เก็บใหม่ ${stats.newCount} · เลื่อน ${result.scrolls} หน้าจอ (${plan.mode})${retain ? " · รออ่านต่อจากเดิม" : ""}`;
   } catch (error) {
     const message = String(error && error.message ? error.message : error).slice(0, 300);
     await rememberError(`อ่าน ${kind === "marketplace" ? "Marketplace" : "กลุ่ม"} ${group.name || group.url} ไม่สำเร็จ: ${message}`).catch(() => undefined);
     Object.assign(result, { ok: false, message });
+    retain = Boolean(reader && run);
   } finally {
-    await closeReader(reader);
+    if (reader) activeReaderTabs.delete(reader.tabId);
+    if (!retain || reader?.transient) await closeReader(reader);
+    await setReadingStatus(null);
   }
   delete result.sample;
   if (result.stats) result.stats.durationMs = Date.now() - startedAt;
   result.nextRunAt = await reportRun(cfg, group, result);
+  if (retain && result.ok && ["limit", "cap", "yield"].includes(result.stoppedBy)) result.nextRunAt = Date.now() + 30_000;
   return result;
 }
 async function processFullTextQueue(cfg, groups, options = {}) {
@@ -1080,10 +1343,13 @@ async function releaseRunLock() {
 }
 
 async function cycle() {
-  if ((await chrome.storage.local.get({ outboxBlocked: false })).outboxBlocked) return;
   if (cycling) return;
   const cfg = await loadConfig();
   if (cfg.paused || !cfg.token) return;
+  if ((await chrome.storage.local.get({ outboxBlocked: false })).outboxBlocked) {
+    await flushOutbox(cfg);
+    if ((await chrome.storage.local.get({ outboxBlocked: false })).outboxBlocked) return;
+  }
   // Facebook logged out (seen in the last 30 min): wait; a later cycle probes again.
   await probeFacebookIdentity();
   const fbState = await chrome.storage.local.get({ fbIdentity: null });
@@ -1103,35 +1369,50 @@ async function cycle() {
     const reason = await quietReason(remote.quiet);
     await setQuiet(reason);
     if (reason) return;
+    await pruneContinuations(cfg, remote.groups || []);
     const now = Date.now();
     const schedules = { ...cfg.schedules };
     // Local nextRunAt / in-flight lock always wins — prevents re-scraping every tick when server due is stale.
     const INFLIGHT_MS = 2 * 60 * 1000;
     const Scrape = globalThis.MyBotScrape;
-    const due = Scrape.prioritizeCoverageDue(
-      (remote.groups || []).filter((group) => {
-        if (remote.serverScheduling && group.due === false) return false;
+    const { throttledAt, cycleCursor } = await chrome.storage.local.get({ throttledAt: 0, cycleCursor: "" });
+    const { coverageRecovery } = await chrome.storage.local.get({ coverageRecovery: {} });
+    const fbUserId = await currentFbUserId();
+    const throttle = Scrape.throttleLevel(throttledAt, now);
+    const due = Scrape.orderDueGroups(
+      (remote.groups || []).map(group => {
+        const saved = coverageRecovery[recoveryKey(cfg, group, fbUserId)];
+        const needsCoverage = group.needsCoverage || (saved && saved.apiBase === base(cfg) && saved.fbUserId === fbUserId);
+        return { ...group, needsCoverage: Boolean(needsCoverage) };
+      }).filter((group) => {
+        if (remote.serverScheduling && group.due === false && !group.needsCoverage) return false;
         const until = schedules[group.id] || 0;
         if (until > now) return false;
         return true;
       }),
+      { cursorId: cycleCursor, now },
     );
-    // Chrome throttled / coverage recovery → smaller batch + single-tab parallel. Otherwise up to PARALLEL_SCRAPE.
-    const { throttledAt } = await chrome.storage.local.get({ throttledAt: 0 });
-    const recentlyThrottled = Date.now() - throttledAt < 30 * 60 * 1000;
+    // Soften the old "2 groups for 30 minutes" cap — hard/soft windows + round-robin.
     const needsCoverageDue = due.some((group) => group.needsCoverage);
     const limit = remote.maxGroupsPerCycle || 20;
-    const batch = due.slice(0, recentlyThrottled || needsCoverageDue ? Math.min(limit, 2) : limit);
-    const parallel = Scrape.cycleParallel({ recentlyThrottled, batch, defaultParallel: PARALLEL_SCRAPE });
+    const batch = due.slice(0, Scrape.cycleBatchLimit({ limit, throttleLevel: throttle, needsCoverageDue, throttledAt, now }));
+    const parallel = Scrape.cycleParallel({
+      throttleLevel: throttle,
+      recentlyThrottled: throttle === "hard",
+      batch,
+      defaultParallel: PARALLEL_SCRAPE,
+    });
     // Full-text must not steal tabs before discovery when many groups are due or Chrome is throttling.
-    if (!recentlyThrottled && batch.length <= 2 && Object.keys(await loadFullTextBacklog()).length >= 10) {
+    if (throttle === "none" && batch.length <= 2 && Object.keys(await loadFullTextBacklog()).length >= 10) {
       await processFullTextQueue(cfg, remote.groups || [], { budgetMs: 15000, maxItems: 2 });
     }
     const started = Date.now();
+    const cycleDeadline = started + 3 * 60_000;
     for (const group of batch) schedules[group.id] = started + INFLIGHT_MS;
     await chrome.storage.local.set({ schedules });
-    // Up to PARALLEL_SCRAPE tabs at once (1 while throttled), staggered; remaining due groups queue in the same cycle.
+    // Up to PARALLEL_SCRAPE tabs at once (1 while throttled/coverage), staggered; remaining due groups wait for the next wake.
     const settled = await mapPool(batch, parallel, async (group, index) => {
+      if (Date.now() >= cycleDeadline) return { group, result: { ok: false, message: "yield", nextRunAt: Date.now() + 1000, skipped: true } };
       if (index > 0) await sleep(1200 * Math.min(index, Math.max(1, parallel)));
       if (await quietReason(remote.quiet)) return { group, result: { ok: false, message: "quiet", nextRunAt: Date.now() + 60_000 } };
       const result = await scrapeGroup(cfg, group, remote);
@@ -1144,13 +1425,22 @@ async function cycle() {
         ? Math.min(result.nextRunAt, Date.now() + 180 * 60 * 1000)
         : Date.now() + interval * 60 * 1000;
     }
-    await chrome.storage.local.set({ schedules });
+    const lastDone = [...settled].reverse().find((row) => row && row.group && row.group.id && !row.result?.skipped);
+    await chrome.storage.local.set({
+      schedules,
+      ...(lastDone ? { cycleCursor: lastDone.group.id } : {}),
+      readingStatus: null,
+    });
+    await pruneContinuations(cfg, remote.groups || []);
     // Detail reads run after discovery with a smaller budget when Chrome just throttled.
-    if (!await quietReason(remote.quiet)) {
+    if (Date.now() < cycleDeadline && !await quietReason(remote.quiet)) {
+      await setReadingStatus({ groupId: "", groupName: "อ่านข้อความเต็ม", phase: "detail", startedAt: Date.now() });
+      void heartbeat();
       await processFullTextQueue(cfg, remote.groups || [], {
-        budgetMs: recentlyThrottled ? 20_000 : 60_000,
-        maxItems: recentlyThrottled ? 4 : 10,
+        budgetMs: throttle === "hard" ? 20_000 : throttle === "soft" ? 40_000 : 60_000,
+        maxItems: throttle === "hard" ? 4 : throttle === "soft" ? 7 : 10,
       });
+      await setReadingStatus(null);
     }
     await scheduleDueWake(remote.groups || [], schedules);
   } catch (error) {
@@ -1171,8 +1461,9 @@ async function scheduleDueWake(groups, schedules) {
     const fromLocal = schedules && schedules[group.id] ? Number(schedules[group.id]) : NaN;
     const fromServer = Date.parse(group.nextRunAt || "");
     // Prefer fresh local schedules from this cycle; fall back to server nextRunAt.
-    const at = Number.isFinite(fromLocal) && fromLocal > now ? fromLocal : fromServer;
-    if (Number.isFinite(at) && at > now && at < soonest) soonest = at;
+    const at = Number.isFinite(fromLocal) ? fromLocal : fromServer;
+    if (Number.isFinite(at) && at < soonest) soonest = Math.max(at, now + 1000);
+    else if (!Number.isFinite(at)) soonest = Math.min(soonest, now + 1000);
   }
   await chrome.alarms.clear(DUE_ALARM).catch(() => undefined);
   if (!Number.isFinite(soonest) || soonest === Infinity) return;

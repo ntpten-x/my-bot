@@ -48,9 +48,13 @@ describe("priority + adaptive scheduling", () => {
 
   it("flags hitLimit without reaching known posts as incomplete coverage", () => {
     expect(isIncompleteScrape({ ok: true, postsFound: 9, stoppedBy: "limit", hitLimit: true, reachedKnown: false })).toBe(true);
-    expect(isIncompleteScrape({ ok: true, postsFound: 9, stoppedBy: "limit", hitLimit: true, reachedKnown: true })).toBe(false);
+    expect(isIncompleteScrape({ ok: true, postsFound: 9, stoppedBy: "limit", hitLimit: true, reachedKnown: true })).toBe(true);
     expect(isIncompleteScrape({ ok: true, postsFound: 9, stoppedBy: "seen", hitLimit: false, reachedKnown: true })).toBe(false);
     expect(nextAdaptiveInterval({ current: 10, base: 10, newPosts: 4, ok: true, incomplete: true })).toBe(7);
+  });
+
+  it.each(["cap", "limit", "screens", "yield", "loading", "stalled"])("keeps %s incomplete even when posts were already found", stoppedBy => {
+    expect(isIncompleteScrape({ ok: true, postsFound: 200, stoppedBy, reachedKnown: true })).toBe(true);
   });
 
   it("schedules with bounded jitter and orders due sources by priority", () => {

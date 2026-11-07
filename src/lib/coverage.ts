@@ -56,8 +56,8 @@ export function assessCoverage(input: {
   }
   const errors = day.filter((run) => !run.ok).length;
   if (errors >= 2 && errors >= day.length / 2) raise("warn", `อ่านผิดพลาด ${errors} จาก ${day.length} รอบใน 24 ชม.`);
-  const limited = normal.filter((run) => run.hitLimit && !run.reachedKnown).length;
-  if (limited) raise("warn", `${limited} รอบเลื่อนจนสุดขีดจำกัดแต่ยังไม่ถึงโพสต์ที่เก็บแล้ว`);
+  const limited = normal.filter((run) => run.hitLimit || ["cap", "limit", "screens", "yield", "loading", "stalled"].includes(run.stoppedBy)).length;
+  if (limited) raise("warn", `${limited} รอบยังอ่านไม่ครบหรือรออ่านต่อ`);
   const thin = normal.filter((run) => run.found <= 1 && run.stoppedBy === "end").length;
   if (thin >= 2 && thin >= normal.length / 2) raise("warn", `${thin} รอบเห็นแค่ ≤1 โพสต์ — หน้าเพจในแท็บพื้นหลังอาจโหลดไม่ขึ้น`);
   const stalled = normal.filter((run) => run.stalls >= 3).length;
@@ -66,10 +66,10 @@ export function assessCoverage(input: {
   const missed = audit ? audit.inserted : null;
   if (missed !== null && missed > 0) raise(missed >= 3 ? "bad" : "warn", `ตรวจความครบล่าสุดเจอโพสต์ที่ตกหล่น ${missed} โพสต์`);
 
-  const withKnown = normal.filter((run) => run.reachedKnown).length;
+  const withKnown = normal.filter((run) => !run.hitLimit && (run.reachedKnown || ["end", "exhausted", "old"].includes(run.stoppedBy))).length;
   const pct = normal.length ? Math.round((withKnown / normal.length) * 100) : null;
   if (input.hasStoredPosts && normal.length >= 3 && pct !== null && pct < 50 && !limited) {
-    raise("warn", `มีแค่ ${pct}% ของรอบที่เลื่อนจนเจอโพสต์ที่เก็บแล้ว`);
+    raise("warn", `มีแค่ ${pct}% ของรอบที่อ่านถึงขอบเขตเดิมหรือไม่พบโพสต์เพิ่ม`);
   }
   if (!input.runs.length && level === "ok") level = "unknown";
   return { level, label: LABEL[level], reasons, runs: day.length, reachedKnownPct: pct, missedInAudit: missed };

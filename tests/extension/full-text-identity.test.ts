@@ -26,13 +26,21 @@ it("discovers every due group with bounded parallelism then drains detail work o
  chrome:{storage:{local:{get:async(d:object)=>({...d,outboxBlocked:false,fbIdentity:null,throttledAt:0}),set:async()=>{}}}},
  loadConfig:async()=>({token:"synthetic",paused:false,schedules:{}}),takeRunLock:async()=>true,releaseRunLock:async()=>{},
  probeFacebookIdentity:async()=>null,
+ currentFbUserId:async()=>"",base:()=>"server",pruneContinuations:async()=>{},recoveryKey:()=>"synthetic",
  getJson:async()=>({ok:true,json:async()=>({groups:[{id:"a"},{id:"b"}],maxGroupsPerCycle:20,jitterMinutes:0})}),
  quietReason:async()=>"",setQuiet:async()=>{},loadFullTextBacklog:async()=>({}),sleep:async()=>{},rememberError:async()=>{},
+ setReadingStatus:async()=>{},heartbeat:async()=>{},
  scrapeGroup:async(_cfg:unknown,g:{id:string})=>{events.push(`feed:${g.id}`);return {}},
  processFullTextQueue:async()=>{events.push("detail:tail")},
  scheduleDueWake:async()=>{},
  globalThis:{},
- MyBotScrape:{prioritizeCoverageDue:(groups:{id:string}[])=>groups,cycleParallel:()=>2}});
+ MyBotScrape:{
+   prioritizeCoverageDue:(groups:{id:string}[])=>groups,
+   orderDueGroups:(groups:{id:string}[])=>groups,
+   throttleLevel:()=>"none",
+   cycleBatchLimit:(opts:{limit?:number})=>opts.limit||20,
+   cycleParallel:()=>2,
+ }});
  context.globalThis=context;
  vm.runInContext(source.slice(source.indexOf("async function cycle()"),source.indexOf("const DUE_ALARM")),context);
  await vm.runInContext("cycle()",context);

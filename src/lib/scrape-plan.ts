@@ -28,7 +28,8 @@ export function isIncompleteScrape(input: {
 }) {
   if (!input.ok) return false;
   const stop = String(input.stoppedBy || "");
-  if (stop === "seen" || stop === "old" || stop === "cap") return false;
+  if (["cap", "limit", "screens", "loading", "stalled", "yield"].includes(stop)) return true;
+  if (stop === "seen" || stop === "old" || stop === "exhausted") return false;
   // Used the scroll/time budget before meeting known posts → coverage was cut short.
   if (input.hitLimit && !input.reachedKnown) return true;
   if ((stop === "end" || stop === "limit" || !stop) && input.postsFound < SHALLOW_FOUND) return true;

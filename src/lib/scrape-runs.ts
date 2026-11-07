@@ -13,23 +13,29 @@ import {
   sortDue,
 } from "./scrape-plan";
 import {
-  REFETCH_BACKOFF_MS,
   REFETCH_MAX_ATTEMPTS,
   REFETCH_PER_SOURCE,
   buildKnownHints,
   mergeRefetchUrls,
   pickRefetchFromPool,
   rankRefetch,
+  type HintPostRow,
 } from "./scrape-hints";
 
 export const STOP_REASON_LABEL: Record<string, string> = {
   seen: "เจอโพสต์ที่เก็บแล้ว",
   old: "เจอโพสต์เก่าเกินกำหนด",
   cap: "ครบจำนวนต่อรอบ",
-  end: "ไม่มีโพสต์เพิ่ม",
+  end: "ไม่พบโพสต์เพิ่มในรอบอ่าน",
+  exhausted: "ไม่พบโพสต์เพิ่มหลังตรวจซ้ำ",
   screens: "เลื่อนครบตามที่ตั้ง",
   limit: "เลื่อนครบขีดจำกัดรอบนี้",
   error: "ผิดพลาด",
+  loading: "ฟีดยังโหลดอยู่ — รออ่านต่อ",
+  stalled: "ฟีดไม่คืบหน้าหลังลองกู้คืน — รอลองใหม่",
+  yield: "พักให้กลุ่มอื่นแล้วกลับมาอ่านต่อ",
+  logged_out: "ต้องเข้าสู่ระบบ Facebook ใหม่",
+  checkpoint: "Facebook ขอให้เจ้าของตรวจสอบบัญชี",
 };
 
 export { REFETCH_PER_SOURCE, REFETCH_MAX_ATTEMPTS, rankRefetch };
@@ -43,11 +49,19 @@ export type ReaderRun = {
   fullOk: number;
   durationMs: number;
   extVersion?: string;
+  found?: number;
+  fresh?: number;
+  inserted?: number;
+  stoppedBy?: string;
+  hitLimit?: boolean;
+  ok?: boolean;
 };
 
 /** Pure: 24 h health of the background reader window (minimized legacy or offscreen). */
 export function summarizeReaderRuns(runs: ReaderRun[]) {
   const background = runs.filter((run) => run.windowState === "minimized" || run.windowState === "offscreen");
+  const fresh = runs.reduce((sum, run) => sum + (run.fresh || 0), 0);
+  const durationMs = runs.reduce((sum, run) => sum + run.durationMs, 0);
   return {
     total: runs.length,
     minimized: background.length,
@@ -58,6 +72,11 @@ export function summarizeReaderRuns(runs: ReaderRun[]) {
     fullTried: runs.reduce((sum, run) => sum + run.fullTried, 0),
     fullOk: runs.reduce((sum, run) => sum + run.fullOk, 0),
     avgSeconds: runs.length ? Math.round(runs.reduce((sum, run) => sum + run.durationMs, 0) / runs.length / 1000) : 0,
+    fresh,
+    inserted: runs.reduce((sum, run) => sum + (run.inserted || 0), 0),
+    freshPerMinute: durationMs > 0 ? Math.round(fresh * 60_000 / durationMs * 10) / 10 : 0,
+    incomplete: runs.filter(run => isIncompleteScrape({ ok: run.ok !== false, postsFound: run.found || 0, stoppedBy: run.stoppedBy || "", hitLimit: run.hitLimit })).length,
+    errors: runs.filter(run => run.ok === false).length,
   };
 }
 
@@ -69,25 +88,34 @@ export async function readerHealth(now = new Date(), extVersion?: string) {
       createdAt: { gte: new Date(now.getTime() - 24 * 3600_000) },
       ...(version ? { extVersion: version } : { extVersion: { not: "" } }),
     },
-    select: { windowState: true, stalls: true, reloaded: true, throttled: true, fullTried: true, fullOk: true, durationMs: true, extVersion: true },
+    select: { windowState: true, stalls: true, reloaded: true, throttled: true, fullTried: true, fullOk: true, durationMs: true, extVersion: true, found: true, fresh: true, inserted: true, stoppedBy: true, hitLimit: true, ok: true },
   });
   return { ...summarizeReaderRuns(runs), extVersion: version };
 }
 
-/** One batched knownKeys + refetch load for the due sources about to open this cycle. */
+/** Bounded known-key queries plus one refetch pool; selecting hints does not count as an attempt. */
 async function loadHintsForDue(sourceIds: string[], since: Date, now: Date) {
   const hints = new Map<string, { keys: string[]; lastSeenAt: string | null; refetch: string[] }>();
   if (!sourceIds.length) return hints;
 
-  const rows = await prisma.post.findMany({
-    where: {
-      sourceId: { in: sourceIds },
-      OR: [{ postedAt: { gte: since } }, { postedAt: null, createdAt: { gte: since } }],
-    },
-    orderBy: [{ postedAt: "desc" }, { createdAt: "desc" }],
-    select: { sourceId: true, externalUrl: true, postedAt: true, createdAt: true, text: true },
-  });
-  const known = buildKnownHints(sourceIds, rows, now);
+  const rows: HintPostRow[] = [];
+  let cursor = 0;
+  // Bound rows and concurrent queries; a busy source cannot consume other sources' hints.
+  await Promise.all(Array.from({ length: Math.min(4, sourceIds.length) }, async () => {
+    while (cursor < sourceIds.length) {
+      const id = sourceIds[cursor++];
+      rows.push(...await prisma.post.findMany({
+        where: {
+          sourceId: id,
+          OR: [{ postedAt: { gte: since } }, { postedAt: null, createdAt: { gte: since } }],
+        },
+        orderBy: [{ postedAt: "desc" }, { createdAt: "desc" }],
+        take: 300,
+        select: { sourceId: true, externalUrl: true, postedAt: true, createdAt: true, text: true },
+      }));
+    }
+  }));
+  const known = buildKnownHints(sourceIds, rows);
 
   const pool = await prisma.post.findMany({
     where: {
@@ -103,21 +131,8 @@ async function loadHintsForDue(sourceIds: string[], since: Date, now: Date) {
   });
   const refetchBySource = pickRefetchFromPool(sourceIds, pool, now);
 
-  const bumpIds: { id: string; attempts: number }[] = [];
-  for (const id of sourceIds) {
-    const urls = new Set(refetchBySource.get(id) ?? []);
-    for (const row of pool) {
-      if (row.sourceId === id && urls.has(row.externalUrl)) bumpIds.push({ id: row.id, attempts: row.refetchAttempts });
-    }
-  }
-  const byAttempts = new Map<number, string[]>();
-  for (const row of bumpIds) byAttempts.set(row.attempts, [...(byAttempts.get(row.attempts) ?? []), row.id]);
-  for (const [attempts, ids] of byAttempts) {
-    await prisma.post.updateMany({
-      where: { id: { in: ids } },
-      data: { refetchAttempts: attempts + 1, refetchAfter: new Date(now.getTime() + REFETCH_BACKOFF_MS * (attempts + 1)) },
-    });
-  }
+  // Actual retries/backoff belong to the extension's durable full-text queue.
+  // A config poll must not exhaust attempts for groups that never got a reader slot.
 
   for (const id of sourceIds) {
     const base = known.get(id) ?? { keys: [], lastSeenAt: null, legacyTruncated: [] };
@@ -138,10 +153,10 @@ export async function buildExtensionConfig(now = new Date()) {
   });
   const due = sortDue(sources.filter((source) => isDue(source, now.getTime())));
   const ordered = [...due, ...sources.filter((source) => !due.includes(source))];
-  // Keep keys for the ingest window (≤24 h) so catch-up / sweeps stop on known posts.
+  // Keep dedupe keys for the configured ingest window (≤24 h), including rotated due groups.
   const ageHours = Math.min(24, Math.max(1, settings.maxPostAgeHours));
   const since = new Date(now.getTime() - ageHours * 3600_000);
-  const hintIds = due.slice(0, settings.maxGroupsPerCycle + 2).map((source) => source.id);
+  const hintIds = due.map((source) => source.id);
   const hints = await loadHintsForDue(hintIds, since, now);
   return {
     groups: ordered.map((source) => {
@@ -151,8 +166,8 @@ export async function buildExtensionConfig(now = new Date()) {
         ok: source.lastRunStop !== "error",
         postsFound: source.lastRunFound,
         stoppedBy: source.lastRunStop || "",
-        hitLimit: source.lastRunStop === "limit",
-        reachedKnown: source.lastRunStop === "seen" || source.lastRunStop === "old" || source.lastRunStop === "cap",
+        hitLimit: ["limit", "cap", "loading", "stalled", "yield"].includes(source.lastRunStop || ""),
+        reachedKnown: source.lastRunStop === "seen" || source.lastRunStop === "old",
       });
       return {
         id: source.id,
@@ -237,8 +252,10 @@ export async function recordScrapeRun(input: ScrapeRunInput, now = new Date(), r
     ok: input.ok,
     incomplete,
   });
-  const nextRunAt = nextRunAfter(now, interval, settings.jitterMinutes, random);
-  const stop = input.ok ? input.stoppedBy : "error";
+  // A productive slice is a continuation, not a new poll. Loading/stalls retain normal backoff.
+  const continuing = input.ok && incomplete && ["cap", "limit", "screens", "yield"].includes(input.stoppedBy);
+  const nextRunAt = nextRunAfter(now, continuing ? 0.5 : interval, continuing ? 0 : settings.jitterMinutes, random);
+  const stop = input.ok || ["logged_out", "checkpoint"].includes(input.stoppedBy) ? input.stoppedBy : "error";
   await prisma.source.update({
     where: { id: source.id },
     data: {
@@ -289,7 +306,7 @@ export async function recordScrapeRun(input: ScrapeRunInput, now = new Date(), r
       sourceId: source.id,
       status: input.ok ? "ok" : "error",
       message: input.ok
-        ? `${prefix}เห็น ${input.postsFound} ใหม่ ${input.newPosts} · เลื่อน ${input.scrolls} หน้าจอ · หยุดเพราะ${reason} · รอบหน้าอีก ~${interval} นาที${flags ? ` · ${flags}` : ""}`
+        ? `${prefix}เห็น ${input.postsFound} ใหม่ ${input.newPosts} · เลื่อน ${input.scrolls} หน้าจอ · หยุดเพราะ${reason} · ${continuing ? "อ่านต่อใน ~30 วินาที" : `รอบหน้าอีก ~${interval} นาที`}${flags ? ` · ${flags}` : ""}`
         : (input.message || "ดึงไม่สำเร็จ").slice(0, 500),
       postsFound: input.ok ? input.newPosts : 0,
     },

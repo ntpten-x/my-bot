@@ -22,7 +22,7 @@ describe("buildKnownHints", () => {
         text: "ขาย… ดูเพิ่มเติม",
       },
     ];
-    const hints = buildKnownHints(["a", "b", "c"], rows, now);
+    const hints = buildKnownHints(["a", "b", "c"], rows);
     expect(hints.get("a")?.keys).toEqual(["p:1000", "p:1001", "p:1002", "p:1003", "p:1004"]);
     expect(hints.get("a")?.lastSeenAt).toBe(new Date(since.getTime() + 4 * 60_000).toISOString());
     expect(hints.get("b")?.keys).toEqual(["mp:55"]);
@@ -37,7 +37,7 @@ describe("buildKnownHints", () => {
       createdAt: since,
       text: "x",
     }));
-    const hints = buildKnownHints(["a"], rows, now);
+    const hints = buildKnownHints(["a"], rows);
     expect(hints.get("a")?.keys).toHaveLength(300);
   });
 });

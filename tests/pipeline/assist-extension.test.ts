@@ -151,7 +151,7 @@ describe("extension safety policy", () => {
       commands: Record<string, { suggested_key?: { default?: string } }>;
       permissions: string[];
     };
-    expect(manifest.version).toBe("1.10.19");
+    expect(manifest.version).toBe("1.11.0");
     expect(manifest.permissions).not.toContain("cookies");
     expect(manifest.permissions).not.toContain("webRequest");
     expect(Object.keys(manifest.commands).sort()).toEqual(["mark-sent", "mark-skip"]);
@@ -193,17 +193,21 @@ describe("extension safety policy", () => {
     // Read raw: the comment-strip helper treats /* inside template strings as block comments.
     const raw = readFileSync(path.join(ext, "background.js"), "utf8");
     expect(raw).toMatch(/feedBudgetMs\(plan,\s*pass\)/);
-    expect(raw).toMatch(/hitLimit\s*&&\s*!.*reachedKnownPost/);
+    expect(raw).toMatch(/saveContinuation/);
     expect(raw).toMatch(/cycleParallel/);
     expect(raw).toMatch(/shouldAbortDeadFeed/);
     expect(raw).toMatch(/postWakeSettleMs/);
     expect(raw).toMatch(/shouldHoldForeground/);
     expect(raw).toMatch(/withReaderForeground/);
     expect(raw).toMatch(/heldForeground/);
-    expect(raw).toMatch(/prioritizeCoverageDue/);
+    expect(raw).toMatch(/orderDueGroups/);
+    expect(raw).toMatch(/cycleBatchLimit/);
+    expect(raw).toMatch(/throttleLevel/);
+    expect(raw).toMatch(/readingStatus/);
+    expect(raw).toMatch(/cycleCursor/);
     expect(raw).toMatch(/wakeReaderTab/);
     expect(raw).toMatch(/PARALLEL_SCRAPE\s*=\s*2/);
-    expect(raw).toMatch(/isShallowRun/);
+    expect(raw).toMatch(/loadContinuation/);
     expect(raw).toMatch(/state:\s*["']normal["']/); // restore minimized without left/top bounds
     expect(code("scrape.js")).toMatch(/COLD_EMPTY_STREAK/);
     expect(code("scrape.js")).toMatch(/needsCoverage/);
@@ -212,6 +216,8 @@ describe("extension safety policy", () => {
     expect(code("scrape.js")).toMatch(/scrollBudget/);
     expect(code("scrape.js")).toMatch(/shouldAbortDeadFeed/);
     expect(code("scrape.js")).toMatch(/cycleParallel/);
+    expect(code("scrape.js")).toMatch(/cycleBatchLimit/);
+    expect(code("scrape.js")).toMatch(/orderDueGroups/);
     expect(code("scrape.js")).toMatch(/shouldKeepAwake/);
     expect(code("scrape.js")).toMatch(/shouldHoldForeground/);
     expect(code("scrape.js")).toMatch(/prioritizeCoverageDue/);

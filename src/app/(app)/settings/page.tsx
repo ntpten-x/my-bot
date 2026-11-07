@@ -219,11 +219,11 @@ export default function SettingsPage() {
               <Input type="number" min={0} max={30} value={settings.jitterMinutes} onChange={(event) => setSettings({ ...settings, jitterMinutes: Number(event.target.value) })} />
             </div>
             <div>
-              <Label>กลุ่มสูงสุดต่อรอบ (ดึงพร้อมกัน)</Label>
+              <Label>กลุ่มสูงสุดที่จัดคิวต่อรอบ</Label>
               <Input type="number" min={1} max={20} value={settings.maxGroupsPerCycle} onChange={(event) => setSettings({ ...settings, maxGroupsPerCycle: Number(event.target.value) })} />
             </div>
             <div>
-              <Label>ความลึกเลื่อนต่อกลุ่ม (0–10 → 10–30 จอ)</Label>
+              <Label>ความลึกก่อนสลับกลุ่ม (0–10 → 10–30 จอ)</Label>
               <Input type="number" min={0} max={10} value={settings.scrollScreens} onChange={(event) => setSettings({ ...settings, scrollScreens: Number(event.target.value) })} />
             </div>
             <div>
@@ -231,11 +231,11 @@ export default function SettingsPage() {
               <Input type="number" min={1} max={24} value={settings.maxPostAgeHours} onChange={(event) => setSettings({ ...settings, maxPostAgeHours: Number(event.target.value) })} />
             </div>
             <div>
-              <Label>โพสต์สูงสุดต่อรอบ (5–200)</Label>
+              <Label>โพสต์ต่อชุดบันทึก (5–200)</Label>
               <Input type="number" min={5} max={200} value={settings.maxPostsPerRun} onChange={(event) => setSettings({ ...settings, maxPostsPerRun: Number(event.target.value) })} />
             </div>
           </div>
-          <p className="text-sm text-muted">“ทุกกี่นาที” คือค่าเริ่มต้นของกลุ่มใหม่ที่ความสำคัญปกติ (สูง 3 · ปกติ 10 · ต่ำ 30 นาที ปรับรายกลุ่มได้ที่หน้าแหล่งข้อมูล) ระบบปรับรอบเองตามจำนวนโพสต์ใหม่ที่เห็น: เจอเยอะ → ถี่ขึ้น (ต่ำสุด 2 นาที) · ไม่เจอ → ห่างขึ้น (สูงสุด 3 เท่า) · รอบไม่ครบ (ชนขีดเลื่อนก่อนเจอโพสต์เดิม) → ถี่ขึ้น ส่วนขยายอ่านคู่ขนานได้สูงสุด 2 แท็บ (เหลือ 1 ถ้า Chrome หน่วงล่าสุด) เลื่อนอ่านอย่างเดียว ไม่กดอะไรบนหน้า Facebook และหยุดเมื่อเจอโพสต์ที่เคยเก็บแล้วหรือเก่าเกินกำหนด</p>
+          <p className="text-sm text-muted">“ทุกกี่นาที” คือรอบตรวจโพสต์ใหม่ของกลุ่ม (สูง 3 · ปกติ 10 · ต่ำ 30 นาที ปรับรายกลุ่มได้ที่หน้าแหล่งข้อมูล) เจอเยอะจะตรวจถี่ขึ้น ไม่เจอจะเว้นระยะ เมื่อครบชุดจะบันทึกแล้วอ่านต่อ ถ้าครบความลึกหรือเวลาจะพักให้กลุ่มอื่นและกลับมาต่อจากแท็บเดิมโดยนัดไว้ประมาณ 30 วินาที แต่อาจรอคิวกลุ่มอื่น โหมดตามเก็บไม่หยุดเพราะเจอโพสต์เดิมด้านบน ระบบอ่านพร้อมกันสูงสุด 2 แท็บ และเหลือ 1 ระหว่างกู้ฟีดหรือตามเก็บ เปิด Chrome และเข้าสู่ระบบ Facebook ค้างไว้ การพักทำงานยังใช้ตามที่คุณตั้งไว้</p>
         </Card>
         <Card className="space-y-3">
           <h2 className="font-semibold">โทเคนส่วนขยาย (แบบเดิม · ใช้ได้เฉพาะ localhost)</h2>

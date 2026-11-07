@@ -32,7 +32,7 @@ export type KnownHint = {
 };
 
 /** Pure: group a batched post query into per-source knownKeys / lastSeen / legacy truncated URLs. */
-export function buildKnownHints(sourceIds: string[], rows: HintPostRow[], _now = new Date()): Map<string, KnownHint> {
+export function buildKnownHints(sourceIds: string[], rows: HintPostRow[]): Map<string, KnownHint> {
   const hints = new Map<string, KnownHint>();
   for (const id of sourceIds) hints.set(id, { keys: [], lastSeenAt: null, legacyTruncated: [] });
   const counts = new Map<string, number>();

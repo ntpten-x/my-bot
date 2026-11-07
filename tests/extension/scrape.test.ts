@@ -15,7 +15,11 @@ const scrape = require(path.resolve(__dirname, "../../extension/scrape.js")) as 
   feedBudgetMs(plan: { maxScrolls?: number }, pass: number): number;
   shouldAbortDeadFeed(run: Run & { stalls?: number; steps?: number; mode?: string }): boolean;
   postWakeSettleMs(plan: { mode?: string }, pass: number): number;
-  cycleParallel(input: { recentlyThrottled?: boolean; batch?: Array<{ needsCoverage?: boolean }>; defaultParallel?: number }): number;
+  throttleLevel(throttledAt?: number, now?: number): "none" | "hard" | "soft";
+  cycleBatchLimit(input: { limit?: number; throttleLevel?: string; needsCoverageDue?: boolean; throttledAt?: number; now?: number }): number;
+  cycleParallel(input: { recentlyThrottled?: boolean; throttleLevel?: string; batch?: Array<{ needsCoverage?: boolean }>; defaultParallel?: number }): number;
+  rotateDue<T extends { id?: string }>(groups: T[], cursorId?: string): T[];
+  orderDueGroups<T extends { id?: string; needsCoverage?: boolean }>(groups: T[], options?: { cursorId?: string }): T[];
   shouldKeepAwake(plan: { mode?: string }, group: { needsCoverage?: boolean }): boolean;
   shouldHoldForeground(plan: { mode?: string }, group: { needsCoverage?: boolean }): boolean;
   shouldPulseWake(input: { keepAwake?: boolean; holdForeground?: boolean; found?: number; steps?: number }): boolean;
@@ -73,9 +77,9 @@ describe("scroll scrape plan (extension/scrape.js)", () => {
     expect(scrape.addStep(run, [post(1), post(2), post(3)])).toBe("");
     expect(scrape.addStep(run, [post(4), post(5), post(6)])).toBe("");
     expect(scrape.addStep(run, [post(7), post(8)])).toBe("");
-    expect(scrape.addStep(run, [post(9), post(10)])).toBe("seen");
-    expect(run.fresh.map((p) => scrape.postKey(p.url))).toEqual(["p:2", "p:3", "p:4", "p:5", "p:6"]);
-    expect(scrape.runStats(run)).toMatchObject({ reachedKnownPost: true, hitLimit: false, newCount: 5, scrolls: 3 });
+    expect(scrape.addStep(run, [post(9), post(10)])).toBe("");
+    expect(run.fresh.map((p) => scrape.postKey(p.url))).toEqual(["p:2", "p:3", "p:4", "p:5", "p:6", "p:10"]);
+    expect(scrape.runStats(run)).toMatchObject({ reachedKnownPost: false, hitLimit: false, newCount: 6, scrolls: 3 });
   });
 
   it("a known post between new ones resets the streak", () => {
@@ -99,7 +103,8 @@ describe("scroll scrape plan (extension/scrape.js)", () => {
     expect(run.fresh).toHaveLength(60);
     const capped = scrape.createRun({ now: NOW });
     expect(scrape.addStep(capped, Array.from({ length: 250 }, (_, i) => post(i + 1)))).toBe("cap");
-    expect(capped.fresh).toHaveLength(200);
+    // A batch signal never drops the remainder of a DOM snapshot.
+    expect(capped.fresh).toHaveLength(250);
     expect(scrape.runStats(capped)).toMatchObject({ hitLimit: true, reachedKnownPost: false });
   });
 
@@ -136,7 +141,7 @@ describe("scroll scrape plan (extension/scrape.js)", () => {
     expect(scrape.planRun({ now: NOW, group: { lastFetchedAt: recent, intervalMinutes: 15 }, lastSweepAt: NOW - 61 * 60_000 })).toMatchObject({ mode: "sweep", maxScrolls: 30, maxAgeMs: 24 * 3600_000 });
     // Chrome was closed for 30 h: still capped at 24 h (owner rule).
     const closed = scrape.planRun({ now: NOW, group: { lastFetchedAt: new Date(NOW - 30 * 3600_000).toISOString(), lastSeenAt: new Date(NOW - 31 * 3600_000).toISOString() } });
-    expect(closed).toMatchObject({ mode: "catchup", maxScrolls: 30, knownStreak: 3 });
+    expect(closed).toMatchObject({ mode: "catchup", maxScrolls: 30, knownStreak: Infinity });
     expect(closed.maxAgeMs).toBe(24 * 3600_000);
     const week = scrape.planRun({ now: NOW, group: { lastFetchedAt: new Date(NOW - 7 * 24 * 3600_000).toISOString() } });
     expect(week.maxAgeMs).toBe(24 * 3600_000);
@@ -164,6 +169,9 @@ describe("scroll scrape plan (extension/scrape.js)", () => {
       settings: scrape.scrapeSettings({ scrollScreens: 10, maxPostsPerRun: 80 }),
     });
     expect(deep).toMatchObject({ mode: "catchup", maxScrolls: 30, maxPosts: 80 });
+    const shortWindow = scrape.scrapeSettings({maxAgeHours:1});
+    expect(scrape.planRun({now:NOW,group:{needsCoverage:true},settings:shortWindow}).maxAgeMs).toBe(3600_000);
+    expect(scrape.planRun({now:NOW,audit:true,settings:shortWindow}).maxAgeMs).toBe(3600_000);
   });
 
   it("scales feed time budget with scroll depth and retry pass", () => {
@@ -194,10 +202,23 @@ describe("scroll scrape plan (extension/scrape.js)", () => {
     expect(scrape.postWakeSettleMs({ mode: "catchup" }, 2)).toBeGreaterThanOrEqual(5000);
   });
 
-  it("forces single-tab parallel when any due group needs coverage", () => {
+  it("forces single-tab parallel when hard-throttled or any due group needs coverage", () => {
     expect(scrape.cycleParallel({ recentlyThrottled: false, batch: [{ needsCoverage: false }], defaultParallel: 2 })).toBe(2);
     expect(scrape.cycleParallel({ recentlyThrottled: false, batch: [{ needsCoverage: true }, { needsCoverage: false }], defaultParallel: 2 })).toBe(1);
     expect(scrape.cycleParallel({ recentlyThrottled: true, batch: [], defaultParallel: 2 })).toBe(1);
+    expect(scrape.cycleParallel({ throttleLevel: "soft", batch: [{ needsCoverage: false }], defaultParallel: 2 })).toBe(1);
+  });
+
+  it("softens batch size after throttle instead of capping at 2 for 30 minutes", () => {
+    const now = Date.now();
+    expect(scrape.throttleLevel(now - 60_000, now)).toBe("hard");
+    expect(scrape.throttleLevel(now - 6 * 60_000, now)).toBe("soft");
+    expect(scrape.throttleLevel(now - 20 * 60_000, now)).toBe("none");
+    expect(scrape.cycleBatchLimit({ limit: 20, throttleLevel: "hard" })).toBe(3);
+    expect(scrape.cycleBatchLimit({ limit: 20, throttleLevel: "soft", needsCoverageDue: false })).toBe(6);
+    expect(scrape.cycleBatchLimit({ limit: 20, throttleLevel: "soft", needsCoverageDue: true })).toBe(4);
+    expect(scrape.cycleBatchLimit({ limit: 20, throttleLevel: "none", needsCoverageDue: true })).toBe(6);
+    expect(scrape.cycleBatchLimit({ limit: 20, throttleLevel: "none" })).toBe(20);
   });
 
   it("keeps the reader awake for deep / needsCoverage runs and pulses while thin", () => {
@@ -228,11 +249,29 @@ describe("scroll scrape plan (extension/scrape.js)", () => {
     expect(ordered.map((g) => g.id)).toEqual(["b", "d", "a", "c"]);
   });
 
+  it("round-robins due groups after the last finished cursor", () => {
+    expect(scrape.rotateDue([{ id: "a" }, { id: "b" }, { id: "c" }], "a").map((g) => g.id)).toEqual(["b", "c", "a"]);
+    expect(
+      scrape
+        .orderDueGroups(
+          [
+            { id: "a", needsCoverage: false },
+            { id: "b", needsCoverage: true },
+            { id: "c", needsCoverage: false },
+            { id: "d", needsCoverage: true },
+          ],
+          { cursorId: "b" },
+        )
+        .map((g) => g.id),
+    ).toEqual(["d", "b", "a", "c"]);
+  });
+
   it("catch-up stops on posts older than 24 h instead of reading further back", () => {
     const plan = scrape.planRun({ now: NOW, group: { lastFetchedAt: new Date(NOW - 40 * 3600_000).toISOString(), lastSeenAt: new Date(NOW - 41 * 3600_000).toISOString() } });
     const run = scrape.createRun({ knownKeys: ["p:8", "p:9", "p:10"], now: NOW, ...plan });
     expect(scrape.addStep(run, [post(1, 1), post(2, 10), post(3, 20)])).toBe("");
-    expect(scrape.addStep(run, [post(4, 25), post(5, 26), post(6, 27)])).toBe("old");
+    expect(scrape.addStep(run, [post(4, 25), post(5, 26), post(6, 27)])).toBe("");
+    expect(scrape.addStep(run, Array.from({length:9}, (_, i) => post(7+i,28+i)))).toBe("old");
     expect(run.fresh).toHaveLength(3);
   });
 

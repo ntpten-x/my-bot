@@ -42,4 +42,10 @@ describe("coverage indicator", () => {
     const c = assessCoverage({ ...base, runs: [run(5), run(90, { mode: "audit", inserted: 4, reachedKnown: false })], lastRunAt: NOW });
     expect(c).toMatchObject({ level: "bad", missedInAudit: 4 });
   });
+
+  it("accepts completed deep scans without known streaks and never calls a cap complete", () => {
+    const complete=[run(5,{mode:"catchup",stoppedBy:"exhausted",reachedKnown:false}),run(20,{mode:"sweep",stoppedBy:"old",reachedKnown:false}),run(35,{mode:"catchup",stoppedBy:"exhausted",reachedKnown:false})];
+    expect(assessCoverage({...base,runs:complete,lastRunAt:NOW}).level).toBe("ok");
+    expect(assessCoverage({...base,runs:[run(5,{stoppedBy:"cap",hitLimit:false})],lastRunAt:NOW}).level).toBe("warn");
+  });
 });

@@ -45,7 +45,7 @@
   }
 
   // Settings from /api/v1/extension-config, with safe defaults for older servers.
-  // maxPosts caps fresh posts per run; runs still stop early on known/old posts.
+  // maxPosts is the durable batch threshold; time/scroll budgets yield and retain the DOM cursor.
   function scrapeSettings(remote) {
     const source = remote || {};
     return {
@@ -79,8 +79,8 @@
   /**
    * Decide how deep one run goes.
    * - normal:  stop after KNOWN_STREAK consecutive known posts (max NORMAL_SCROLLS screens)
-   * - sweep:   once an hour per source, keep going past 8 known posts (max MAX_SCROLLS)
-   * - catchup: long gap, shallow last run, or first run → read back up to 24 h
+   * - sweep:   once an hour per source, ignore known posts and verify coverage
+   * - catchup: long gap, incomplete last run, or first run → read back up to 24 h, ignoring known head posts
    * - audit:   coverage check, never stops on known posts, reads up to 24 h back
    * Owner policy: every enabled group, every post within 24 h; then keep ingesting new ones.
    */
@@ -96,18 +96,18 @@
     const deepScrolls = Math.min(MAX_SCROLLS, Math.max(normalScrolls + 10, scrollBudget(MAX_SCREENS)));
     const maxPosts = clampInt(settings.maxPosts, MAX_POSTS_PER_RUN, 1, MAX_POSTS_PER_RUN);
     const base = { maxPosts, maxScrolls: normalScrolls, knownStreak: KNOWN_STREAK, maxAgeMs: Math.min(CATCHUP_MAX_MS, Math.max(settings.maxAgeMs, HOUR)) };
-    if (opts.audit) return { ...base, mode: "audit", maxScrolls: deepScrolls, knownStreak: Infinity, maxAgeMs: CATCHUP_MAX_MS };
+    if (opts.audit) return { ...base, mode: "audit", maxScrolls: deepScrolls, knownStreak: Infinity };
     // Server flagged the previous pass as thin — dig the full ≤24 h window again.
     if (group.needsCoverage) {
-      return { ...base, mode: "catchup", maxScrolls: deepScrolls, knownStreak: KNOWN_STREAK, maxAgeMs: CATCHUP_MAX_MS };
+      return { ...base, mode: "catchup", maxScrolls: deepScrolls, knownStreak: Infinity };
     }
     const gap = lastRun ? now - lastRun : Infinity;
     if (gap > Math.max(2 * HOUR, 3 * interval)) {
       const back = (lastSeen || lastRun) ? now - Math.min(lastSeen || now, lastRun || now) + HOUR : CATCHUP_MAX_MS;
-      return { ...base, mode: "catchup", maxScrolls: deepScrolls, knownStreak: KNOWN_STREAK, maxAgeMs: Math.min(CATCHUP_MAX_MS, Math.max(base.maxAgeMs, back)) };
+      return { ...base, mode: "catchup", maxScrolls: deepScrolls, knownStreak: Infinity, maxAgeMs: Math.min(base.maxAgeMs, Math.max(HOUR, back)) };
     }
     const lastSweep = Number(opts.lastSweepAt) || 0;
-    if (now - lastSweep >= SWEEP_EVERY_MS) return { ...base, mode: "sweep", maxScrolls: deepScrolls, knownStreak: SWEEP_STREAK, maxAgeMs: CATCHUP_MAX_MS };
+    if (now - lastSweep >= SWEEP_EVERY_MS) return { ...base, mode: "sweep", maxScrolls: deepScrolls, knownStreak: Infinity };
     return { ...base, mode: "normal" };
   }
 
@@ -144,7 +144,7 @@
     const deep = isDeepMode(run.mode);
     const stallLimit = deep ? 8 : 4;
     const stepLimit = deep ? 6 : 3;
-    return (run.stalls || 0) >= stallLimit && (run.steps || 0) >= stepLimit;
+    return (run.stalls || 0) - (run.stallStart || 0) >= stallLimit && (run.steps || 0) - (run.sliceStart || 0) >= stepLimit;
   }
 
   /** Settle after wake+reload before reading again. Deep retry waits longer for hydrate. */
@@ -154,13 +154,51 @@
     return 2800;
   }
 
-  /** Cycle concurrency: single tab while throttled or any due group needs coverage. */
+  /** Hard serial window after Chrome throttle; soft window still cautious; then normal. */
+  const THROTTLE_HARD_MS = 5 * 60 * 1000;
+  const THROTTLE_SOFT_MS = 15 * 60 * 1000;
+
+  function throttleLevel(throttledAt, now) {
+    const at = Number(throttledAt) || 0;
+    if (!at) return "none";
+    const age = (Number(now) || Date.now()) - at;
+    if (age < 0 || age >= THROTTLE_SOFT_MS) return "none";
+    if (age < THROTTLE_HARD_MS) return "hard";
+    return "soft";
+  }
+
+  /**
+   * How many due groups to take this cycle. Avoid the old "2 for 30 minutes" starvation —
+   * hard throttle still small, soft/coverage allow a wider round-robin slice.
+   */
+  function cycleBatchLimit(input) {
+    const opts = input || {};
+    const limit = Math.max(1, Math.floor(Number(opts.limit) || 20));
+    const level = opts.throttleLevel || throttleLevel(opts.throttledAt, opts.now);
+    if (level === "hard") return Math.min(limit, 3);
+    if (level === "soft") return Math.min(limit, opts.needsCoverageDue ? 4 : 6);
+    if (opts.needsCoverageDue) return Math.min(limit, 6);
+    return limit;
+  }
+
+  /** Cycle concurrency: single tab while hard-throttled or any due group needs coverage. */
   function cycleParallel(input) {
     const opts = input || {};
-    if (opts.recentlyThrottled) return 1;
+    const level = opts.throttleLevel || (opts.recentlyThrottled ? "hard" : "none");
+    if (level === "hard") return 1;
     if ((opts.batch || []).some((group) => group && group.needsCoverage)) return 1;
+    if (level === "soft") return 1;
     const fallback = Number(opts.defaultParallel);
     return Number.isFinite(fallback) && fallback > 0 ? Math.floor(fallback) : 2;
+  }
+
+  /** Rotate so the group after cursorId leads — stops one high-priority source from always going first. */
+  function rotateDue(groups, cursorId) {
+    const list = [...(groups || [])];
+    if (!cursorId || !list.length) return list;
+    const idx = list.findIndex((group) => group && group.id === cursorId);
+    if (idx < 0) return list;
+    return list.slice(idx + 1).concat(list.slice(0, idx + 1));
   }
 
   /** Deep / coverage recovery must unthrottle the reader tab — Facebook often paints 1 article otherwise. */
@@ -194,6 +232,28 @@
     return [...(groups || [])].sort((a, b) => Number(Boolean(b && b.needsCoverage)) - Number(Boolean(a && a.needsCoverage)));
   }
 
+  /**
+   * Coverage-needy first, then round-robin within each tier using the last finished group id.
+   * Keeps catch-up fair when many groups are overdue at once.
+   */
+  function orderDueGroups(groups, options) {
+    const opts = options || {};
+    // A source overdue by its own interval wins over repeated coverage recovery.
+    const now = opts.now || Date.now();
+    const aged = (groups || []).filter(group => {
+      const at = Date.parse(group.nextRunAt || "");
+      return Number.isFinite(at) && now - at >= Math.max(2, Number(group.intervalMinutes) || 10) * 60_000;
+    }).sort((a, b) => Date.parse(a.nextRunAt) - Date.parse(b.nextRunAt));
+    const agedIds = new Set(aged.map(group => group.id));
+    const ranked = prioritizeCoverageDue((groups || []).filter(group => !agedIds.has(group.id)));
+    const needy = ranked.filter((group) => group && group.needsCoverage);
+    const healthy = ranked.filter((group) => !(group && group.needsCoverage));
+    const coverage = rotateDue(needy, opts.cursorId), regular = rotateDue(healthy, opts.cursorId);
+    const ordered = [...aged];
+    while (coverage.length || regular.length) ordered.push(...coverage.splice(0, 2), ...regular.splice(0, 1));
+    return ordered;
+  }
+
   // Marketplace results sorted newest first; group feeds in chronological order. Read-only URL changes only.
   function scrapeUrl(url, kind) {
     const parsed = new URL(url);
@@ -211,11 +271,16 @@
       known: new Set((opts.knownKeys || []).map(String)),
       seen: new Set(),
       fresh: [],
+      newCount: 0,
       found: 0,
       steps: 0,
+      sliceStart: 0,
+      stallStart: 0,
       emptySteps: 0,
       knownRun: 0,
       oldRun: 0,
+      orderedDates: 0,
+      lastDatedAt: null,
       knownSeen: 0,
       reachedKnown: false,
       hitLimit: false,
@@ -227,6 +292,7 @@
       maxPosts: Math.min(opts.maxPosts || MAX_POSTS_PER_RUN, MAX_POSTS_PER_RUN),
       now: opts.now || Date.now(),
       stoppedBy: "",
+      recoveredEnd: false,
     };
   }
 
@@ -235,8 +301,8 @@
    * - seen: knownStreak known posts in a row (a pinned/featured known post alone never stops the run)
    * - old:  OLD_STREAK dated posts in a row older than the run window (one out-of-order old post does not stop it)
    * - end:  empty screens in a row (EMPTY_STREAK, or COLD_EMPTY_STREAK while found < MIN_FOUND_BEFORE_END)
-   * - cap:  the sane upper bound of fresh posts for one run
-   * - limit: the scroll budget for this mode is used up (caller checks run.steps)
+   * - cap: batch ready; caller drains and keeps reading
+   * - limit: slice budget used; caller saves the tab to continue later
    */
   function emptyBudget(run) {
     return run.found < MIN_FOUND_BEFORE_END ? COLD_EMPTY_STREAK : EMPTY_STREAK;
@@ -252,37 +318,40 @@
       run.seen.add(key);
       newly += 1;
       run.found += 1;
-      if (stop) continue;
-      if (run.known.has(key)) {
-        run.knownSeen += 1;
-        run.knownRun += 1;
-        if (run.knownRun >= run.knownStreak) {
-          run.reachedKnown = true;
-          stop = "seen";
-        }
+      const at = post.postedAt ? Date.parse(post.postedAt) : NaN;
+      run.orderedDates = Number.isFinite(at) ? (run.lastDatedAt === null || at <= run.lastDatedAt ? run.orderedDates + 1 : 1) : 0;
+      run.lastDatedAt = Number.isFinite(at) ? at : null;
+      if (Number.isFinite(at) && run.now - at > run.maxAgeMs) {
+        run.knownRun = 0;
+        run.oldRun += 1;
         continue;
       }
-      const at = post.postedAt ? Date.parse(post.postedAt) : NaN;
-      if (Number.isFinite(at) && run.now - at > run.maxAgeMs) {
-        run.oldRun += 1;
-        if (run.oldRun >= OLD_STREAK) stop = "old";
+      if (run.known.has(key)) {
+        run.oldRun = 0;
+        run.knownSeen += 1;
+        run.knownRun += 1;
         continue;
       }
       run.knownRun = 0;
       run.oldRun = 0;
       run.fresh.push(post);
-      if (run.fresh.length >= run.maxPosts) {
-        run.hitLimit = true;
-        stop = "cap";
-      }
+      run.newCount += 1;
+      // Read the entire DOM snapshot, including fresh posts after a known/old streak.
+      // A batch boundary must never mark unread posts as seen.
+      stop = "";
     }
+    if (run.knownRun >= run.knownStreak) stop = "seen";
+    const oldStreak = isDeepMode(run.mode) ? OLD_STREAK * 4 : OLD_STREAK;
+    if (run.oldRun >= oldStreak && run.orderedDates >= oldStreak) stop = "old";
+    if (stop === "seen") run.reachedKnown = true;
+    if (!stop && run.fresh.length >= run.maxPosts) { run.hitLimit = true; stop = "cap"; }
     if (!stop) {
       if (!newly) {
         run.emptySteps += 1;
         if (run.emptySteps >= emptyBudget(run)) stop = "end";
       } else run.emptySteps = 0;
     }
-    if (!stop && run.steps > run.maxScrolls) {
+    if (!stop && run.steps - run.sliceStart > run.maxScrolls) {
       run.hitLimit = true;
       stop = "limit";
     }
@@ -290,14 +359,39 @@
     return stop;
   }
 
+  function resumeRun(run, now = Date.now()) {
+    run.sliceStart = run.steps;
+    run.stallStart = run.stalls;
+    run.now = now;
+    run.stoppedBy = "";
+    run.hitLimit = false;
+    run.emptySteps = 0;
+    run.endSignals = 0;
+    return run;
+  }
+
+  function snapshotRun(run) {
+    return { ...run, known: [...run.known], seen: [...run.seen], knownStreak: Number.isFinite(run.knownStreak) ? run.knownStreak : null };
+  }
+
+  function restoreRun(saved) {
+    return { ...saved, known: new Set(saved.known || []), seen: new Set(saved.seen || []), knownStreak: saved.knownStreak === null ? Infinity : saved.knownStreak };
+  }
+
+  function yieldRun(run, reason = "limit") {
+    run.stoppedBy = reason;
+    run.hitLimit = true;
+    return run;
+  }
+
   // Per-run coverage stats sent to MY-BOT.
   function runStats(run) {
     return {
       mode: run.mode,
-      reachedKnownPost: run.reachedKnown || (run.knownSeen > 0 && run.stoppedBy !== "limit" && run.stoppedBy !== "cap"),
+      reachedKnownPost: run.reachedKnown && !run.hitLimit,
       hitLimit: run.hitLimit,
       scrolls: Math.max(0, run.steps - 1),
-      newCount: run.fresh.length,
+      newCount: run.newCount,
       knownSeen: run.knownSeen,
       stalls: run.stalls,
     };
@@ -311,10 +405,11 @@
 
   const api = {
     postKey, scrapeSettings, planRun, scrollBudget, feedBudgetMs, scrollWaitMs, scrapeUrl, createRun, addStep, emptyBudget, isShallowRun,
-    isDeepMode, shouldAbortDeadFeed, postWakeSettleMs, cycleParallel, shouldKeepAwake, shouldHoldForeground, shouldPulseWake, prioritizeCoverageDue,
-    runStats, cleanupText,
+    isDeepMode, shouldAbortDeadFeed, postWakeSettleMs, throttleLevel, cycleBatchLimit, cycleParallel, shouldKeepAwake, shouldHoldForeground, shouldPulseWake,
+    prioritizeCoverageDue, rotateDue, orderDueGroups,
+    runStats, cleanupText, resumeRun, snapshotRun, restoreRun, yieldRun,
     MAX_SCROLLS, MIN_SCROLLS, KNOWN_STREAK, DEFAULT_SCREENS, MAX_SCREENS, MAX_POSTS_PER_RUN,
-    EMPTY_STREAK, COLD_EMPTY_STREAK, MIN_FOUND_BEFORE_END,
+    EMPTY_STREAK, COLD_EMPTY_STREAK, MIN_FOUND_BEFORE_END, THROTTLE_HARD_MS, THROTTLE_SOFT_MS,
   };
   root.MyBotScrape = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;

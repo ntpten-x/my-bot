@@ -177,6 +177,8 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
     "backup_last_day",
     "reply_queue_last_slot",
     "extension_last_seen",
+    "extension_reading",
+    "extension_capture",
     "extension_bad_token_at",
     "notify_last_discord",
     "notify_last_line",
@@ -305,14 +307,29 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
       detail: badTokenRecent ? `มีการเรียกด้วยโทเคนผิดเมื่อ ${thaiAgo(ageMs(badTokenAt, now))}` : undefined,
       hint: !settings.extensionToken || badTokenRecent ? "คัดลอกโทเคนจากหน้า ตั้งค่า แล้ววางในป๊อปอัปของส่วนขยาย กดบันทึก" : undefined,
     },
-    {
-      key: "ext-reading",
-      label: "กำลังอ่านกลุ่ม",
-      level: enabledFb.length ? (activeInstalls.some((row) => row.enabled) || !newest ? "ok" : "bad") : "off",
-      value: `${enabledFb.length} กลุ่ม/Marketplace ที่เปิดไว้ · แท็บ Facebook ที่เปิดอยู่ ${openTabs.length} แท็บ`,
-      detail: enabledFb.length ? enabledFb.slice(0, 8).map((source) => source.name).join(", ") : "ยังไม่ได้เพิ่มกลุ่ม Facebook หรือ Marketplace",
-      hint: newest && !activeInstalls.some((row) => row.enabled) && enabledFb.length ? "ส่วนขยายถูกพักไว้ — ติ๊ก “ดึงข้อมูลอัตโนมัติเบื้องหลัง” ในป๊อปอัปของส่วนขยาย" : "อ่านจากหน้าต่าง Chrome ที่มี Facebook เปิดอยู่ (แท็บพื้นหลัง ไม่แย่งโฟกัส) — เปิด Chrome + ล็อกอิน Facebook ทิ้งไว้ อย่าย่อหน้าต่างทั้งบาน",
-    },
+    (() => {
+      const reading = parseJson<{ groupName?: string; phase?: string; startedAt?: number; at?: string } | null>(map.extension_reading, null);
+      const readingAge = reading?.startedAt ? ageMs(new Date(reading.startedAt).toISOString(), now) : reading?.at ? ageMs(reading.at, now) : null;
+      const liveReading = Boolean(reading?.groupName && readingAge !== null && readingAge < 5 * 60 * 1000);
+      const phaseLabel = reading?.phase === "detail" ? "ข้อความเต็ม" : "ฟีด";
+      return {
+        key: "ext-reading",
+        label: "กำลังอ่านกลุ่ม",
+        level: (enabledFb.length ? (activeInstalls.some((row) => row.enabled) || !newest ? "ok" : "bad") : "off") as Level,
+        value: liveReading
+          ? `กำลังอ่าน: ${reading!.groupName} (${phaseLabel})`
+          : `${enabledFb.length} กลุ่ม/Marketplace ที่เปิดไว้ · แท็บ Facebook ที่เปิดอยู่ ${openTabs.length} แท็บ`,
+        detail: liveReading
+          ? `เริ่ม ${thaiAgo(readingAge)} · ${enabledFb.length} แหล่งที่เปิด · แท็บ Facebook ${openTabs.length}`
+          : enabledFb.length
+            ? enabledFb.slice(0, 8).map((source) => source.name).join(", ")
+            : "ยังไม่ได้เพิ่มกลุ่ม Facebook หรือ Marketplace",
+        hint:
+          newest && !activeInstalls.some((row) => row.enabled) && enabledFb.length
+            ? "ส่วนขยายถูกพักไว้ — ติ๊ก “ดึงข้อมูลอัตโนมัติเบื้องหลัง” ในป๊อปอัปของส่วนขยาย"
+            : "เปิด Chrome + ล็อกอิน Facebook ทิ้งไว้ ระบบอาจเปิดแท็บอ่านไว้ด้านหน้าระหว่างตามเก็บ แล้วคืนแท็บเดิมเมื่อพักอ่าน อย่าย่อหน้าต่างทั้งบาน",
+      };
+    })(),
     await (async () => {
       const r = await readerHealth(new Date(now)).catch(() => null);
       const stallPct = r && r.minimized ? r.stalledMinimized / r.minimized : 0;
@@ -323,9 +340,23 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
         level: (!r || !r.total ? "off" : stallPct >= 0.3 || r.throttled > 0 ? "warn" : "ok") as "ok" | "warn" | "off",
         value: r && r.total ? `${r.total} รอบ · นอกจอ/ย่อ ${r.minimized} · ค้าง ${r.stalled} (ขณะพื้นหลัง ${r.stalledMinimized}) · รีโหลดซ้ำ ${r.reloaded} · หน่วง ${r.throttled}` : "ยังไม่มีข้อมูล",
         detail: r && r.total
-          ? `เฉพาะส่วนขยาย v${ver} · อ่านข้อความเต็มสำเร็จ ${r.fullOk}/${r.fullTried} · เฉลี่ย ${r.avgSeconds} วินาที/รอบ`
+          ? `เฉพาะส่วนขยาย v${ver} · พบใหม่ ${r.fresh} · ${r.freshPerMinute} โพสต์/นาทีอ่าน · อ่านยังไม่ครบ ${r.incomplete} รอบ · ผิดพลาด ${r.errors} รอบ · เฉลี่ย ${r.avgSeconds} วินาที/รอบ`
           : `ยังไม่มีรอบจากส่วนขยาย v${ver} ใน 24 ชม. (ไม่นับเวอร์ชันเก่า)`,
         hint: r && stallPct >= 0.3 ? "Chrome หน่วงแท็บพื้นหลังบ่อย — ลดจำนวนกลุ่มที่เปิด และเปิด Chrome ทิ้งไว้ (อย่าย่อหน้าต่าง Facebook ทั้งบาน)" : undefined,
+      };
+    })(),
+    (() => {
+      const capture = parseJson<{ pendingPosts?: number; oldestPendingAt?: number; parkedFeeds?: number; at?: string }>(map.extension_capture, {});
+      const fresh = Boolean(capture.at && now - Date.parse(capture.at) < 180_000);
+      const pending = fresh ? capture.pendingPosts || 0 : 0;
+      const overdue = enabledFb.filter(source => source.nextRunAt && source.nextRunAt.getTime() < now);
+      const maxOverdue = overdue.length ? Math.max(...overdue.map(source => now - source.nextRunAt!.getTime())) : 0;
+      return {
+        key: "ext-capture-progress",
+        label: "คิวรับโพสต์และการอ่านต่อ",
+        level: (!fresh ? "off" : pending || maxOverdue > 15 * 60_000 ? "warn" : "ok") as "off" | "warn" | "ok",
+        value: fresh ? `รอส่ง ${pending} โพสต์ · แท็บรออ่านต่อ ${capture.parkedFeeds || 0}` : "รอ heartbeat จากส่วนขยาย",
+        detail: `แหล่งเกินเวลานัด ${overdue.length} · รอนานสุด ${Math.round(maxOverdue / 60_000)} นาที${fresh && capture.oldestPendingAt ? ` · ข้อมูลรอส่งเก่าสุด ${thaiAgo(Math.max(0, now - capture.oldestPendingAt))}` : ""}`,
       };
     })(),
     {

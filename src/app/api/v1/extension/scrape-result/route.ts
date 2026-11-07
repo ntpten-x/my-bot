@@ -17,7 +17,7 @@ const schema = z.object({
   postsFound: z.number().int().min(0).max(1000).default(0),
   newPosts: z.number().int().min(0).max(1000).default(0),
   scrolls: z.number().int().min(0).max(200).default(0),
-  stoppedBy: z.enum(["seen", "old", "cap", "end", "screens", "limit", "error"]).default("end"),
+  stoppedBy: z.enum(["seen", "old", "cap", "end", "exhausted", "screens", "limit", "error", "loading", "stalled", "yield", "logged_out", "checkpoint"]).default("end"),
   mode: z.enum(["normal", "sweep", "catchup", "audit"]).optional(),
   coverage: z
     .object({

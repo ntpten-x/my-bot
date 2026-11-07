@@ -4,7 +4,7 @@ import { upsertSettings } from "./settings";
 import { touchExtension } from "./extension-status";
 
 // Version this MY-BOT build expects from extension/manifest.json (tests keep the two in sync).
-export const EXPECTED_EXTENSION_VERSION = "1.10.19";
+export const EXPECTED_EXTENSION_VERSION = "1.11.0";
 
 export function isCurrentExtensionVersion(version: string | null | undefined) {
   return String(version || "").trim() === EXPECTED_EXTENSION_VERSION;
@@ -57,7 +57,27 @@ export const heartbeatSchema = z.object({
     })
     .optional(),
   outboxSize: z.number().int().nonnegative().max(100000).default(0),
-  runtime: z.object({ quietReason: z.string().max(160).default(""), commentsEnabled: z.boolean().default(false), commentPending: z.boolean().default(false) }).optional(),
+  runtime: z
+    .object({
+      quietReason: z.string().max(160).default(""),
+      commentsEnabled: z.boolean().default(false),
+      commentPending: z.boolean().default(false),
+      capture: z.object({
+        pendingPosts: z.number().int().min(0).max(100000).default(0),
+        oldestPendingAt: z.number().nonnegative().default(0),
+        parkedFeeds: z.number().int().min(0).max(1000).default(0),
+      }).optional(),
+      reading: z
+        .object({
+          groupId: z.string().max(80).default(""),
+          groupName: z.string().max(120).default(""),
+          phase: z.enum(["feed", "detail", "idle"]).default("idle"),
+          startedAt: z.number().nonnegative().default(0),
+        })
+        .nullable()
+        .optional(),
+    })
+    .optional(),
 });
 
 export type HeartbeatInput = z.infer<typeof heartbeatSchema>;
@@ -131,7 +151,21 @@ export async function recordHeartbeat(input: HeartbeatInput, deviceId?: string) 
     await prisma.extensionHeartbeat.deleteMany({ where: { version: { not: EXPECTED_EXTENSION_VERSION } } });
   }
   await touchExtension();
-  if (deviceId && input.runtime) await upsertSettings({ [`extension_runtime_${deviceId}`]: JSON.stringify({ ...input.runtime, fbUserId: row.fbUserId, at: now.toISOString() }) });
+  if (deviceId && input.runtime) {
+    await upsertSettings({ [`extension_runtime_${deviceId}`]: JSON.stringify({ ...input.runtime, fbUserId: row.fbUserId, at: now.toISOString() }) });
+  }
+  // Single-owner overview: mirror the live "currently reading" status for the dashboard.
+  if (input.runtime && "reading" in input.runtime) {
+    const reading = input.runtime.reading;
+    await upsertSettings({
+      extension_reading: reading
+        ? JSON.stringify({ ...reading, installId: row.id, at: now.toISOString() })
+        : "",
+    });
+  }
+  if (input.runtime?.capture) {
+    await upsertSettings({ extension_capture: JSON.stringify({ ...input.runtime.capture, at: now.toISOString() }) });
+  }
   return row;
 }
 
