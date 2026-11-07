@@ -2,7 +2,7 @@ importScripts("assist.js", "identity.js", "scrape.js", "quiet.js");
 importScripts("browser-comment.js", "comment-worker.js");
 
 const DEFAULTS = {
-  apiBase: "http://localhost:8001",
+  apiBase: "https://my-bot-e6bt.onrender.com",
   token: "",
   // Paired = reading starts on its own; "paused" is the owner's pause switch in the popup.
   paused: false,

@@ -1,4 +1,4 @@
-const DEFAULT_BASE = "http://localhost:8001";
+const DEFAULT_BASE = "https://my-bot-e6bt.onrender.com";
 const apiBase = document.getElementById("apiBase");
 const token = document.getElementById("token");
 const code = document.getElementById("code");
@@ -100,7 +100,7 @@ document.getElementById("save").addEventListener("click", async () => {
   const legacy = token.value.trim();
   // Changing server drops a device token issued by the old one.
   let nextToken = legacy || (stored.apiBase === parsed.base ? stored.token : "");
-  if (legacy && parsed.base !== DEFAULT_BASE && !/^http:\/\/(localhost|127\.0\.0\.1)/.test(parsed.base)) {
+  if (legacy && !/^http:\/\/(localhost|127\.0\.0\.1)/.test(parsed.base)) {
     nextToken = stored.apiBase === parsed.base ? stored.token : "";
     status.textContent = "โทเคนแบบเดิมใช้ได้เฉพาะ localhost — กรุณาจับคู่ด้วยรหัสแทน";
   }
