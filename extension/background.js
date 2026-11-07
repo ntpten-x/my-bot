@@ -238,6 +238,47 @@ async function rememberIdentity(identity) {
   await chrome.storage.local.set({ fbIdentity: { loggedIn: Boolean(id), id, name, at: Date.now() } });
 }
 
+// After install/update, content scripts do not run on tabs that were already open.
+// Probe open Facebook tabs with executeScript so pairing can start reading without a manual reload.
+async function probeFacebookIdentity() {
+  const tabs = await chrome.tabs
+    .query({
+      url: ["https://www.facebook.com/*", "https://facebook.com/*", "https://web.facebook.com/*"],
+    })
+    .catch(() => []);
+  for (const tab of tabs.slice(0, 8)) {
+    if (!tab.id || tab.status === "loading") continue;
+    try {
+      const [executed] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => {
+          const raw = String(document.cookie || "");
+          const parts = raw.split(";");
+          let id = "";
+          for (const part of parts) {
+            const trimmed = part.trim();
+            const index = trimmed.indexOf("=");
+            if (index > 0 && trimmed.slice(0, index) === "c_user") {
+              id = decodeURIComponent(trimmed.slice(index + 1).trim());
+              break;
+            }
+          }
+          if (!/^\d{5,20}$/.test(id)) return { loggedIn: false, id: "", name: "" };
+          return { loggedIn: true, id, name: "" };
+        },
+      });
+      const identity = executed && executed.result;
+      if (identity && identity.loggedIn) {
+        await rememberIdentity(identity);
+        return identity;
+      }
+    } catch {
+      // Restricted tab or extension mid-reload — try the next one.
+    }
+  }
+  return null;
+}
+
 async function currentFbUserId() {
   const stored = await chrome.storage.local.get({ fbIdentity: null });
   return stored.fbIdentity && stored.fbIdentity.loggedIn ? stored.fbIdentity.id : "";
@@ -285,6 +326,7 @@ async function heartbeat() {
   if (!cfg.token) return;
   beating = true;
   try {
+    await probeFacebookIdentity();
     const stored = await chrome.storage.local.get({ fbIdentity: null, lastError: null, lastPostAt: 0, postsSent: 0, profileLabel: "", quiet: null, browserCommentsEnabled: false, commentJournal: null });
     const outbox = await loadOutbox();
     const fb = stored.fbIdentity || { loggedIn: false, id: "", name: "", at: 0 };
@@ -527,15 +569,17 @@ async function injectReaders(tabId) {
   throw lastError || new Error("Could not inject readers");
 }
 
-// All reading happens in ONE dedicated Chrome window parked OFF-SCREEN (not minimized).
-// Minimized windows are heavily throttled by Chrome and often load ≤1 post; an off-screen
-// normal window stays invisible on the owner's desktop but keeps Facebook loading reliably.
-// Reused one tab → about:blank when idle; recreated if closed; closed after a long idle spell.
+// All reading happens in ONE dedicated Chrome window the owner does not use.
+// Never minimize (Chrome throttles those → often ≤1 post). Never steal focus.
+// Chrome requires ≥50% of a window inside a display work area, so full hide
+// (left:-12000) is rejected. We park at a screen corner with ~49% hanging off,
+// prefer a secondary monitor when present, and blank the tab when idle.
 const BOOT_ID = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const READER_MAX_AGE_MS = 15 * 60 * 1000;
 const SCRAPE_IDLE_CLOSE_MS = 20 * 60 * 1000;
-const OFFSCREEN = { left: -12000, top: 0, width: 1100, height: 900 };
+const OFFSCREEN = { width: 960, height: 720 };
 let scrapeWindowRef = null;
+let lastOwnerWindowId = null;
 
 async function loadScrapeWindow() {
   if (scrapeWindowRef) return scrapeWindowRef;
@@ -557,17 +601,62 @@ function isScrapeWindowTab(tab) {
 function readerWindowState(win) {
   if (!win) return "unknown";
   if (win.state === "minimized") return "minimized";
-  if (typeof win.left === "number" && win.left <= -2000) return "offscreen";
+  // Parked when mostly nudged off a work-area edge (left/top far outside typical on-screen).
+  if (typeof win.left === "number" && typeof win.top === "number" && (win.left < -80 || win.top < -80 || win.left > 3000 || win.top > 2000)) return "offscreen";
   return win.state || "normal";
 }
 
-async function parkOffscreen(windowId) {
-  await chrome.windows
-    .update(windowId, { focused: false, state: "normal", left: OFFSCREEN.left, top: OFFSCREEN.top, width: OFFSCREEN.width, height: OFFSCREEN.height })
-    .catch(() => undefined);
+// Pure: place a reader so ~51% stays in a work area (Chrome's minimum), tucked in a corner.
+function stealthParkBounds(workAreas, width, height) {
+  const areas = (workAreas || []).filter((area) => area && Number.isFinite(area.left) && Number.isFinite(area.width));
+  // Prefer a non-primary (usually quieter) display when the caller put it first.
+  const area = areas[0];
+  if (!area) return null;
+  const left = Math.round(area.left + area.width - width * 0.51);
+  const top = Math.round(area.top + area.height - height * 0.51);
+  return { left, top, width, height };
 }
 
-// Returns { windowId, tabId } of the off-screen reader window, creating it if needed.
+async function listWorkAreas() {
+  if (!chrome.system || !chrome.system.display || !chrome.system.display.getInfo) return [];
+  try {
+    const displays = await chrome.system.display.getInfo();
+    const secondary = [];
+    const primary = [];
+    for (const display of displays || []) {
+      const area = display.workArea || display.bounds;
+      if (!area) continue;
+      const row = { left: area.left, top: area.top, width: area.width, height: area.height, primary: Boolean(display.isPrimary) };
+      if (row.primary) primary.push(row);
+      else secondary.push(row);
+    }
+    return [...secondary, ...primary];
+  } catch {
+    return [];
+  }
+}
+
+async function parkOffscreen(windowId) {
+  const win = await chrome.windows.get(windowId).catch(() => null);
+  if (!win) return;
+  const width = OFFSCREEN.width;
+  const height = OFFSCREEN.height;
+  const areas = await listWorkAreas();
+  let bounds = stealthParkBounds(areas, width, height);
+  if (!bounds) {
+    // No display API: nudge from wherever Chrome created the window.
+    const baseLeft = typeof win.left === "number" ? win.left : 0;
+    const baseTop = typeof win.top === "number" ? win.top : 0;
+    bounds = { left: baseLeft - Math.floor(width * 0.49), top: baseTop, width, height };
+  }
+  try {
+    await chrome.windows.update(windowId, { focused: false, state: "normal", ...bounds });
+  } catch {
+    await chrome.windows.update(windowId, { focused: false, state: "normal", width, height }).catch(() => undefined);
+  }
+}
+
+// Returns { windowId, tabId } of the background reader window, creating it if needed.
 async function ensureScrapeWindow() {
   const ref = await loadScrapeWindow();
   if (ref) {
@@ -575,20 +664,18 @@ async function ensureScrapeWindow() {
     if (win && win.tabs && win.tabs.length) {
       const keep = win.tabs.find((tab) => tab.id === ref.tabId) || win.tabs[0];
       for (const tab of win.tabs) if (tab.id !== keep.id) await chrome.tabs.remove(tab.id).catch(() => undefined);
-      // Never steal focus. If the owner is not looking at it, keep it parked off-screen (not minimized).
       if (!win.focused) await parkOffscreen(win.id);
       const next = { windowId: win.id, tabId: keep.id, usedAt: Date.now() };
       await saveScrapeWindow(next);
       return next;
     }
   }
+  // Create on the default display first (no left/top) — Chrome rejects far-off bounds at create time.
   const win = await chrome.windows.create({
     url: "about:blank",
     focused: false,
-    type: "normal",
+    type: "popup",
     state: "normal",
-    left: OFFSCREEN.left,
-    top: OFFSCREEN.top,
     width: OFFSCREEN.width,
     height: OFFSCREEN.height,
   });
@@ -605,6 +692,20 @@ async function ensureScrapeWindow() {
 
 chrome.windows.onRemoved.addListener((windowId) => {
   void loadScrapeWindow().then((ref) => { if (ref && ref.windowId === windowId) return saveScrapeWindow(null); });
+});
+
+// If the owner clicks the reader window, put it away again and restore their previous window.
+chrome.windows.onFocusChanged.addListener((windowId) => {
+  if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+  void (async () => {
+    const ref = await loadScrapeWindow();
+    if (ref && windowId === ref.windowId) {
+      await parkOffscreen(ref.windowId);
+      if (lastOwnerWindowId != null) await chrome.windows.update(lastOwnerWindowId, { focused: true }).catch(() => undefined);
+      return;
+    }
+    lastOwnerWindowId = windowId;
+  })();
 });
 
 async function closeIdleScrapeWindow() {
@@ -642,12 +743,13 @@ async function closeOrphanReaders() {
   if (changed) await chrome.storage.session.set({ readers });
 }
 
-// Loads a feed in the off-screen reader window's tab (never in the owner's windows, never focused).
+// Loads a feed in the background reader tab (never in the owner's windows, never focused).
 async function openReader(url) {
   const ref = await ensureScrapeWindow();
   const reader = { tabId: ref.tabId, windowId: ref.windowId };
   scrapingTabs.add(reader.tabId);
   await chrome.tabs.update(reader.tabId, { url });
+  await parkOffscreen(ref.windowId);
   await sleep(400);
   return reader;
 }
@@ -860,9 +962,11 @@ async function cycle() {
   const cfg = await loadConfig();
   if (cfg.paused || !cfg.token) return;
   // Facebook logged out (seen in the last 30 min): wait; a later cycle probes again.
+  await probeFacebookIdentity();
   const fbState = await chrome.storage.local.get({ fbIdentity: null });
   const fb = fbState.fbIdentity;
   if (fb && fb.loggedIn === false && Date.now() - (fb.at || 0) < 30 * 60 * 1000) return void (await setQuiet("ยังไม่ได้เข้าสู่ระบบ Facebook"));
+  if (fb && fb.loggedIn) await setQuiet("");
   if (!(await takeRunLock("cycle"))) return;
   try {
     const response = await getJson(cfg, "/api/v1/extension-config");
@@ -1036,7 +1140,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "heartbeat-now") {
     heartbeat()
-      .then(() => sendResponse({ ok: true }))
+      .then(() => {
+        sendResponse({ ok: true });
+        void cycle();
+      })
       .catch(() => sendResponse({ ok: false }));
     return true;
   }

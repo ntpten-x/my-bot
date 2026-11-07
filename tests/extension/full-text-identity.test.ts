@@ -22,6 +22,7 @@ it("drains newly discovered detail work before discovering the next group", asyn
  const context=vm.createContext({Date,Math,cycling:false,RUN_LOCK_MS:720000,
  chrome:{storage:{local:{get:async(d:object)=>({...d,outboxBlocked:false,fbIdentity:null,throttledAt:0}),set:async()=>{}}}},
  loadConfig:async()=>({token:"synthetic",paused:false,schedules:{}}),takeRunLock:async()=>true,releaseRunLock:async()=>{},
+ probeFacebookIdentity:async()=>null,
  getJson:async()=>({ok:true,json:async()=>({groups:[{id:"a"},{id:"b"}],maxGroupsPerCycle:2,jitterMinutes:0})}),
  quietReason:async()=>null,setQuiet:async()=>{},loadFullTextBacklog:async()=>({}),sleep:async()=>{},rememberError:async()=>{},
  scrapeGroup:async(_cfg:unknown,g:{id:string})=>{events.push(`feed:${g.id}`);return {}},

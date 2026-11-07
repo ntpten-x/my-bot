@@ -250,7 +250,7 @@ export default function SettingsPage() {
         </Card>
         <Card className="space-y-3">
           <h2 className="font-semibold">ดึงข้อมูลเบื้องหลัง (โหมดเงียบ)</h2>
-          <p className="text-sm text-muted">เมื่อจับคู่ส่วนขยายและเข้าสู่ระบบ Facebook แล้ว ระบบจะอ่านโพสต์เองอยู่เบื้องหลัง ในหน้าต่าง Chrome แยกหนึ่งบานที่จอดนอกจอ (ไม่ย่อ เพราะ Chrome หน่วงหน้าต่างย่อหนัก) ไม่แย่งโฟกัสและไม่โผล่บนเดสกท็อป ต้องเปิด Chrome และล็อกอิน Facebook ไว้ — ไม่สามารถอ่านกลุ่มได้ถ้าปิดเบราว์เซอร์ทั้งเครื่อง ถ้าปิดหน้าต่างอ่าน ระบบจะสร้างใหม่ในรอบถัดไป และปิดเองเมื่อว่างนานเกิน 20 นาที พักได้จากป๊อปอัปส่วนขยาย</p>
+          <p className="text-sm text-muted">เมื่อจับคู่ส่วนขยายและเข้าสู่ระบบ Facebook แล้ว เปิด Chrome ทิ้งไว้ได้เลย — ระบบอ่านเองในหน้าต่างแยกที่จอดมุมจอหรือจอรอง (Chrome บังคับให้หน้าต่างอยู่ในจออย่างน้อยครึ่งบาน จึงซ่อนทั้งบานไม่ได้ และถ้าย่อ Chrome จะหน่วงการโหลด) ไม่เปิดแท็บในหน้าต่างที่คุณใช้ ไม่แย่งโฟกัส เมื่อว่างจะกลับหน้าว่างและปิดเองถ้าว่างเกิน 20 นาที พักได้จากป๊อปอัปส่วนขยาย</p>
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={settings.quietPauseOnFacebook ?? true} onChange={(event) => setSettings({ ...settings, quietPauseOnFacebook: event.target.checked })} />
             พักขณะที่คุณกำลังเปิด Facebook อยู่ในหน้าต่างของคุณเอง

@@ -151,7 +151,7 @@ describe("extension safety policy", () => {
       commands: Record<string, { suggested_key?: { default?: string } }>;
       permissions: string[];
     };
-    expect(manifest.version).toBe("1.10.2");
+    expect(manifest.version).toBe("1.10.5");
     expect(manifest.permissions).not.toContain("cookies");
     expect(manifest.permissions).not.toContain("webRequest");
     expect(Object.keys(manifest.commands).sort()).toEqual(["mark-sent", "mark-skip"]);
@@ -176,11 +176,13 @@ describe("extension safety policy", () => {
     expect(src).toMatch(/await injectReaders\(tabId\)/);
   });
 
-  it("parks the reader window off-screen instead of minimizing it", () => {
+  it("parks the reader window in a screen corner without minimizing", () => {
     const src = code("background.js");
     expect(src).toMatch(/parkOffscreen/);
-    expect(src).toMatch(/OFFSCREEN/);
-    expect(src).toMatch(/left:\s*OFFSCREEN\.left|left: OFFSCREEN\.left/);
+    expect(src).toMatch(/stealthParkBounds/);
+    expect(src).toMatch(/system\.display/);
+    expect(src).toMatch(/type:\s*["']popup["']/);
+    expect(src).not.toMatch(/left:\s*-12000/);
     expect(src).not.toMatch(/state:\s*["']minimized["']/);
   });
 

@@ -154,7 +154,6 @@ describe.skipIf(!fixture.enabled)("real Postgres ingest → queue → provider �
     expect(await processAiQueue()).toBe(0);
     expect(await prisma.aiJob.count({ where: { status: "done" } })).toBe(12);
   });
-});
 
 it("reuses matching vectors and retains old vectors with backoff if a changed model fails", async () => {
   await ingest(1);
@@ -251,4 +250,5 @@ it("repairs all exact-duplicate groups rather than stopping after the first 50",
   await prisma.post.createMany({ data: Array.from({ length: 102 }, (_, i) => ({ sourceId: "source", externalUrl: `https://example.test/${i}`, text: `same capture group number ${Math.floor(i / 2)}`, normalizedText: `same capture group number ${Math.floor(i / 2)}`, contentHash: `exact-${i}` })) });
   expect(await collapseIdenticalTexts()).toBe(51);
   expect(await prisma.post.count({ where: { duplicateOfId: { not: null } } })).toBe(51);
+});
 });

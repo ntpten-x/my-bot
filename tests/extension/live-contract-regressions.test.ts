@@ -15,7 +15,7 @@ it("batches collected posts so every request is accepted by the real ingest vali
   const context = vm.createContext({ Date, Set, Map, sourceKind: () => "marketplace", scrapeSettingsFor: async () => ({}),
     chrome: { storage: { local: { get: async () => ({ sweeps: {} }), set: async () => undefined } }, windows: { get: async () => ({ state: "minimized" }) }, runtime: { getManifest: () => ({ version: "synthetic" }) } },
     MyBotScrape: { planRun: () => ({ mode: "normal" }), scrapeUrl: () => "https://www.facebook.com/groups/12345", runStats: () => ({ scrolls: 0 }) },
-    openReader: async () => ({ windowId: 1, tabId: 2 }), closeReader: async () => undefined,
+    openReader: async () => ({ windowId: 1, tabId: 2 }), closeReader: async () => undefined, parkOffscreen: async () => undefined, readerWindowState: () => "minimized",
     readFeed: async () => ({ fresh: posts, found: posts.length, stalls: 0, stoppedBy: "cap" }), cleanPost: (value: unknown) => value,
     sendPosts: async (_cfg: unknown, sourceUrl: string, batch: unknown[]) => {
       const result = await POST(new Request("https://owner.example/api/v1/ingest", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sourceUrl, posts: batch }) }));

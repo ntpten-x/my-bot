@@ -23,7 +23,7 @@
     <p>อ่านโพสต์ส่งเข้า MY-BOT และส่งคอมเมนต์ผ่านหน้าจอ Facebook เฉพาะกฎที่คุณเปิดและผูกกับอุปกรณ์นี้</p>
     <label for="apiBase">ที่อยู่เซิร์ฟเวอร์ MY-BOT</label>
     <input id="apiBase" placeholder="https://my-bot-e6bt.onrender.com" />
-    <p>หลังติดตั้งหรืออัปเดต Extension ให้ reload แท็บ Facebook ที่เปิดค้าง เพื่อให้ตรวจบัญชีและเริ่มอ่านได้</p>
+    <p>หลังติดตั้งหรืออัปเดต Extension ถ้ายังไม่เริ่มอ่าน ให้กด Reload ที่ chrome://extensions แล้วเปิด facebook.com ค้างไว้ (หรือรีเฟรชแท็บ Facebook)</p>
     <div id="pairState" style="margin-top:8px"></div>
     <label for="code">รหัสจับคู่ (จากหน้า “ส่วนขยาย” บนเว็บ)</label>
     <input id="code" maxlength="9" placeholder="ABCD-EFGH" autocomplete="off" />
@@ -32,7 +32,7 @@
       <input id="enabled" type="checkbox" style="width:auto" />
       <label for="enabled" style="margin:0">ดึงข้อมูลอัตโนมัติเบื้องหลัง (ติ๊กออก = พัก)</label>
     </div>
-    <p style="margin-top:6px;font-size:12px">จับคู่และเข้าสู่ระบบ Facebook แล้วจะเริ่มอ่านเอง ในหน้าต่าง Chrome แยกที่ย่อไว้ (minimized) ไม่เปิดแท็บในหน้าต่างที่คุณใช้อยู่ และไม่แย่งโฟกัส ปิดหน้าต่างนั้นได้ ระบบจะสร้างใหม่แบบย่อไว้เอง</p>
+    <p style="margin-top:6px;font-size:12px">จับคู่และล็อกอิน Facebook แล้ว เปิด Chrome ทิ้งไว้ได้เลย — ระบบอ่านในหน้าต่างแยกที่จอดมุมจอ (Chrome ห้ามซ่อนทั้งบาน) ไม่เปิดแท็บในหน้าต่างที่คุณใช้ ไม่แย่งโฟกัส เมื่อว่างจะกลับหน้าว่าง คลิกโดนหน้าต่างอ่าน ระบบจะเอาออกจากโฟกัสให้</p>
     <button id="save" class="ghost">บันทึก</button>
     <div class="row"><input id="browserComments" type="checkbox" style="width:auto" /><label for="browserComments" style="margin:0">อนุญาตรับงานคอมเมนต์อัตโนมัติบนเครื่องนี้</label></div>
     <p style="font-size:12px">ค่าเริ่มต้นปิด ต้องเปิดกฎและปิด Dry Run บนเว็บด้วย พบ Checkpoint หรือผลไม่ชัดเจนจะหยุด ไม่ส่งซ้ำอัตโนมัติ ปิดสวิตช์นี้เพื่อหยุดรับงานใหม่</p>
