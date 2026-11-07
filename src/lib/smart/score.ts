@@ -69,10 +69,11 @@ export function scoreLead(input: ScoreInput): { score: number; reason: string } 
   if (recency >= 10) bits.push("โพสต์ใหม่");
 
   score += Math.round(clamp(input.sourceQuality) * 10);
-  const preference = Math.round(clamp(input.preference ?? 0, -1, 1) * 15);
+  // Cap preference influence so a liked noisy group cannot alone push unrelated posts to "ร้อน".
+  const preference = Math.round(clamp(input.preference ?? 0, -1, 1) * 12);
   score += preference;
-  if (preference >= 5) bits.push("ตรงกับที่คุณสนใจ");
-  if (preference <= -5) bits.push("คล้ายโพสต์ที่คุณข้าม");
+  if (preference >= 8) bits.push("ตรงกับที่คุณสนใจ");
+  if (preference <= -6) bits.push("คล้ายโพสต์ที่คุณข้าม");
 
   if (input.intent === "buyer" && detectIntent(input.text) !== "buyer" && score > UNCLEAR_BUYER_CAP) {
     score = UNCLEAR_BUYER_CAP;

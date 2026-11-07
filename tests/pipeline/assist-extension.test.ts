@@ -151,7 +151,7 @@ describe("extension safety policy", () => {
       commands: Record<string, { suggested_key?: { default?: string } }>;
       permissions: string[];
     };
-    expect(manifest.version).toBe("1.10.0");
+    expect(manifest.version).toBe("1.10.1");
     expect(manifest.permissions).not.toContain("cookies");
     expect(manifest.permissions).not.toContain("webRequest");
     expect(Object.keys(manifest.commands).sort()).toEqual(["mark-sent", "mark-skip"]);
@@ -166,6 +166,14 @@ describe("extension safety policy", () => {
     expect(src).toMatch(/files: \["assist\.js", "overlay\.js"\]/);
     expect(src).toMatch(/loadAssistTabs\(\)/);
     expect(src).not.toMatch(/facebook\.com\/api|fetch\([^)]*facebook/i);
+  });
+
+  it("retries injecting reader scripts when Chrome fails to load selectors.js", () => {
+    const src = code("background.js");
+    expect(src).toMatch(/async function injectReaders/);
+    expect(src).toMatch(/attempt < 3/);
+    expect(src).toMatch(/READER_FILES/);
+    expect(src).toMatch(/await injectReaders\(tabId\)/);
   });
 
   it("background only injects for a pending request from the MY-BOT origin", () => {

@@ -40,6 +40,27 @@ function IntervalInput({ value, onSave }: { value: number; onSave: (minutes: num
   );
 }
 
+function NameInput({ value, onSave }: { value: string; onSave: (name: string) => void }) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  return (
+    <Input
+      value={draft}
+      className="max-w-xs font-semibold"
+      aria-label="ชื่อแหล่ง"
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={() => {
+        const name = draft.trim().slice(0, 120);
+        if (name && name !== value) onSave(name);
+        else setDraft(value);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") (event.target as HTMLInputElement).blur();
+      }}
+    />
+  );
+}
+
 const TYPE_LABEL: Record<string, string> = {
   facebook_group: "กลุ่ม Facebook",
   facebook_page: "เพจ Facebook (API ทางการ)",
@@ -153,7 +174,7 @@ export default function SourcesPage() {
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="font-semibold">{source.name}</h2>
+                  <NameInput value={source.name} onSave={(name) => void patch(source.id, { name })} />
                   <Badge>{TYPE_LABEL[source.type] ?? source.type}</Badge>
                   <Badge tone={source.enabled ? "pine" : "neutral"}>{source.enabled ? "เปิด" : "ปิด"}</Badge>
                   {isExtensionSource(source.type) ? <Badge tone={source.priority === "high" ? "pine" : "neutral"}>สำคัญ{PRIORITY_LABEL[source.priority]}</Badge> : null}

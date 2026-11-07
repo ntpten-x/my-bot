@@ -90,7 +90,13 @@ export async function enrichPosts(postIds: string[], classified: AiItem[], setti
     }
     const preference = preferenceScore(
       weights,
-      { category: post.category?.slug, keywords, sourceId: post.sourceId, author: post.authorName },
+      {
+        category: post.category?.slug,
+        keywords,
+        sourceId: post.sourceId,
+        author: post.authorName,
+        boundCategorySlug: post.source.boundCategorySlug || "",
+      },
       vector,
       centroids.likedSpace === space ? centroids.liked : null,
       centroids.dislikedSpace === space ? centroids.disliked : null,

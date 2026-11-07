@@ -109,6 +109,14 @@ describe("feedback mining", () => {
     );
     expect(delta).toBeGreaterThan(0.4);
   });
+
+  it("ignores source preference when the post is outside the bound niche", () => {
+    const weights = [{ kind: "source", key: "burapha", weight: 6 }];
+    const onNiche = preferenceScore(weights, { category: "games", keywords: [], sourceId: "burapha", boundCategorySlug: "games" }, null, null, null);
+    const offNiche = preferenceScore(weights, { category: "food", keywords: [], sourceId: "burapha", boundCategorySlug: "games" }, null, null, null);
+    expect(onNiche).toBeGreaterThan(0);
+    expect(offNiche).toBe(0);
+  });
 });
 
 describe("daily summary", () => {

@@ -13,12 +13,12 @@ export const AI_SYSTEM = `คัดแยกโพสต์ภาษาไทย
 - "ลิงก์ Shopee ชวนซื้อ" isAd true, ad
 กติกา:
 - slug จากรายการเท่านั้น ไม่มีย่อยใส่ null
-- buyer=หา อยากได้ รับซื้อ; seller=ขาย พร้อมส่ง รับทำ; chat=พูดคุย ถามความเห็น รีวิว เตือนภัย; ไม่ชัดใช้ unknown
-- รหัส/ไอดี/เติมเกม/ดันแรงค์ โร เรท เพ็ด ไอเทม ติดเวด = games; MS+ตัวเลข = รหัสร้าน
-- group = หมวดหลักของกลุ่ม ใช้ตัดสินโพสต์สั้น (games "ไก่ตัน"=ของในเกม)
+- buyer=หา อยากได้ รับซื้อ; seller=ขาย พร้อมส่ง รับทำ; chat=พูดคุย รีวิว เตือนภัย; ไม่ชัดใช้ unknown
+- รหัส/ไอดี/เติมเกม/ดันแรงค์ โร เรท เพ็ด ไอเทม = games; MS+ตัวเลข = รหัสร้าน
+- group = หมวดหลักกลุ่ม ใช้กับโพสต์สั้น (games "ไก่ตัน"=ของในเกม)
 - province จังหวัดเต็มหรือ null; urgency/specificity 0-1; hasBudget=มีงบ/ราคา
-- productSlug เกม/สินค้าจากรายการ หรือ null
-- suggestedReply ไทยสุภาพ ≤150 ตัว ไม่มีลิงก์`;
+- productSlug จากรายการหรือ null
+- suggestedReply ไทย≤150 ไม่มีลิงก์; buyer=มีของขาย(ห้ามรับซื้อกลับ); seller=ถามราคา`
 
 /** Recent posts the owner re-labelled by hand; shown to the model as extra examples. */
 let ownerExamples: { text: string; label: string }[] = [];
@@ -47,7 +47,7 @@ export function setProductList(list: string) {
 }
 
 export const PROMPT_TEXT_LIMIT = 8000;
-export const PROMPT_VERSION = "classifier-v3";
+export const PROMPT_VERSION = "classifier-v4";
 export function promptContextVersion() { return JSON.stringify([PROMPT_VERSION, AI_SYSTEM, ownerExamples, productList]); }
 
 export function userPrompt(posts: ClassifyInput[], catalog: CatNode[]): string {

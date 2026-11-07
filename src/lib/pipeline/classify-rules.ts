@@ -3,7 +3,7 @@ import { STRONG_BUYER, STRONG_SELLER, detectIntent, type Intent } from "./intent
 import { normalizeText } from "./normalize";
 import { extractProvince, normalizeProvinceName } from "./province";
 import { scoreAd } from "./ad-filter";
-import { draftReply } from "./reply";
+import { draftReply, isUsableSuggestedReply } from "./reply";
 import { ruleSignals } from "../smart/score";
 import { isDominant, type GroupHint } from "./group-profile";
 
@@ -207,10 +207,8 @@ export function sanitizeAiItem(item: LooseAiItem, post: ClassifyInput, catalog: 
   else if (item.intent === "buyer" || item.intent === "seller" || item.intent === "ad" || item.intent === "chat") intent = item.intent;
   else intent = fallback.intent;
   const province = normalizeProvinceName(item.province) || fallback.province;
-  const suggestedReply =
-    typeof item.suggestedReply === "string" && item.suggestedReply.trim()
-      ? item.suggestedReply.trim().slice(0, 500)
-      : fallback.suggestedReply;
+  const rawReply = typeof item.suggestedReply === "string" ? item.suggestedReply.trim().slice(0, 500) : "";
+  const suggestedReply = isUsableSuggestedReply(rawReply, intent) ? rawReply : fallback.suggestedReply;
   return {
     id: post.id,
     categorySlug,

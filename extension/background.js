@@ -440,7 +440,7 @@ async function readFullTexts(tabId, kind, urls) {
     try {
       await chrome.tabs.update(tabId, { url });
       await waitComplete(tabId);
-      await chrome.scripting.executeScript({ target: { tabId }, files: ["selectors.js", "fbtime.js", "parser.js", "identity.js"] });
+      await injectReaders(tabId);
       const targetKey = postKey(url);
       let match = null;
       let reason = "target_not_found";
@@ -509,8 +509,22 @@ async function nudgeScroll(tabId) {
   });
 }
 
+const READER_FILES = ["selectors.js", "fbtime.js", "parser.js", "identity.js"];
+
+// Chrome sometimes fails the first executeScript with "Could not load file: 'selectors.js'"
+// right after navigation or while the extension is reloading — retry a few times.
 async function injectReaders(tabId) {
-  await chrome.scripting.executeScript({ target: { tabId }, files: ["selectors.js", "fbtime.js", "parser.js", "identity.js"] });
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await chrome.scripting.executeScript({ target: { tabId }, files: READER_FILES });
+      return;
+    } catch (err) {
+      lastError = err;
+      await sleep(350 * (attempt + 1));
+    }
+  }
+  throw lastError || new Error("Could not inject readers");
 }
 
 // All reading happens in ONE dedicated Chrome window created minimized and never focused, so nothing

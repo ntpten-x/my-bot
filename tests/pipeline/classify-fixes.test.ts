@@ -39,6 +39,24 @@ describe("classification fixes (real misclassified posts)", () => {
     expect(ruleItem({ id: "x", text: "หารหัสหญิงล้วน งบ300-400" }, catalog).intent).toBe("buyer");
   });
 
+  it("replaces garbled or role-reversed AI drafts with the rules reply", () => {
+    const post = { id: "b", text: "รับซื้อรหัสงบ 200 ขอติดแมพเยอะๆ" };
+    const garbled = sanitizeAiItem(
+      { id: "b", categorySlug: "games", intent: "buyer", suggestedReply: "คุณกำลังมองห rahs หญิงล้วน งบ 300-400 ใช่หรือไม่?" },
+      post,
+      catalog,
+    );
+    expect(garbled.suggestedReply).not.toMatch(/rahs/i);
+    expect(garbled.suggestedReply).toMatch(/สวัสดีครับ/);
+    const reversed = sanitizeAiItem(
+      { id: "b", categorySlug: "games", intent: "buyer", suggestedReply: "สวัสดีครับ ทางเรายินดีรับซื้อรหัส Roblox ของคุณ กรุณาติดต่อกลับครับ" },
+      post,
+      catalog,
+    );
+    expect(reversed.suggestedReply).not.toMatch(/ยินดีรับซื้อ/);
+    expect(reversed.suggestedReply).toMatch(/มีของตรงตามที่กำลังหา/);
+  });
+
   it.each([
     "ปกติไม่เคยดวงดีกับเขาเลย กดแบบไม่คาดหวังแต่ดันออก",
     "สอบถามหน่อยครับพี่ที่เล่นพับจีทำงานอะไรกันครับ",
