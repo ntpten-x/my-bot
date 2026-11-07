@@ -625,15 +625,10 @@ async function injectReaders(tabId) {
   throw lastError || new Error("Could not inject readers");
 }
 
-// All reading happens in ONE dedicated Chrome window the owner does not use.
-// Never minimize (Chrome throttles those → often ≤1 post). Never steal focus.
-// Chrome requires ≥50% of a window inside a display work area, so full hide
-// (left:-12000) is rejected. We park at a screen corner with ~49% hanging off,
-// prefer a secondary monitor when present, and blank the tab when idle.
+// Reading happens as background tabs inside the owner's already-open Chrome window.
+// Never create a second Chrome window/popup and never move or focus the owner's window.
 const BOOT_ID = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const READER_MAX_AGE_MS = 15 * 60 * 1000;
-const SCRAPE_IDLE_CLOSE_MS = 20 * 60 * 1000;
-const OFFSCREEN = { width: 960, height: 720 };
 let scrapeWindowRef = null;
 let lastOwnerWindowId = null;
 
@@ -650,154 +645,80 @@ async function saveScrapeWindow(ref) {
   else await chrome.storage.session.remove("scrapeWindow").catch(() => undefined);
 }
 
+// Only tabs we opened for scrape — not every tab in the owner's window.
 function isScrapeWindowTab(tab) {
-  return Boolean(tab && scrapeWindowRef && tab.windowId === scrapeWindowRef.windowId);
+  return Boolean(tab && tab.id !== undefined && scrapingTabs.has(tab.id));
 }
 
 function readerWindowState(win) {
   if (!win) return "unknown";
   if (win.state === "minimized") return "minimized";
-  // Parked when mostly nudged off a work-area edge (left/top far outside typical on-screen).
-  if (typeof win.left === "number" && typeof win.top === "number" && (win.left < -80 || win.top < -80 || win.left > 3000 || win.top > 2000)) return "offscreen";
   return win.state || "normal";
 }
 
-// Pure: place a reader so ~51% stays in a work area (Chrome's minimum), tucked in a corner.
-function stealthParkBounds(workAreas, width, height) {
-  const areas = (workAreas || []).filter((area) => area && Number.isFinite(area.left) && Number.isFinite(area.width));
-  // Prefer a non-primary (usually quieter) display when the caller put it first.
-  const area = areas[0];
-  if (!area) return null;
-  const left = Math.round(area.left + area.width - width * 0.51);
-  const top = Math.round(area.top + area.height - height * 0.51);
-  return { left, top, width, height };
+function isNormalChromeWindow(win) {
+  return Boolean(win && win.id !== undefined && win.type !== "popup" && win.type !== "devtools");
 }
 
-async function listWorkAreas() {
-  if (!chrome.system || !chrome.system.display || !chrome.system.display.getInfo) return [];
-  try {
-    const displays = await chrome.system.display.getInfo();
-    const secondary = [];
-    const primary = [];
-    for (const display of displays || []) {
-      const area = display.workArea || display.bounds;
-      if (!area) continue;
-      const row = { left: area.left, top: area.top, width: area.width, height: area.height, primary: Boolean(display.isPrimary) };
-      if (row.primary) primary.push(row);
-      else secondary.push(row);
+const FB_TAB_URLS = ["*://www.facebook.com/*", "*://facebook.com/*", "*://web.facebook.com/*", "*://m.facebook.com/*"];
+
+async function findOwnerWindowId() {
+  // Always prefer the Chrome window that already has Facebook open (the connected session).
+  const fbTabs = await chrome.tabs.query({ url: FB_TAB_URLS }).catch(() => []);
+  for (const tab of fbTabs) {
+    if (tab.windowId === undefined) continue;
+    const win = await chrome.windows.get(tab.windowId).catch(() => null);
+    if (isNormalChromeWindow(win)) {
+      lastOwnerWindowId = win.id;
+      return win.id;
     }
-    return [...secondary, ...primary];
-  } catch {
-    return [];
   }
+  if (lastOwnerWindowId != null) {
+    const remembered = await chrome.windows.get(lastOwnerWindowId).catch(() => null);
+    if (isNormalChromeWindow(remembered)) return remembered.id;
+  }
+  return undefined;
 }
 
-async function parkOffscreen(windowId) {
-  const win = await chrome.windows.get(windowId).catch(() => null);
-  if (!win) return;
-  const width = OFFSCREEN.width;
-  const height = OFFSCREEN.height;
-  const areas = await listWorkAreas();
-  let bounds = stealthParkBounds(areas, width, height);
-  if (!bounds) {
-    // No display API: nudge from wherever Chrome created the window.
-    const baseLeft = typeof win.left === "number" ? win.left : 0;
-    const baseTop = typeof win.top === "number" ? win.top : 0;
-    bounds = { left: baseLeft - Math.floor(width * 0.49), top: baseTop, width, height };
-  }
-  try {
-    await chrome.windows.update(windowId, { focused: false, state: "normal", ...bounds });
-  } catch {
-    await chrome.windows.update(windowId, { focused: false, state: "normal", width, height }).catch(() => undefined);
-  }
-}
-
-// Returns { windowId, tabId } of the background reader window, creating it if needed.
-// tabId is the anchor blank tab; parallel scrapes add more tabs and must not remove active ones.
+// Host = owner's Facebook Chrome window only. Never create a popup/about:blank window.
 async function ensureScrapeWindow() {
-  const ref = await loadScrapeWindow();
-  if (ref) {
-    const win = await chrome.windows.get(ref.windowId, { populate: true }).catch(() => null);
-    if (win && win.tabs && win.tabs.length) {
-      const keep = win.tabs.find((tab) => tab.id === ref.tabId) || win.tabs[0];
-      for (const tab of win.tabs) {
-        if (tab.id === keep.id || scrapingTabs.has(tab.id)) continue;
-        // Drop stray idle tabs only — never tabs mid-scrape.
-        if (tab.url && tab.url !== "about:blank") continue;
-        await chrome.tabs.remove(tab.id).catch(() => undefined);
-      }
-      if (!win.focused) await parkOffscreen(win.id);
-      const next = { windowId: win.id, tabId: keep.id, usedAt: Date.now() };
-      await saveScrapeWindow(next);
-      return next;
-    }
-  }
-  // Create on the default display first (no left/top) — Chrome rejects far-off bounds at create time.
-  const win = await chrome.windows.create({
-    url: "about:blank",
-    focused: false,
-    type: "popup",
-    state: "normal",
-    width: OFFSCREEN.width,
-    height: OFFSCREEN.height,
-  });
-  const tab = win.tabs && win.tabs[0];
-  const next = { windowId: win.id, tabId: tab ? tab.id : undefined, usedAt: Date.now() };
-  if (next.tabId === undefined) {
-    const tabs = await chrome.tabs.query({ windowId: win.id }).catch(() => []);
-    next.tabId = tabs[0] && tabs[0].id;
-  }
-  await parkOffscreen(next.windowId);
+  const windowId = await findOwnerWindowId();
+  if (windowId === undefined) throw new Error("เปิด facebook.com ใน Chrome ที่จับคู่ส่วนขยายไว้ค้างไว้ก่อน ระบบจะอ่านจากหน้าต่างนั้น");
+  const win = await chrome.windows.get(windowId, { populate: true }).catch(() => null);
+  if (!isNormalChromeWindow(win)) throw new Error("ไม่พบหน้าต่าง Chrome ที่มี Facebook");
+  const hasFb = (win.tabs || []).some((tab) => isFacebookTab(tab));
+  if (!hasFb) throw new Error("เปิดแท็บ facebook.com ในหน้าต่างนี้ค้างไว้ก่อน");
+  const anchor = (win.tabs || []).find((tab) => tab.active) || (win.tabs || [])[0];
+  const next = { windowId: win.id, tabId: anchor && anchor.id, usedAt: Date.now(), host: "owner" };
+  lastOwnerWindowId = win.id;
   await saveScrapeWindow(next);
   return next;
 }
 
 chrome.windows.onRemoved.addListener((windowId) => {
   void loadScrapeWindow().then((ref) => { if (ref && ref.windowId === windowId) return saveScrapeWindow(null); });
+  if (lastOwnerWindowId === windowId) lastOwnerWindowId = null;
 });
 
-// If the owner clicks the reader window, put it away again and restore their previous window.
 chrome.windows.onFocusChanged.addListener((windowId) => {
   if (windowId === chrome.windows.WINDOW_ID_NONE) return;
-  void (async () => {
-    const ref = await loadScrapeWindow();
-    if (ref && windowId === ref.windowId) {
-      await parkOffscreen(ref.windowId);
-      if (lastOwnerWindowId != null) await chrome.windows.update(lastOwnerWindowId, { focused: true }).catch(() => undefined);
-      return;
-    }
-    lastOwnerWindowId = windowId;
-  })();
+  void chrome.windows.get(windowId).then((win) => {
+    if (isNormalChromeWindow(win)) lastOwnerWindowId = windowId;
+  }).catch(() => undefined);
 });
 
-async function closeIdleScrapeWindow() {
-  const ref = await loadScrapeWindow();
-  if (!ref || cycling) return;
-  if (Date.now() - (ref.usedAt || 0) < SCRAPE_IDLE_CLOSE_MS) {
-    // Keep the window but make sure its tab is not sitting on a Facebook page.
-    const tab = await chrome.tabs.get(ref.tabId).catch(() => null);
-    if (tab && tab.url && tab.url !== "about:blank") await chrome.tabs.update(ref.tabId, { url: "about:blank" }).catch(() => undefined);
-    return;
-  }
-  await chrome.windows.remove(ref.windowId).catch(() => undefined);
-  await saveScrapeWindow(null);
-}
-
 async function closeOrphanReaders() {
-  await closeIdleScrapeWindow().catch(() => undefined);
   const stored = await chrome.storage.session.get({ readers: {} });
   const readers = stored.readers || {};
   let changed = false;
   for (const [key, reader] of Object.entries(readers)) {
     const orphan = reader.boot !== BOOT_ID || (!cycling && Date.now() - (reader.at || 0) > READER_MAX_AGE_MS);
     if (!orphan) continue;
-    if (scrapeWindowRef && (reader.windowId === scrapeWindowRef.windowId || reader.tabId === scrapeWindowRef.tabId)) {
-      delete readers[key];
-      changed = true;
-      continue;
+    // Never close the owner's Chrome window. Restore reused Facebook tabs; only remove tabs we created.
+    if (reader.tabId !== undefined && reader.tabId !== null) {
+      if (reader.previousUrl) await chrome.tabs.update(reader.tabId, { url: reader.previousUrl, active: false }).catch(() => undefined);
+      else await chrome.tabs.remove(reader.tabId).catch(() => undefined);
     }
-    if (reader.windowId !== undefined && reader.windowId !== null) await chrome.windows.remove(reader.windowId).catch(() => undefined);
-    else if (reader.tabId !== undefined && reader.tabId !== null) await chrome.tabs.remove(reader.tabId).catch(() => undefined);
     scrapingTabs.delete(reader.tabId);
     delete readers[key];
     changed = true;
@@ -805,32 +726,47 @@ async function closeOrphanReaders() {
   if (changed) await chrome.storage.session.set({ readers });
 }
 
-// Loads a feed in its own background tab inside the reader window (never focused).
-// Window create + tab create are serialized so parallel scrapes do not race blank-tab cleanup.
+// Use the connected Facebook window: reuse an idle FB tab when possible, else a background tab.
 async function openReader(url) {
   const reader = await withScrapeWindowLock(async () => {
     const ref = await ensureScrapeWindow();
-    const tab = await chrome.tabs.create({ windowId: ref.windowId, url, active: false });
-    const tabId = tab.id;
+    const tabs = await chrome.tabs.query({ windowId: ref.windowId }).catch(() => []);
+    // Prefer an already-open Facebook tab that the owner is not looking at (same login session).
+    const reusable = (tabs || []).find(
+      (tab) => tab.id !== undefined && !tab.active && !tab.pinned && !scrapingTabs.has(tab.id) && isFacebookTab(tab),
+    );
+    let tabId;
+    let previousUrl = null;
+    let ephemeral = true;
+    if (reusable) {
+      tabId = reusable.id;
+      previousUrl = reusable.url || null;
+      ephemeral = false;
+      await chrome.tabs.update(tabId, { url, active: false }).catch(() => undefined);
+    } else if (url === "about:blank") {
+      const tab = await chrome.tabs.create({ windowId: ref.windowId, url: "about:blank", active: false });
+      tabId = tab.id;
+    } else {
+      const tab = await chrome.tabs.create({ windowId: ref.windowId, url, active: false });
+      tabId = tab.id;
+    }
     scrapingTabs.add(tabId);
-    // Track for orphan cleanup if the service worker restarts mid-scrape.
     const stored = await chrome.storage.session.get({ readers: {} }).catch(() => ({ readers: {} }));
     const readers = stored.readers || {};
-    readers[String(tabId)] = { tabId, windowId: ref.windowId, boot: BOOT_ID, at: Date.now() };
+    readers[String(tabId)] = { tabId, windowId: ref.windowId, boot: BOOT_ID, at: Date.now(), previousUrl };
     await chrome.storage.session.set({ readers }).catch(() => undefined);
-    await parkOffscreen(ref.windowId);
-    return { tabId, windowId: ref.windowId, ephemeral: true };
+    return { tabId, windowId: ref.windowId, ephemeral, previousUrl };
   });
   await sleep(400);
   return reader;
 }
 
-// Removes the scrape tab (anchor blank tab stays so the reader window survives).
 async function closeReader(reader) {
   if (!reader) return;
   scrapingTabs.delete(reader.tabId);
   if (reader.tabId !== undefined) {
-    await chrome.tabs.remove(reader.tabId).catch(() => undefined);
+    if (reader.previousUrl) await chrome.tabs.update(reader.tabId, { url: reader.previousUrl, active: false }).catch(() => undefined);
+    else if (reader.ephemeral) await chrome.tabs.remove(reader.tabId).catch(() => undefined);
     const stored = await chrome.storage.session.get({ readers: {} }).catch(() => ({ readers: {} }));
     const readers = stored.readers || {};
     if (readers[String(reader.tabId)]) {
@@ -900,7 +836,6 @@ async function scrapeGroup(cfg, group, remote, options) {
     const url = Scrape.scrapeUrl(group.url, kind);
     reader = await openReader(url);
     const win = reader.windowId !== undefined ? await chrome.windows.get(reader.windowId).catch(() => null) : null;
-    if (reader.windowId !== undefined && win && !win.focused) await parkOffscreen(reader.windowId);
     const reading = { windowState: readerWindowState(win), reloaded: false, stallsFirst: 0, stallsRetry: 0, throttled: false };
     let run = await readFeed(reader, kind, plan, group.knownKeys || [], result);
     reading.stallsFirst = run.stalls || 0;
@@ -1139,10 +1074,9 @@ async function quietReason(quiet) {
     if (state === "locked") return "หน้าจอล็อกอยู่";
   }
   if (quiet.pauseOnFacebook) {
-    await loadScrapeWindow();
     const win = await chrome.windows.getLastFocused({ populate: true }).catch(() => null);
-    const own = win && win.focused && (!scrapeWindowRef || win.id !== scrapeWindowRef.windowId);
-    if (own && (win.tabs || []).some((tab) => tab.active && isFacebookTab(tab))) return "คุณกำลังใช้ Facebook อยู่";
+    const usingOwnFb = win && win.focused && (win.tabs || []).some((tab) => tab.active && isFacebookTab(tab) && !scrapingTabs.has(tab.id));
+    if (usingOwnFb) return "คุณกำลังใช้ Facebook อยู่";
   }
   return "";
 }

@@ -151,7 +151,7 @@ describe("extension safety policy", () => {
       commands: Record<string, { suggested_key?: { default?: string } }>;
       permissions: string[];
     };
-    expect(manifest.version).toBe("1.10.9");
+    expect(manifest.version).toBe("1.10.10");
     expect(manifest.permissions).not.toContain("cookies");
     expect(manifest.permissions).not.toContain("webRequest");
     expect(Object.keys(manifest.commands).sort()).toEqual(["mark-sent", "mark-skip"]);
@@ -176,14 +176,17 @@ describe("extension safety policy", () => {
     expect(src).toMatch(/await injectReaders\(tabId\)/);
   });
 
-  it("parks the reader window in a screen corner without minimizing", () => {
+  it("reads inside the connected Facebook Chrome window without a second popup", () => {
     const src = code("background.js");
-    expect(src).toMatch(/parkOffscreen/);
-    expect(src).toMatch(/stealthParkBounds/);
-    expect(src).toMatch(/system\.display/);
-    expect(src).toMatch(/type:\s*["']popup["']/);
+    expect(src).toMatch(/findOwnerWindowId/);
+    expect(src).toMatch(/host:\s*["']owner["']/);
+    expect(src).toMatch(/previousUrl/);
+    expect(src).toMatch(/isFacebookTab\(tab\)/);
+    expect(src).toMatch(/active:\s*false/);
+    expect(src).not.toMatch(/type:\s*["']popup["']/);
     expect(src).not.toMatch(/left:\s*-12000/);
     expect(src).not.toMatch(/state:\s*["']minimized["']/);
+    expect(src).not.toMatch(/parkOffscreen/);
   });
 
   it("background only injects for a pending request from the MY-BOT origin", () => {
