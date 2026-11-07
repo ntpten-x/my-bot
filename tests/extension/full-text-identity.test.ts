@@ -12,8 +12,8 @@ it("processes durable detail work fairly and retains failed targets", async () =
  const source=readFileSync("extension/background.js","utf8");
  let backlog:Record<string,unknown>={a:{groupId:"g",addedAt:1},b:{groupId:"g",addedAt:2},c:{groupId:"g",addedAt:3},d:{groupId:"h",addedAt:4}};
  const read:string[]=[];
- const context=vm.createContext({chrome:{storage:{local:{set:async()=>{}}}},Date,Map,fullTextBudget:10,loadFullTextBacklog:async()=>backlog,saveFullTextBacklog:async(b:Record<string,unknown>)=>{backlog=b},loadConfig:async()=>({token:"same"}),base:()=>"server",openReader:async(url:string)=>({tabId:url}),closeReader:async()=>{},sourceKind:()=>"group",readFullTexts:async(_tab:string,_kind:string,urls:string[])=>{read.push(urls[0]);return {found:[],failed:urls}},sendPosts:async()=>{throw Error("must not send")},cleanPost:(x:unknown)=>x});
+ const context=vm.createContext({chrome:{storage:{local:{get:async()=>({}),set:async()=>{}}}},Date,Map,fullTextBudget:10,loadFullTextBacklog:async()=>backlog,saveFullTextBacklog:async(b:Record<string,unknown>)=>{backlog=b},loadConfig:async()=>({token:"same"}),base:()=>"server",openReader:async(url:string)=>({tabId:url}),closeReader:async()=>{},sourceKind:()=>"group",readFullTexts:async(_tab:string,_kind:string,urls:string[])=>{read.push(urls[0]);return {found:[],failed:urls}},sendPosts:async()=>{throw Error("must not send")},cleanPost:(x:unknown)=>x});
  vm.runInContext(source.slice(source.indexOf("async function processFullTextQueue("),source.indexOf("let cycling = false;")),context);
  await vm.runInContext('processFullTextQueue({token:"same"},[{id:"g"},{id:"h"}])',context);
- expect(read).toEqual(["a","b","d"]);expect(Object.keys(backlog)).toHaveLength(4);
+ expect(read).toEqual(["a","d","b"]);expect(Object.keys(backlog)).toHaveLength(4);
 });

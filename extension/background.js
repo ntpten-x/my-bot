@@ -391,14 +391,20 @@ async function loadFullTextBacklog() {
   const now = Date.now();
   const kept = {};
   for (const [url, item] of Object.entries(fullTextBacklog || {})) {
-    if (item && now - (item.addedAt || 0) < 3 * 24 * 3600 * 1000 && (item.tries || 0) < FULL_TEXT_MAX_TRIES) kept[url] = item;
+    if (!item) continue;
+    if (!item.problem && now - (item.addedAt || 0) >= 3 * 24 * 3600 * 1000) item.problem = "expired";
+    if (!item.problem && (item.tries || 0) >= FULL_TEXT_MAX_TRIES) item.problem = "retry_exhausted";
+    kept[url] = item;
   }
   return kept;
 }
 
 async function saveFullTextBacklog(backlog) {
-  const entries = Object.entries(backlog).sort((a, b) => (b[1].addedAt || 0) - (a[1].addedAt || 0)).slice(0, 200);
-  await chrome.storage.local.set({ fullTextBacklog: Object.fromEntries(entries) }).catch(() => undefined);
+  const entries = Object.entries(backlog).sort((a, b) => (a[1].addedAt || 0) - (b[1].addedAt || 0));
+  const dropped = entries.slice(200);
+  const previous = await chrome.storage.local.get({ fullTextOverflow: 0 });
+  await chrome.storage.local.set({ fullTextBacklog: Object.fromEntries(entries.slice(0, 200)), fullTextOverflow: previous.fullTextOverflow + dropped.length });
+  if (dropped.length) await rememberError("คิวอ่านข้อความเต็มเกิน 200 รายการ มีงานไม่รับเพิ่ม กรุณาตรวจสถิติคิวและลดจำนวนกลุ่ม");
 }
 
 function postKey(url) {
@@ -713,25 +719,32 @@ async function scrapeGroup(cfg, group, remote, options) {
   result.nextRunAt = await reportRun(cfg, group, result);
   return result;
 }
-async function processFullTextQueue(cfg, groups) {
+async function processFullTextQueue(cfg, groups, options = {}) {
   const metrics = { at: Date.now(), tried: 0, succeeded: 0, failed: 0, remaining: 0, durationMs: 0 };
-  const detailDeadline = Date.now() + 60_000;
+  const detailDeadline = Date.now() + (options.budgetMs || 60_000);
   const backlog = await loadFullTextBacklog();
   const now = Date.now();
   // Oldest due first; cap per group so a busy source cannot monopolize details.
   const used = new Map();
-  const due = Object.entries(backlog).filter(([, item]) => (item.after || 0) <= now)
-    .sort((a, b) => (a[1].addedAt || 0) - (b[1].addedAt || 0));
+  const pending = Object.entries(backlog).filter(([, item]) => !item.problem && (item.after || 0) <= now)
+    .sort((a, b) => (a[1].lastTriedAt || 0) - (b[1].lastTriedAt || 0) || (a[1].addedAt || 0) - (b[1].addedAt || 0));
+  // Round robin sources: two consecutive slow items cannot consume the whole budget.
+  const queues = new Map();
+  for (const entry of pending) { const id = entry[1].groupId; if (!queues.has(id)) queues.set(id, []); queues.get(id).push(entry); }
+  const due = [];
+  for (let pass = 0; pass < 2; pass++) for (const queue of queues.values()) if (queue.length) due.push(queue.shift());
   for (const [url, item] of due) {
-    if (fullTextBudget <= 0 || Date.now() >= detailDeadline) break;
+    if (fullTextBudget <= 0 || metrics.tried >= (options.maxItems || 10) || Date.now() >= detailDeadline) break;
     const group = groups.find(g => g.id === item.groupId);
     if (!group || (used.get(group.id) || 0) >= 2) continue;
     const latest = await loadConfig(); if (latest.paused || latest.token !== cfg.token || base(latest) !== base(cfg)) break;
     used.set(group.id, (used.get(group.id) || 0) + 1);
     let reader;
     try {
-      reader = await openReader(url);
+      reader = await openReader("about:blank");
       metrics.tried += 1;
+      item.lastTriedAt = Date.now();
+      await saveFullTextBacklog(backlog);
       const read = await readFullTexts(reader.tabId, sourceKind(group), [url]);
       if (read.found.length) {
         await sendPosts(cfg, group.url, read.found.map(cleanPost));
@@ -749,7 +762,10 @@ async function processFullTextQueue(cfg, groups) {
     } finally { await closeReader(reader); }
   }
   metrics.remaining = Object.keys(backlog).length; metrics.durationMs = Date.now() - metrics.at;
-  await chrome.storage.local.set({ fullTextMetrics: metrics });
+  metrics.review = Object.values(backlog).filter(item => item.problem).length;
+  metrics.oldestAgeMs = Object.values(backlog).reduce((age, item) => Math.max(age, Date.now() - (item.addedAt || Date.now())), 0);
+  const { fullTextTotals: previous = {} } = await chrome.storage.local.get({ fullTextTotals: {} });
+  await chrome.storage.local.set({ fullTextMetrics: metrics, fullTextTotals: { tried: (previous.tried || 0) + metrics.tried, succeeded: (previous.succeeded || 0) + metrics.succeeded, failed: (previous.failed || 0) + metrics.failed } });
 }
 let cycling = false;
 const RUN_LOCK_MS = 12 * 60 * 1000;
@@ -802,6 +818,7 @@ async function cycle() {
     const { throttledAt } = await chrome.storage.local.get({ throttledAt: 0 });
     const limit = remote.maxGroupsPerCycle || 5;
     const batch = due.slice(0, Date.now() - throttledAt < 30 * 60 * 1000 ? Math.min(limit, 2) : limit);
+    if (Object.keys(await loadFullTextBacklog()).length >= 10) await processFullTextQueue(cfg, remote.groups || [], { budgetMs: 20000, maxItems: 2 });
     for (const group of batch) {
       schedules[group.id] = Date.now() + RUN_LOCK_MS;
       await chrome.storage.local.set({ schedules });

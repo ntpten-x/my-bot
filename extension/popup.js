@@ -112,8 +112,8 @@ document.getElementById("save").addEventListener("click", async () => {
 });
 
 async function showOutbox() {
-  const { outbox = [], outboxRejectedItems = 0, fullTextMetrics: detail } = await chrome.storage.local.get({ outbox: [], outboxRejectedItems: 0, fullTextMetrics: null });
-  document.getElementById("outboxStatus").textContent = `คิวข้อมูล ${outbox.length} ชุด · ต้องตรวจ ${outbox.filter(item => item.problem).length} ชุด · ไม่รับเพิ่มเพราะเต็ม ${outboxRejectedItems} รายการ` + (detail ? ` · อ่านรายละเอียด: ลอง ${detail.tried} สำเร็จ ${detail.succeeded} ไม่สำเร็จ ${detail.failed} เหลือ ${detail.remaining} (${Math.round(detail.durationMs / 1000)} วินาที)` : "");
+  const { outbox = [], outboxRejectedItems = 0, fullTextMetrics: detail, fullTextOverflow = 0 } = await chrome.storage.local.get({ outbox: [], outboxRejectedItems: 0, fullTextMetrics: null, fullTextOverflow: 0 });
+  document.getElementById("outboxStatus").textContent = `คิวข้อมูล ${outbox.length} ชุด · ต้องตรวจ ${outbox.filter(item => item.problem).length} ชุด · ไม่รับเพิ่มเพราะเต็ม ${outboxRejectedItems} รายการ` + (detail ? ` · อ่านรายละเอียด: ลอง ${detail.tried} สำเร็จ ${detail.succeeded} ไม่สำเร็จ ${detail.failed} เหลือ ${detail.remaining} ต้องตรวจ ${detail.review || 0} เกินคิว ${fullTextOverflow} เก่าสุด ${Math.round((detail.oldestAgeMs || 0) / 60000)} นาที (${Math.round(detail.durationMs / 1000)} วินาที)` : "");
 }
 document.getElementById("clearOutboxProblems").addEventListener("click", async () => {
   if (!confirm("ยืนยันว่าตรวจรายการหมดอายุ/ถูกปฏิเสธแล้ว และยอมรับการลบข้อมูลเฉพาะรายการเหล่านี้?")) return;

@@ -43,3 +43,15 @@ Tests ทั้งชุด 518 ผ่าน ก่อนเพิ่ม regress
 ลดงบ feed เป็น 45 วินาทีและคำนวณเวลารอแต่ละช่วงจาก remaining budget ลด growth wait และ nudge retry เหลือหนึ่งครั้ง คิวรายละเอียดมีงบรอบแยก 60 วินาทีและ backoff เมื่อรายการหนึ่งล้มเหลว โดยไม่หยุดรายการทั้งหมด เพิ่ม fullTextMetrics (tried/succeeded/failed/remaining/durationMs) ใน popup ขีดจำกัดเป็น cooperative ระหว่าง Chrome API ไม่ใช่ hard cancellation จึงไม่รับรอง wall clock ไม่เกินตัวเลขดังกล่าวเมื่อ API ค้าง
 
 ทดสอบ 61 files / 519 tests ผ่าน ไม่มี skip; Lint ผ่าน ยังไม่ deploy หรือวัดเวลา Production ใหม่ในรอบนี้
+
+## ปรับระบายคิวหลังพบ backlog 40
+
+เพิ่มช่วงระบายคิวก่อน discovery เมื่อ backlog >=10 (สูงสุด 2 รายการ/งบ cooperative 20 วินาที), คงระบายหลัง discovery และหมุนแหล่งแบบ round-robin ตาม lastTriedAt แทนกินสองรายการจากกลุ่มแรกก่อนกลุ่มอื่น บันทึกเวลาเริ่มลองอ่านลง durable backlog ก่อนทำงาน ลดการ navigate URL เป้าหมายซ้ำโดยเริ่ม reader ที่ about:blank แล้วให้ readFullTexts นำทางครั้งเดียว
+
+Strict regression 61 files / 519 tests ผ่าน ไม่มี skip และ Lint ผ่าน ยังไม่ deploy หรือรับรองว่าคิวจริงระบายทันอัตราเข้าจนกว่าจะวัดหลังอัปเดต คง exact post identity/full_text authorization gates ไม่ลดความปลอดภัยเพื่อเร่งส่ง
+
+## การนับงานคิวให้ตรวจสอบได้
+
+เพิ่ม problem=expired/retry_exhausted แทนกรองงานออกเงียบ ๆ รายการมีปัญหาไม่ถูก retry อัตโนมัติ เพิ่มตัวนับ overflow เมื่อเกิน 200 รายการ แจ้งเตือนให้ลดแหล่ง/ตรวจคิว เพิ่ม metrics review/oldestAgeMs และยอดสะสม tried/succeeded/failed ระดับติดตั้ง งานหมดอายุยังบล็อกการคอมเมนต์ด้วย full_text gate ตามเดิม ต้องตรวจเอง ไม่อ้างว่าระบายคิวได้ครบเพราะจำนวน pending ลดลง
+
+Strict tests 61 files / 519 tests ผ่าน และ Lint ผ่าน ยังต้อง deploy และวัดคิวจริงก่อนรับรอง throughput
