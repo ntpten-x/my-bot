@@ -43,3 +43,6 @@ it("renders stored reasons as owner-facing Thai and tolerates malformed metadata
   expect(evaluationReasons("null", [])).toEqual([]);
   expect(evaluationReasons("invalid", [])).toEqual(["อ่านรายละเอียดไม่สำเร็จ"]);
 });
+it("never matches truncated content even if the visible prefix matches", () => {
+ expect(explainCommentRule(rule, { ...post("หารองเท้า"), truncated: true }, now).matched).toBe(false);
+});

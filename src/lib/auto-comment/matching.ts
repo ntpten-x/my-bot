@@ -7,7 +7,7 @@ export type MatchRule = {
   enabled: boolean; pausedReason: string; sourceIdsJson: string; keywords: string; excludeKeywords: string;
   keywordMode: string; startMinute: number; endMinute: number; daysJson: string; maxAgeHours: number;
 };
-export type MatchPost = { intent?: string; aiProvider?: string | null; text: string; sourceId: string; createdAt: Date; postedAt: Date | null; isAd: boolean; forbiddenHit: boolean; duplicateOfId: string | null; dismissed: boolean };
+export type MatchPost = { truncated?: boolean; intent?: string; aiProvider?: string | null; text: string; sourceId: string; createdAt: Date; postedAt: Date | null; isAd: boolean; forbiddenHit: boolean; duplicateOfId: string | null; dismissed: boolean };
 export function jsonList<T>(value: string, fallback: T[] = []): T[] {
   try { const out = JSON.parse(value); return Array.isArray(out) ? out : fallback; } catch { return fallback; }
 }
@@ -38,6 +38,7 @@ export function explainCommentRule(rule: MatchRule, post: MatchPost, now = new D
   const checks = [
     { code: "enabled", label: "กฎเปิดใช้งาน", passed: rule.enabled },
     { code: "not_paused", label: "กฎไม่ถูกพัก", passed: !rule.pausedReason },
+    { code: "full_text", label: "อ่านข้อความฉบับเต็มแล้ว", passed: !post.truncated },
     { code: "not_ad", label: "ไม่ใช่โฆษณา", passed: !post.isAd },
     { code: "not_forbidden", label: "ไม่พบคำต้องห้าม", passed: !post.forbiddenHit },
     { code: "not_duplicate", label: "ไม่ใช่โพสต์ซ้ำ", passed: !post.duplicateOfId },

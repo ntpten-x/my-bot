@@ -381,7 +381,7 @@ async function reportRun(cfg, group, run) {
 
 // Full-text re-reads: at most this many permalinks per cycle (shared by all groups) and a time budget per group.
 const MAX_FULL_TEXT_PER_ROUND = 10;
-const FULL_TEXT_BUDGET_MS = 90 * 1000;
+const FULL_TEXT_BUDGET_MS = 30 * 1000;
 const FULL_TEXT_MAX_TRIES = 4;
 let fullTextBudget = MAX_FULL_TEXT_PER_ROUND;
 
@@ -423,7 +423,8 @@ async function readFullTexts(tabId, kind, urls) {
       await chrome.scripting.executeScript({ target: { tabId }, files: ["selectors.js", "fbtime.js", "parser.js", "identity.js"] });
       const page = await readPage(tabId, kind);
       const posts = (page.posts || []).filter((post) => !post.truncated);
-      const match = posts.find((post) => postKey(post.url) === postKey(url)) || posts.sort((a, b) => b.text.length - a.text.length)[0];
+      const targetKey = postKey(url);
+      const match = targetKey ? posts.find((post) => postKey(post.url) === targetKey) : null;
       if (match) found.push({ ...match, url });
       else failed.push(url);
     } catch {
@@ -597,6 +598,7 @@ async function readFeed(reader, kind, plan, knownKeys, result) {
   const Scrape = globalThis.MyBotScrape;
   const tabId = reader.tabId;
   const run = Scrape.createRun({ knownKeys, ...plan });
+  const feedDeadline = Date.now() + 60_000;
   await waitComplete(tabId).catch(() => undefined);
   await injectReaders(tabId);
   let state = await waitForGrowth(tabId, kind, 0, 12000);
@@ -610,11 +612,14 @@ async function readFeed(reader, kind, plan, knownKeys, result) {
   if (first.groupId) result.groupId = first.groupId;
   result.sample = (first.posts || []).slice(0, 8);
   let stop = Scrape.addStep(run, first.posts);
-  while (!stop) {
+  while (!stop && Date.now() < feedDeadline) {
     const before = state.count;
+    const previousKeys = new Set((await readPage(tabId, kind)).posts?.map(post => postKey(post.url)).filter(Boolean) || []);
     await scrollOneScreen(tabId);
     await sleep(Scrape.scrollWaitMs());
     state = await waitForGrowth(tabId, kind, before, 6000);
+    const immediate = await readPage(tabId, kind);
+    if ((immediate.posts || []).some(post => { const key = postKey(post.url); return key && !previousKeys.has(key); })) state.grew = true;
     for (let retry = 0; !state.grew && retry < 2; retry += 1) {
       run.stalls += 1;
       await nudgeScroll(tabId);
@@ -623,6 +628,7 @@ async function readFeed(reader, kind, plan, knownKeys, result) {
     const page = await readPage(tabId, kind);
     stop = Scrape.addStep(run, page.posts);
   }
+  if (!stop && Date.now() >= feedDeadline) run.stoppedBy = "limit";
   return run;
 }
 
@@ -649,7 +655,7 @@ async function scrapeGroup(cfg, group, remote, options) {
     reading.stallsFirst = run.stalls || 0;
     // A minimized window can be throttled by Chrome. Never un-minimize: reload once and read again with
     // patience; if it still stalls, later cycles use smaller batches and the catch-up sweeps fill the gap.
-    if (run.found <= 2 && run.stalls >= 2 && run.stoppedBy !== "seen") {
+    if (run.found === 0 && run.stalls >= 2 && run.stoppedBy !== "seen" && Date.now() - startedAt < 30_000) {
       await chrome.tabs.reload(reader.tabId).catch(() => undefined);
       await sleep(2500);
       reading.reloaded = true;
@@ -687,22 +693,9 @@ async function scrapeGroup(cfg, group, remote, options) {
         .map(([url]) => url);
       const freshCut = picked.filter((post) => post.truncated).map((post) => String(post.url));
       const urls = [...new Set([...freshCut, ...(group.refetchUrls || []).map(String), ...local])];
-      if (urls.length) {
-        const read = await readFullTexts(reader.tabId, kind, urls);
-        if (read.found.length) {
-          await sendPosts(cfg, group.url, read.found.map(cleanPost)).catch(() => undefined);
-          result.fullTexts = read.found.length;
-        }
-        for (const post of read.found) delete backlog[post.url];
-        for (const url of read.failed) {
-          const tries = ((backlog[url] && backlog[url].tries) || 0) + 1;
-          backlog[url] = { groupId: group.id, tries, addedAt: (backlog[url] && backlog[url].addedAt) || now, after: now + 30 * 60 * 1000 * 2 ** tries };
-        }
-        // Cut-off posts the budget did not reach this time wait in the backlog for the next cycle.
-        for (const url of freshCut) if (!read.tried.includes(url) && !backlog[url]) backlog[url] = { groupId: group.id, tries: 0, addedAt: now, after: 0 };
-        await saveFullTextBacklog(backlog);
-        if (result.stats) Object.assign(result.stats, { fullTried: read.tried.length, fullOk: read.found.length });
-      }
+      // Discovery only persists work. Detail reading runs after all discovery groups.
+      for (const url of urls) if (!backlog[url]) backlog[url] = { groupId: group.id, sourceUrl: group.url, tries: 0, addedAt: now, after: 0 };
+      await saveFullTextBacklog(backlog);
     }
     await postJson(cfg, "/api/v1/extension/sample", { sourceUrl: group.url, posts: result.sample || [] }).catch(() => undefined);
     result.message = `อ่านได้ ${run.found} โพสต์ ใหม่ ${result.newPosts} · เลื่อน ${result.scrolls} หน้าจอ (${plan.mode})`;
@@ -717,6 +710,33 @@ async function scrapeGroup(cfg, group, remote, options) {
   if (result.stats) result.stats.durationMs = Date.now() - startedAt;
   result.nextRunAt = await reportRun(cfg, group, result);
   return result;
+}
+async function processFullTextQueue(cfg, groups) {
+  const backlog = await loadFullTextBacklog();
+  const now = Date.now();
+  // Oldest due first; cap per group so a busy source cannot monopolize details.
+  const used = new Map();
+  const due = Object.entries(backlog).filter(([, item]) => (item.after || 0) <= now)
+    .sort((a, b) => (a[1].addedAt || 0) - (b[1].addedAt || 0));
+  for (const [url, item] of due) {
+    if (fullTextBudget <= 0) break;
+    const group = groups.find(g => g.id === item.groupId);
+    if (!group || (used.get(group.id) || 0) >= 2) continue;
+    const latest = await loadConfig(); if (latest.paused || latest.token !== cfg.token || base(latest) !== base(cfg)) break;
+    used.set(group.id, (used.get(group.id) || 0) + 1);
+    let reader;
+    try {
+      reader = await openReader(url);
+      const read = await readFullTexts(reader.tabId, sourceKind(group), [url]);
+      if (read.found.length) {
+        await sendPosts(cfg, group.url, read.found.map(cleanPost));
+        delete backlog[url];
+      } else {
+        item.tries = (item.tries || 0) + 1; item.after = Date.now() + Math.min(6 * 3600000, 60000 * 2 ** item.tries);
+      }
+      await saveFullTextBacklog(backlog);
+    } finally { await closeReader(reader); }
+  }
 }
 let cycling = false;
 const RUN_LOCK_MS = 12 * 60 * 1000;
@@ -782,6 +802,7 @@ async function cycle() {
         if (await quietReason(remote.quiet)) break;
       }
     }
+    await processFullTextQueue(cfg, remote.groups || []);
   } catch (error) {
     // เปิดแอปไม่ติดหรือเน็ตหลุด — รอรอบถัดไป
     await rememberError(`รอบอ่านอัตโนมัติไม่สำเร็จ: ${String(error && error.message ? error.message : error).slice(0, 160)}`).catch(() => undefined);

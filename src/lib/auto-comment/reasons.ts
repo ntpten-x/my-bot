@@ -1,4 +1,5 @@
 const labels: Record<string, string> = {
+  full_text: "รออ่านข้อความฉบับเต็มก่อนคอมเมนต์",
   enabled: "กฎยังปิดอยู่", not_paused: "กฎถูกพัก", not_ad: "ถูกกรองเป็นโฆษณา",
   not_forbidden: "พบคำต้องห้าม", not_duplicate: "โพสต์ซ้ำ", not_dismissed: "เจ้าของข้ามโพสต์แล้ว",
   open_intent: "ปิดการหา/ขาย หรือมีข้อความปฏิเสธ", intent: "เจตนาไม่ตรงกฎ",

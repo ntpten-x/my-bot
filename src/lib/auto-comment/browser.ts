@@ -12,7 +12,7 @@ const ruleQuery = {
   orderBy: [{ priority: "desc" as const }, { createdAt: "asc" as const }, { id: "asc" as const }],
 };
 // Only fields used by matching/delivery invalidate a checkpoint, never read/fetch timestamps.
-const inputKeySql = Prisma.sql`md5(jsonb_build_array(p."textRevision",p."text",p."intent",p."isAd",p."forbiddenHit",p."duplicateOfId",p."dismissed",p."aiProvider",p."suggestedReply",p."postedAt",p."externalUrl",s."enabled",s."url",s."type")::text)`;
+const inputKeySql = Prisma.sql`md5(jsonb_build_array(p."textRevision",p."truncated",p."text",p."intent",p."isAd",p."forbiddenHit",p."duplicateOfId",p."dismissed",p."aiProvider",p."suggestedReply",p."postedAt",p."externalUrl",s."enabled",s."url",s."type")::text)`;
 const fingerprint = (rules: { id: string; revision: number }[]) => createHash("sha256")
   .update(JSON.stringify(rules.map(rule => [rule.id, rule.revision]))).digest("hex");
 export function browserTarget(url: string, sourceUrl: string, sourceType: string) {
@@ -89,6 +89,12 @@ export async function scanBrowserComments(assertActive: () => Promise<void>) {
         if (!target) codes.push("unsupported_target");
         const deadline = (post.postedAt ?? post.createdAt).getTime() + rule.maxAgeHours * 3600_000;
         // Keep a durable wait even if pre-AI labels initially reject the post.
+        if (post.truncated && deadline > now.getTime() && !codes.some(code => ["source", "source_disabled", "before_start", "age", "unsupported_target"].includes(code))) {
+          evaluationState = "waiting_full_text";
+          nextEvaluateAt = new Date(Math.min(deadline + 1, now.getTime() + 60_000));
+          reasons.push({ ruleId: rule.id, codes: ["full_text"] });
+          break;
+        }
         const aiRelevant = rule.requireAi && codes.every(code => ["not_ad", "intent", "window"].includes(code));
         const waitingAi = aiRelevant && !(classificationReady ??= await aiReady(tx, post));
         if (waitingAi && deadline > now.getTime() && codes.every(code => ["not_ad", "intent", "window"].includes(code))) {
