@@ -7,6 +7,7 @@
     const view = doc.defaultView || globalThis;
     const memory = environment?.memory || globalThis;
     const visible = el => el && (environment?.visible ? environment.visible(el) : el.getClientRects().length > 0);
+    const labelOf = el => [el.getAttribute("aria-label"), el.getAttribute("aria-placeholder"), el.getAttribute("placeholder")].filter(Boolean).join(" ");
     const normalize = text => String(text || "").replace(/\s+/g, " ").trim();
     const postId = url => {
       try {
@@ -28,32 +29,40 @@
     if (!matchesPage() || !payload.id || !payload.message || payload.message.length > 2000) return { ok: false, outcome: "failed" };
 
     if (kind === "prepare") {
+      // Nested dialogs represent one surface when they share the same composer.
+      const dialogBoxes = Array.from(doc.querySelectorAll('[role="dialog"] [contenteditable="true"][role="textbox"], [role="dialog"] textarea'))
+        .filter(el => visible(el) && /comment|แสดงความคิดเห็น|เขียนความคิดเห็น/i.test(labelOf(el)) && !/reply|ตอบกลับ|message|ข้อความ|search|ค้นหา/i.test(labelOf(el)));
+      const dialogs = dialogBoxes.length === 1 ? [dialogBoxes[0].closest('[role="dialog"]')] : [];
+      if (dialogBoxes.length > 1) return { ok: false, outcome: "failed", reason: "ambiguous_composer" };
       const articles = Array.from(doc.querySelectorAll('[role="main"] [role="article"], main [role="article"]')).filter(article =>
         !article.parentElement?.closest('[role="article"]') && Array.from(article.querySelectorAll("a[href]")).some(a => {
           try { return postId(new URL(a.getAttribute("href"), loc.href).href) === postId(payload.externalUrl); } catch { return false; }
         }));
-      if (articles.length !== 1) return { ok: false, outcome: "failed" };
-      const article = articles[0];
+      if (!dialogs.length && articles.length !== 1) return { ok: false, outcome: "failed" };
+      const article = dialogs[0] || articles[0];
       const boxes = Array.from(article.querySelectorAll('[contenteditable="true"][role="textbox"],textarea')).filter(el => {
         const label = [el.getAttribute("aria-label"), el.getAttribute("aria-placeholder"), el.getAttribute("placeholder")].join(" ").toLowerCase();
-        return visible(el) && /comment|แสดงความคิดเห็น/.test(label) && !/reply|ตอบกลับ|message|ข้อความ|search|ค้นหา/.test(label);
+        return visible(el) && /comment|แสดงความคิดเห็น|เขียนความคิดเห็น/.test(label) && !/reply|ตอบกลับ|message|ข้อความ|search|ค้นหา/.test(label);
       });
       if (boxes.length !== 1) return { ok: false, outcome: "failed" };
       const box = boxes[0], form = box.closest('form,[role="form"]');
       if (!form || !article.contains(form)) return { ok: false, outcome: "failed" };
-      if (normalize(box.value ?? box.textContent)) return { ok: false, outcome: "failed" };
+      const prior = memory.__mybotCommentSession;
+      const ownDraft = prior && prior.id === payload.id && prior.box === box && !prior.clicked && prior.message === payload.message;
+      if (normalize(box.value ?? box.textContent) && !ownDraft) return { ok: false, outcome: "failed" };
+      memory.__mybotCommentSession = { id: payload.id, box, article, before: prior?.id === payload.id ? prior.before : links(article), message: payload.message, at: now(), clicked: false };
       box.focus();
-      if (box.tagName === "TEXTAREA") {
+      if (!ownDraft && box.tagName === "TEXTAREA") {
         const setter = Object.getOwnPropertyDescriptor(view.HTMLTextAreaElement.prototype, "value")?.set;
         setter?.call(box, payload.message); box.dispatchEvent(new view.Event("input", { bubbles: true }));
-      } else if (typeof doc.execCommand === "function") doc.execCommand("insertText", false, payload.message);
+      } else if (!ownDraft && typeof doc.execCommand === "function") doc.execCommand("insertText", false, payload.message);
       if (normalize(box.value ?? box.textContent) !== normalize(payload.message)) return { ok: false, outcome: "failed" };
       const buttons = Array.from(form.querySelectorAll('button,[role="button"]')).filter(el => {
         const label = normalize(el.getAttribute("aria-label") || el.textContent).toLowerCase();
         return visible(el) && !el.disabled && el.getAttribute("aria-disabled") !== "true" && /^(post a comment|post comment|comment|send|ส่ง|ส่งความคิดเห็น|แสดงความคิดเห็น)$/.test(label);
       });
       if (buttons.length !== 1) return { ok: false, outcome: "failed" };
-      memory.__mybotCommentSession = { id: payload.id, box, button: buttons[0], article, before: links(article), message: payload.message, at: now(), clicked: false };
+      memory.__mybotCommentSession = { id: payload.id, box, button: buttons[0], article, before: memory.__mybotCommentSession.before, message: payload.message, at: now(), clicked: false };
       return { ok: true };
     }
     const session = memory.__mybotCommentSession;

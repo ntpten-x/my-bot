@@ -47,3 +47,23 @@ describe("browser DOM delivery using SYNTHETIC pages only", () => {
     expect(await action("observe", payload, f.env)).toMatchObject({ ok: true, outcome: "observed", commentUrl: url + "?comment_id=777" }); f.dom.window.close();
   });
 });
+
+it("supports a uniquely identified target dialog with a Thai main composer", async () => {
+  const f = fixture('<div role="dialog"><a href="/groups/12345/posts/8888/">target</a><form><textarea aria-label="เขียนความคิดเห็นที่แสดงต่อสาธารณะ..."></textarea><button type="button" aria-label="ส่ง">ส่ง</button></form></div>');
+  expect(await action("prepare", payload, f.env)).toMatchObject({ ok: true });
+  expect(f.click).not.toHaveBeenCalled();
+  expect(await action("send", { ...payload, permitUntil: 2000 }, f.env)).toMatchObject({ ok: true });
+  expect(f.click).toHaveBeenCalledTimes(1); f.dom.window.close();
+});
+it("refuses multiple independent dialog composers", async () => {
+  const html = '<div role="dialog"><a href="/groups/12345/posts/8888/">target</a><form><textarea aria-label="Write a comment"></textarea><button aria-label="Comment">Comment</button></form></div>';
+  for (const value of [html + html]) {
+    const f = fixture(value); expect((await action("prepare", payload, f.env)).ok).toBe(false); expect(f.click).not.toHaveBeenCalled(); f.dom.window.close();
+  }
+});
+
+it("supports nested post dialogs sharing one composer without a permalink anchor", async () => {
+ const f=fixture('<div role="dialog"><div role="dialog"><form><textarea aria-label="เขียนความคิดเห็นที่แสดงต่อสาธารณะ..."></textarea><button type="button" aria-label="ส่ง">ส่ง</button></form></div></div>');
+ expect((await action("prepare",payload,f.env)).ok).toBe(true);
+ expect(f.click).not.toHaveBeenCalled(); f.dom.window.close();
+});
