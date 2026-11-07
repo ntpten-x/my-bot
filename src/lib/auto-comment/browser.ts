@@ -22,8 +22,10 @@ export function browserTarget(url: string, sourceUrl: string, sourceType: string
     if (sourceType !== "facebook_group" || ![post, source].every(u => u.protocol === "https:" && hosts.includes(u.hostname) && !u.username && !u.password && !u.port)) return null;
     const group = source.pathname.match(/^\/groups\/([a-zA-Z0-9._-]+)\/?$/)?.[1];
     const match = post.pathname.match(/^\/groups\/([a-zA-Z0-9._-]+)\/(?:posts|permalink)\/(\d+)\/?$/);
-    if (!group || !match || match[1] !== group || post.searchParams.has("comment_id") || post.searchParams.has("reply_comment_id")) return null;
-    return { key: `group:${group}:${match[2]}`, area: `group:${group}`, url: `https://www.facebook.com/groups/${group}/posts/${match[2]}/` };
+    if (!group || !match || match[1].toLowerCase() !== group.toLowerCase() || post.searchParams.has("comment_id") || post.searchParams.has("reply_comment_id")) return null;
+    // Ingest normalizes URL case; source vanity slugs may retain their original case.
+    const canonicalGroup = group.toLowerCase();
+    return { key: `group:${canonicalGroup}:${match[2]}`, area: `group:${canonicalGroup}`, url: `https://www.facebook.com/groups/${canonicalGroup}/posts/${match[2]}/` };
   } catch { return null; }
 }
 

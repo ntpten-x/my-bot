@@ -26,6 +26,15 @@ describe("browser DOM delivery using SYNTHETIC pages only", () => {
     const f = fixture(); expect((await action("prepare", { ...payload, fbUserId: "111111" }, f.env)).ok).toBe(false);
     expect((await action("prepare", { ...payload, externalUrl: url.replace("8888", "9999") }, f.env)).ok).toBe(false); expect(f.click).not.toHaveBeenCalled(); f.dom.window.close();
   });
+  it("matches the same vanity group across URL casing without allowing a different group", async () => {
+    const f = fixture('<main><article role="article"><a href="/groups/Nexups/posts/8888/">post</a><form><textarea aria-label="Write a comment"></textarea><button type="button" aria-label="Comment">Comment</button></form></article></main>');
+    f.env.location.href = "https://www.facebook.com/groups/NEXUPS/posts/8888/";
+    const target = { ...payload, externalUrl: "https://www.facebook.com/groups/nexups/posts/8888/" };
+    expect((await action("prepare", target, f.env)).ok).toBe(true);
+    expect(f.click).not.toHaveBeenCalled();
+    expect((await action("prepare", { ...target, externalUrl: "https://www.facebook.com/groups/other/posts/8888/" }, f.env)).ok).toBe(false);
+    f.dom.window.close();
+  });
   it("stops at checkpoints and refuses ambiguous composers", async () => {
     const f = fixture(); f.doc.body.appendChild(f.doc.createElement("iframe")).src = "https://www.facebook.com/captcha";
     expect(await action("prepare", payload, f.env)).toMatchObject({ outcome: "blocked" }); expect(f.click).not.toHaveBeenCalled(); f.dom.window.close();

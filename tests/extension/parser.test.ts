@@ -53,6 +53,30 @@ describe("facebook parser", () => {
     loadScripts(dom);
     expect(dom.window.MyBotParser.parseFacebookPosts(dom.window.document)).toEqual([]);
   });
+
+  it("keeps distinct single-post multi_permalinks without promoting a comment-only link to a send target", () => {
+    // SYNTHETIC markup only. Each article represents its own post, not a comment.
+    const dom = new JSDOM(`<body>
+      <article role="article"><a href="/groups/12345?multi_permalinks=111">เวลา</a><div data-ad-preview="message">ขายสินค้าทดสอบรายการแรก</div></article>
+      <article role="article"><a href="/groups/12345?multi_permalinks=222">เวลา</a><div data-ad-preview="message">ขายสินค้าทดสอบรายการสอง</div></article>
+      <article role="article"><a href="/groups/12345/posts/333?comment_id=444&amp;__cft__[0]=tracking">เวลา</a><div data-ad-preview="message">ขายสินค้าทดสอบรายการสาม</div></article>
+    </body>`, { runScripts: "dangerously", url: "https://www.facebook.com/groups/12345" });
+    loadScripts(dom);
+    expect(dom.window.MyBotParser.parseFacebookPosts(dom.window.document).map((post: { url: string }) => post.url)).toEqual([
+      "https://www.facebook.com/groups/12345/posts/111/", "https://www.facebook.com/groups/12345/posts/222/", "https://www.facebook.com/groups/12345/posts/333?comment_id=444&__cft__[0]=tracking",
+    ]);
+  });
+
+  it("prefers a direct group permalink and does not interpret a multi-post collection as one post", () => {
+    const dom = new JSDOM(`<body><article role="article">
+      <a href="/groups/alias/posts/111?comment_id=999">คอมเมนต์</a><a href="/groups/12345?multi_permalinks=111">เวลา</a><a href="/groups/alias/posts/111">เวลาโพสต์</a>
+      <div data-ad-preview="message">ขายสินค้าทดสอบรายการแรก</div></article>
+      <article role="article"><a href="/groups/12345?multi_permalinks=222,333">หลายโพสต์</a><div data-ad-preview="message">ขายสินค้าทดสอบรายการสอง</div></article>
+      <article role="article"><a href="https://evilfacebook.com/groups/12345/posts/444">ปลอม</a><div data-ad-preview="message">ขายสินค้าทดสอบรายการสาม</div></article>
+    </body>`, { runScripts: "dangerously", url: "https://www.facebook.com/groups/12345" });
+    loadScripts(dom);
+    expect(dom.window.MyBotParser.parseFacebookPosts(dom.window.document).map((post: { url: string }) => post.url)).toEqual(["https://www.facebook.com/groups/alias/posts/111/"]);
+  });
 });
 
 describe("facebook parser — See more and Marketplace (synthetic fixtures)", () => {

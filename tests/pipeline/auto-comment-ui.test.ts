@@ -3,6 +3,7 @@ import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import Page from "../../src/app/(app)/auto-comment/page";
+import { CommentReadinessPanel } from "../../src/components/comment-readiness";
 const dashboard = { control: { state: "stopped", dryRun: true, emergency: false, hourlyLimit: 5, dailyLimit: 20, cooldownUntil: null }, rules: [], sources: [], jobs: [], logs: [], counts: {}, observed: 0, matched: 0 };
 let root: Root; let container: HTMLDivElement;
 beforeEach(() => {
@@ -70,4 +71,19 @@ it("rejects empty keyword lists before creating a rule", async () => {
   await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
   expect(container.querySelector('[role="alert"]')!.textContent).toContain("ระบุคำสำคัญอย่างน้อยหนึ่งคำ");
   expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+});
+
+it("shows dry-run and the bound device opt-in as blockers even when a different device is ready", async () => {
+  const rule = { id: "rule", name: "กฎทดสอบ", enabled: true, browserDeviceId: "bound", browserFbUserId: "123456", browserConsent: true, pausedReason: "", deliveryMode: "extension", requireAi: false, messageMode: "template" };
+  const readiness = { extensions: [
+    { id: "bound", name: "เครื่องที่ผูก", online: true, fbUserId: "123456", commentsEnabled: false },
+    { id: "other", name: "เครื่องอื่น", online: true, fbUserId: "123456", commentsEnabled: true },
+  ], accounts: [], steps: [{ key: "worker", ready: true }, { key: "ai", ready: false }] };
+  await act(async () => root.render(React.createElement(CommentReadinessPanel, { control: dashboard.control, rules: [rule], readiness })));
+  expect(container.textContent).toContain("ยังไม่ส่งจริง: Dry Run เปิดอยู่");
+  expect(container.textContent).toContain("Extension ปิดรับงานคอมเมนต์");
+  expect(container.textContent).toContain("กฎนี้ไม่รอ AI แม้ผู้ให้บริการ AI ไม่พร้อม");
+  readiness.extensions[0].commentsEnabled = true;
+  await act(async () => root.render(React.createElement(CommentReadinessPanel, { control: dashboard.control, rules: [rule], readiness })));
+  expect(container.textContent).toContain("อุปกรณ์และบัญชีพร้อมรับงาน");
 });

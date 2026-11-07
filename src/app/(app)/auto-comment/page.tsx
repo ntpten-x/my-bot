@@ -6,6 +6,7 @@ import { Button, Input, Label, Select, Textarea } from "@/components/ui";
 import { evaluationReasons } from "@/lib/auto-comment/reasons";
 import { CommentRulePreview } from "@/components/comment-rule-preview";
 import { CommentMessages } from "@/components/comment-messages";
+import { CommentReadinessPanel, type CommentReadiness } from "@/components/comment-readiness";
 
 type BrowserFields = { businessFacts: string; draftInstruction: string; intentMode: string; priority: number; deliveryMode: string; browserDeviceId: string; browserFbUserId: string; browserConsent: boolean; requireAi: boolean; messageMode: string };
 type Rule = BrowserFields & {
@@ -36,8 +37,7 @@ function editForm(rule: Rule): Form {
 
 export default function AutoCommentPage() {
   const [data, setData] = useState<Dashboard | null>(null);
-  const [browser, setBrowser] = useState<{ extensions: { id: string; name: string; online: boolean; fbUserId: string }[]; accounts: { id: string; name: string }[] } | null>(null);
-  useEffect(() => { const c = new AbortController(); void api<typeof browser>("/api/automation-readiness", { signal: c.signal }).then(setBrowser).catch(() => undefined); return () => c.abort(); }, []);
+  const [browser, setBrowser] = useState<CommentReadiness | null>(null);
   const [form, setForm] = useState<Form>(blank);
   const [editing, setEditing] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -52,7 +52,15 @@ export default function AutoCommentPage() {
   const reload = useCallback(async (signal?: AbortSignal) => {
     if (reloading.current) return true;
     reloading.current = true;
-    try { const result = await api<Dashboard>("/api/auto-comment", { signal }); if (!signal?.aborted) setData(result); return true; }
+    try {
+      const [dashboard, readiness] = await Promise.allSettled([
+        api<Dashboard>("/api/auto-comment", { signal }), api<CommentReadiness>("/api/automation-readiness", { signal }),
+      ]);
+      if (signal?.aborted) return false;
+      setBrowser(readiness.status === "fulfilled" ? readiness.value : null);
+      if (dashboard.status === "rejected") throw dashboard.reason;
+      setData(dashboard.value); return readiness.status === "fulfilled";
+    }
     catch (err) { if (!signal?.aborted) setError(err instanceof Error ? err.message : "โหลดข้อมูลไม่สำเร็จ"); return false; }
     finally { reloading.current = false; }
   }, []);
@@ -108,6 +116,7 @@ export default function AutoCommentPage() {
       {data?.control.cooldownUntil ? <p className="mt-2 text-sm">พักตามข้อจำกัด Meta ถึง {new Date(data.control.cooldownUntil).toLocaleString("th-TH")}</p> : null}
       {data?.control.emergency ? <Button className="mt-3" variant="outline" disabled={busy} onClick={() => void control({ action: "reset" })}>ปลดหยุดฉุกเฉิน (ยังไม่ Start)</Button> : null}
     </section>
+    {data ? <CommentReadinessPanel control={data.control} rules={data.rules} readiness={browser} /> : null}
     <dl className="grid grid-cols-2 gap-x-6 gap-y-4 md:grid-cols-4 xl:grid-cols-7">
       {[["พบคอมเมนต์ในหน้าจอ", count("browser_observed")], ["ตรวจพบรอบนี้", data?.observed ?? 0], ["ตรงเงื่อนไขรอบนี้", data?.matched ?? 0], ["ส่งสำเร็จทั้งหมด", count("sent")], ["ล้มเหลว/ต้องตรวจ", count("failed") + count("permission_denied") + count("uncertain") + count("unavailable")], ["ค้างในคิว", count("pending_ai") + count("browser_ready") + count("pending") + count("claimed") + count("sending")], ["จำลอง / ส่งเอง", count("dry_run") + count("unsupported")]].map(([label, value]) => <div key={label} className="border-l-2 border-line pl-3"><dt className="text-xs text-muted">{label}</dt><dd className="mt-1 text-2xl font-semibold tabular-nums">{value}</dd></div>)}
     </dl>

@@ -14,7 +14,7 @@
         const u = new URL(url);
         if (u.protocol !== "https:" || !["www.facebook.com", "facebook.com", "web.facebook.com", "m.facebook.com"].includes(u.hostname)) return "";
         const m = u.pathname.match(/^\/groups\/([a-zA-Z0-9._-]+)\/(?:posts|permalink)\/(\d+)\/?$/);
-        return m ? m[1] + ":" + m[2] : "";
+        return m ? m[1].toLowerCase() + ":" + m[2] : "";
       } catch { return ""; }
     };
     const blocked = () => /\/(?:checkpoint|login|challenge)(?:\/|\?|$)/i.test(loc.href)

@@ -36,9 +36,29 @@
       const nodes = article.querySelectorAll(selector);
       for (const node of nodes) {
         const href = absUrl(node.getAttribute("href"));
-        if (!href || href.indexOf("facebook.com") === -1) continue;
-        if (/\/posts\/|\/permalink\/|story_fbid|multi_permalinks/.test(href)) return href;
-        if (!fallback) fallback = href;
+        if (!href) continue;
+        const parsed = new URL(href);
+        if (parsed.protocol !== "https:" || !["facebook.com", "www.facebook.com", "web.facebook.com", "m.facebook.com"].includes(parsed.hostname) || parsed.username || parsed.password || parsed.port) continue;
+        const direct = parsed.pathname.match(/^\/groups\/([a-zA-Z0-9._-]+)\/(?:posts|permalink)\/(\d+)\/?$/);
+        if (direct) {
+          // Never turn a comment/reply link into an authorized top-level post.
+          // Keep looking for a clean permalink in this article instead.
+          if (parsed.searchParams.has("comment_id") || parsed.searchParams.has("reply_comment_id")) {
+            if (!fallback) fallback = href;
+            continue;
+          }
+          return "https://www.facebook.com/groups/" + direct[1] + "/posts/" + direct[2] + "/";
+        }
+        const group = parsed.pathname.match(/^\/groups\/([a-zA-Z0-9._-]+)\/?$/);
+        const ids = parsed.searchParams.getAll("multi_permalinks");
+        if (group && ids.length === 1 && /^\d+$/.test(ids[0]) && !parsed.searchParams.has("comment_id") && !parsed.searchParams.has("reply_comment_id")) {
+          // A single post link, not a group feed or a multi-post collection.
+          // Keep it as fallback so a direct permalink in this article wins.
+          fallback = "https://www.facebook.com/groups/" + group[1] + "/posts/" + ids[0] + "/";
+          continue;
+        }
+        if (/\/posts\/|\/permalink\/|story_fbid/.test(href)) return href;
+        if (!fallback && !group) fallback = href;
       }
     }
     return fallback;
