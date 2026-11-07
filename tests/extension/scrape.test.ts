@@ -128,6 +128,10 @@ describe("scroll scrape plan (extension/scrape.js)", () => {
     expect(scrape.planRun({ now: NOW, group: {} }).mode).toBe("catchup");
     const audit = scrape.planRun({ now: NOW, group: { lastFetchedAt: recent }, audit: true });
     expect(audit).toMatchObject({ mode: "audit", knownStreak: Infinity, maxAgeMs: 24 * 3600_000 });
+    // Server flagged a thin previous pass → deep ≤24 h catch-up even if last fetch was recent.
+    expect(
+      scrape.planRun({ now: NOW, group: { lastFetchedAt: recent, intervalMinutes: 10, needsCoverage: true }, lastSweepAt: NOW }),
+    ).toMatchObject({ mode: "catchup", maxScrolls: 30, maxAgeMs: 24 * 3600_000 });
   });
 
   it("catch-up stops on posts older than 24 h instead of reading further back", () => {

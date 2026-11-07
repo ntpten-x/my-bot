@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { parseFbTime } = require("../../extension/fbtime.js") as { parseFbTime: (s: string, now?: number) => string | null };
-import { parseDate } from "@/lib/ingest";
+import { isWithinMaxAge, parseDate } from "@/lib/ingest";
 import { facebookGroupKey } from "@/lib/sources";
 
 // 2026-11-04 16:00 in Bangkok
@@ -51,6 +51,13 @@ describe("server parseDate", () => {
     expect(parseDate("2027-01-01T00:00:00Z", NOW)).toBeNull();
     expect(parseDate("ไม่ใช่เวลา", NOW)).toBeNull();
     expect(parseDate(null, NOW)).toBeNull();
+  });
+
+  it("keeps posts inside 24 h and drops dated posts older than the window", () => {
+    expect(isWithinMaxAge(null, 24, NOW)).toBe(true);
+    expect(isWithinMaxAge(new Date(NOW - 23 * 3600_000), 24, NOW)).toBe(true);
+    expect(isWithinMaxAge(new Date(NOW - 25 * 3600_000), 24, NOW)).toBe(false);
+    expect(isWithinMaxAge(new Date(NOW - 30 * 3600_000), 48, NOW)).toBe(false);
   });
 });
 

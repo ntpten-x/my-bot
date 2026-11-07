@@ -64,8 +64,9 @@
    * Decide how deep one run goes.
    * - normal:  stop after KNOWN_STREAK consecutive known posts (max NORMAL_SCROLLS screens)
    * - sweep:   once an hour per source, keep going past 8 known posts (max MAX_SCROLLS)
-   * - catchup: the last run is long ago (Chrome was closed) → read back up to 24 h
+   * - catchup: long gap, shallow last run, or first run → read back up to 24 h
    * - audit:   coverage check, never stops on known posts, reads up to 24 h back
+   * Owner policy: every enabled group, every post within 24 h; then keep ingesting new ones.
    */
   function planRun(input) {
     const opts = input || {};
@@ -77,6 +78,10 @@
     const interval = Math.max(5, Number(group.intervalMinutes) || 15) * 60 * 1000;
     const base = { maxPosts: MAX_POSTS_PER_RUN, maxScrolls: NORMAL_SCROLLS, knownStreak: KNOWN_STREAK, maxAgeMs: Math.min(CATCHUP_MAX_MS, Math.max(settings.maxAgeMs, HOUR)) };
     if (opts.audit) return { ...base, mode: "audit", maxScrolls: MAX_SCROLLS, knownStreak: Infinity, maxAgeMs: CATCHUP_MAX_MS };
+    // Server flagged the previous pass as thin — dig the full ≤24 h window again.
+    if (group.needsCoverage) {
+      return { ...base, mode: "catchup", maxScrolls: MAX_SCROLLS, knownStreak: KNOWN_STREAK, maxAgeMs: CATCHUP_MAX_MS };
+    }
     const gap = lastRun ? now - lastRun : Infinity;
     if (gap > Math.max(2 * HOUR, 3 * interval)) {
       const back = (lastSeen || lastRun) ? now - Math.min(lastSeen || now, lastRun || now) + HOUR : CATCHUP_MAX_MS;

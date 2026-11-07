@@ -107,11 +107,17 @@ async function main() {
     fetch_interval_minutes: "10",
     jitter_minutes: "1",
     max_groups_per_cycle: "20",
+    scroll_screens: "5",
+    max_post_age_hours: "24",
     extension_token: token,
     notify_sound: "true",
   };
   for (const [key, value] of Object.entries(defaults)) {
     await prisma.setting.upsert({ where: { key }, update: {}, create: { key, value } });
+  }
+  // Owner policy: keep the ≤24 h ingest window and a deep enough default scroll.
+  for (const [key, value] of Object.entries({ max_post_age_hours: "24", scroll_screens: "5" })) {
+    await prisma.setting.upsert({ where: { key }, update: { value }, create: { key, value } });
   }
   const groq = await prisma.setting.findUnique({ where: { key: "groq_model" } });
   if (groq && resolveGroqModel(groq.value) !== groq.value) {

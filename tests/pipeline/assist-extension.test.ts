@@ -151,7 +151,7 @@ describe("extension safety policy", () => {
       commands: Record<string, { suggested_key?: { default?: string } }>;
       permissions: string[];
     };
-    expect(manifest.version).toBe("1.10.12");
+    expect(manifest.version).toBe("1.10.13");
     expect(manifest.permissions).not.toContain("cookies");
     expect(manifest.permissions).not.toContain("webRequest");
     expect(Object.keys(manifest.commands).sort()).toEqual(["mark-sent", "mark-skip"]);
@@ -195,6 +195,7 @@ describe("extension safety policy", () => {
     expect(src).toMatch(/shallowEnd/);
     expect(src).toMatch(/MIN_FOUND_BEFORE_END/);
     expect(code("scrape.js")).toMatch(/COLD_EMPTY_STREAK/);
+    expect(code("scrape.js")).toMatch(/needsCoverage/);
   });
 
   it("background only injects for a pending request from the MY-BOT origin", () => {

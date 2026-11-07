@@ -41,6 +41,13 @@ export function parseDate(value?: string | null, now = Date.now()) {
   return new Date(ms);
 }
 
+/** Owner rule: dated posts older than maxPostAgeHours (capped at 24) are never stored. Undated posts pass. */
+export function isWithinMaxAge(postedAt: Date | null, maxAgeHours: number, now = Date.now()) {
+  if (!postedAt) return true;
+  const hours = Math.min(24, Math.max(1, maxAgeHours || 24));
+  return now - postedAt.getTime() <= hours * 3600_000;
+}
+
 function cleanImages(images: string[] | undefined) {
   return (images ?? [])
     .filter((url) => /^https?:\/\//i.test(url))
@@ -75,11 +82,17 @@ export async function ingestPosts(input: {
   }));
 
   const prepared = [];
+  let tooOld = 0;
   for (const raw of input.posts) {
     const text = raw.text?.replace(/\u0000/g, "").trim().slice(0, 8000);
     if (!text || text.length < 4 || !raw.url) continue;
+    const postedAt = parseDate(raw.postedAt);
+    if (!isWithinMaxAge(postedAt, settings.maxPostAgeHours)) {
+      tooOld += 1;
+      continue;
+    }
     const lead = prepareLead({ text, url: raw.url }, rules, catalog);
-    prepared.push({ raw: { ...raw, text }, lead, url: normalizeUrl(raw.url) });
+    prepared.push({ raw: { ...raw, text }, lead, url: normalizeUrl(raw.url), postedAt });
   }
 
   const existing = prepared.length
@@ -176,7 +189,7 @@ export async function ingestPosts(input: {
           normalizedText: item.lead.normalizedText.slice(0, 8000),
           truncated: isTruncatedText(item.raw.text),
           contentHash: item.lead.hash,
-          postedAt: parseDate(item.raw.postedAt),
+          postedAt: item.postedAt ?? parseDate(item.raw.postedAt),
           imagesJson: JSON.stringify(cleanImages(item.raw.images)),
           categoryId: ids.categoryId,
           subcategoryId: ids.subcategoryId,
@@ -234,7 +247,7 @@ export async function ingestPosts(input: {
     data: {
       sourceId: source.id,
       status: "ok",
-      message: `${input.actor}: ใหม่ ${uniqueIds.length} ซ้ำ ${duplicates} จัดโดย ${aiProvider}`,
+      message: `${input.actor}: ใหม่ ${uniqueIds.length} ซ้ำ ${duplicates}${tooOld ? ` เก่าเกิน ${tooOld}` : ""} จัดโดย ${aiProvider}`,
       postsFound: uniqueIds.length,
     },
   });
@@ -260,6 +273,7 @@ export async function ingestPosts(input: {
     expanded,
     revised: revisedIds.length,
     duplicates,
+    tooOld,
     source: canonicalSourceUrl(source.url),
   };
   } finally { recordTiming("ingest", performance.now() - started); }

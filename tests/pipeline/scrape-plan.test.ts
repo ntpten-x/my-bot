@@ -5,6 +5,7 @@ import {
   isMarketplaceUrl,
   marketplaceSourceName,
   maxIntervalFor,
+  isIncompleteScrape,
   nextAdaptiveInterval,
   nextRunAfter,
   normalizePriority,
@@ -31,6 +32,10 @@ describe("priority + adaptive scheduling", () => {
     expect(nextAdaptiveInterval({ current: 10, base: 10, newPosts: 0, ok: true })).toBe(15);
     expect(nextAdaptiveInterval({ current: 25, base: 10, newPosts: 0, ok: true })).toBe(maxIntervalFor(10));
     expect(nextAdaptiveInterval({ current: 7, base: 10, newPosts: 0, ok: false })).toBe(7);
+    // Shallow end must not look like a quiet group — retry at/near base, never back off.
+    expect(isIncompleteScrape({ ok: true, postsFound: 1, stoppedBy: "end" })).toBe(true);
+    expect(isIncompleteScrape({ ok: true, postsFound: 10, stoppedBy: "seen" })).toBe(false);
+    expect(nextAdaptiveInterval({ current: 15, base: 10, newPosts: 0, ok: true, incomplete: true })).toBe(7);
     expect(maxIntervalFor(30)).toBe(90);
     expect(maxIntervalFor(120)).toBe(180);
   });

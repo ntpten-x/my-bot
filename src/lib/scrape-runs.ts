@@ -6,6 +6,7 @@ import {
   EXTENSION_SOURCE_TYPES,
   PRIORITY_INTERVAL,
   isDue,
+  isIncompleteScrape,
   nextAdaptiveInterval,
   nextRunAfter,
   normalizePriority,
@@ -105,11 +106,15 @@ export async function buildExtensionConfig(now = new Date()) {
   // Known post keys for the sources the extension is likely to open this cycle, so it can stop scrolling early.
   const hints = new Map<string, { keys: string[]; lastSeenAt: string | null; refetch: string[] }>();
   // Keep keys for the ingest window (≤24 h) so catch-up / sweeps stop on known posts.
-  const since = new Date(now.getTime() - Math.max(24, settings.maxPostAgeHours) * 3600_000);
+  const ageHours = Math.min(24, Math.max(1, settings.maxPostAgeHours));
+  const since = new Date(now.getTime() - ageHours * 3600_000);
   for (const source of due.slice(0, settings.maxGroupsPerCycle + 2)) {
     const rows = await prisma.post.findMany({
-      where: { sourceId: source.id, createdAt: { gte: since } },
-      orderBy: { createdAt: "desc" },
+      where: {
+        sourceId: source.id,
+        OR: [{ postedAt: { gte: since } }, { postedAt: null, createdAt: { gte: since } }],
+      },
+      orderBy: [{ postedAt: "desc" }, { createdAt: "desc" }],
       take: 300,
       select: { externalUrl: true, postedAt: true, createdAt: true, text: true },
     });
@@ -126,6 +131,11 @@ export async function buildExtensionConfig(now = new Date()) {
     groups: ordered.map((source) => {
       const priority = normalizePriority(source.priority);
       const hint = hints.get(source.id);
+      const needsCoverage = isIncompleteScrape({
+        ok: source.lastRunStop !== "error",
+        postsFound: source.lastRunFound,
+        stoppedBy: source.lastRunStop || "",
+      });
       return {
         id: source.id,
         name: source.name,
@@ -141,13 +151,15 @@ export async function buildExtensionConfig(now = new Date()) {
         knownKeys: hint?.keys ?? [],
         lastSeenAt: hint?.lastSeenAt ?? null,
         refetchUrls: hint?.refetch ?? [],
+        // Last run looked shallow — ask the extension for a deep ≤24 h pass next.
+        needsCoverage,
       };
     }),
     maxGroupsPerCycle: settings.maxGroupsPerCycle,
     defaultIntervalMinutes: settings.fetchIntervalMinutes,
     jitterMinutes: settings.jitterMinutes,
     scrollScreens: settings.scrollScreens,
-    maxAgeHours: settings.maxPostAgeHours,
+    maxAgeHours: ageHours,
     maxPostsPerRun: settings.maxPostsPerRun,
     serverScheduling: true,
     quiet: { pauseOnFacebook: settings.quietPauseOnFacebook, window: settings.quietWindow, pauseWhenLocked: settings.quietPauseWhenLocked },
@@ -190,11 +202,17 @@ export async function recordScrapeRun(input: ScrapeRunInput, now = new Date(), r
   if (!source) return null;
   const settings = await getSettings();
   const base = source.intervalMinutes || PRIORITY_INTERVAL[normalizePriority(source.priority)];
+  const incomplete = isIncompleteScrape({
+    ok: input.ok,
+    postsFound: input.postsFound,
+    stoppedBy: input.stoppedBy,
+  });
   const interval = nextAdaptiveInterval({
     current: source.currentIntervalMinutes || base,
     base,
     newPosts: input.newPosts,
     ok: input.ok,
+    incomplete,
   });
   const nextRunAt = nextRunAfter(now, interval, settings.jitterMinutes, random);
   const stop = input.ok ? input.stoppedBy : "error";
