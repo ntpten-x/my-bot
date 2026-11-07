@@ -30,3 +30,10 @@ it("drains newly discovered detail work before discovering the next group", asyn
  await vm.runInContext("cycle()",context);
  expect(events).toEqual(["feed:a","detail:slice","feed:b","detail:slice","detail:tail"]);
 });
+it("waits for delayed exact-target content rather than failing after navigation", async () => {
+ const source=readFileSync("extension/background.js","utf8"); let reads=0;
+ const context=vm.createContext({Date,Math,fullTextBudget:10,FULL_TEXT_BUDGET_MS:30000,chrome:{tabs:{update:async()=>{}},scripting:{executeScript:async()=>{}}},waitComplete:async()=>{},sleep:async()=>{},readPage:async()=>({posts:++reads<3?[]:[{url:"target",text:"complete target",truncated:false}]}),postKey:(u:string)=>u});
+ vm.runInContext(source.slice(source.indexOf("async function readFullTexts("),source.indexOf("// Wait (read-only)")),context);
+ const result=await vm.runInContext('readFullTexts(1,"group",["target"])',context);
+ expect(reads).toBe(3);expect(result.found).toHaveLength(1);expect(result.failed).toHaveLength(0);
+});

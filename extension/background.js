@@ -417,6 +417,7 @@ async function readFullTexts(tabId, kind, urls) {
   const found = [];
   const failed = [];
   const tried = [];
+  const failures = {};
   const deadline = Date.now() + FULL_TEXT_BUDGET_MS;
   for (const url of urls) {
     if (fullTextBudget <= 0 || Date.now() > deadline) break;
@@ -425,19 +426,27 @@ async function readFullTexts(tabId, kind, urls) {
     try {
       await chrome.tabs.update(tabId, { url });
       await waitComplete(tabId);
-      await sleep(2500);
       await chrome.scripting.executeScript({ target: { tabId }, files: ["selectors.js", "fbtime.js", "parser.js", "identity.js"] });
-      const page = await readPage(tabId, kind);
-      const posts = (page.posts || []).filter((post) => !post.truncated);
       const targetKey = postKey(url);
-      const match = targetKey ? posts.find((post) => postKey(post.url) === targetKey) : null;
+      let match = null;
+      let reason = "target_not_found";
+      // document.readyState=complete precedes React's post content. Poll the
+      // exact target, never infer success from some other article on the page.
+      for (let attempt = 0; attempt < 4 && Date.now() < deadline; attempt++) {
+        const page = await readPage(tabId, kind);
+        if (page.identity?.loggedIn === false) { reason = "facebook_logged_out"; break; }
+        const target = targetKey ? (page.posts || []).find(post => postKey(post.url) === targetKey) : null;
+        if (target && !target.truncated && String(target.text || "").trim()) { match = target; break; }
+        reason = target ? "text_still_truncated" : "target_not_found";
+        if (attempt < 3) await sleep(Math.min(1500, Math.max(0, deadline - Date.now())));
+      }
       if (match) found.push({ ...match, url });
-      else failed.push(url);
+      else { failed.push(url); failures[url] = reason; }
     } catch {
-      failed.push(url); // Tried again on a later run (backlog).
+      failed.push(url); failures[url] = "navigation_or_parser_error"; // No send, retry later.
     }
   }
-  return { found, failed, tried };
+  return { found, failed, tried, failures };
 }
 
 // Wait (read-only) until the feed shows more posts or grows, using a MutationObserver in the page.
@@ -752,6 +761,7 @@ async function processFullTextQueue(cfg, groups, options = {}) {
         delete backlog[url];
       } else {
         metrics.failed += 1;
+        item.lastReason = read.failures?.[url] || "target_not_found";
         item.tries = (item.tries || 0) + 1; item.after = Date.now() + Math.min(6 * 3600000, 60000 * 2 ** item.tries);
       }
       await saveFullTextBacklog(backlog);
@@ -762,6 +772,7 @@ async function processFullTextQueue(cfg, groups, options = {}) {
     } finally { await closeReader(reader); }
   }
   metrics.remaining = Object.keys(backlog).length; metrics.durationMs = Date.now() - metrics.at;
+  metrics.reasons = Object.values(backlog).reduce((counts, item) => { if (item.lastReason) counts[item.lastReason] = (counts[item.lastReason] || 0) + 1; return counts; }, {});
   metrics.review = Object.values(backlog).filter(item => item.problem).length;
   metrics.oldestAgeMs = Object.values(backlog).reduce((age, item) => Math.max(age, Date.now() - (item.addedAt || Date.now())), 0);
   const { fullTextTotals: previous = {} } = await chrome.storage.local.get({ fullTextTotals: {} });

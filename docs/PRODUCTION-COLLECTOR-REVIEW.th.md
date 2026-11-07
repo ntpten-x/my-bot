@@ -61,3 +61,9 @@ Strict tests 61 files / 519 tests ผ่าน และ Lint ผ่าน ย�
 เพิ่ม detail slice หลัง discovery ทุกกลุ่ม สูงสุดหนึ่งรายการ/งบ cooperative 15 วินาที ตรวจ quiet ก่อนเริ่ม ใช้ fullTextBudget ร่วมทั้งรอบและ reader ทีละงาน ไม่ใช้ Promise.race ปล่อยงานเดิมนำทางต่อขณะเปิดกลุ่มใหม่ ยังคงข้อจำกัดว่า Chrome API ที่รออยู่ไม่ถูกยกเลิกกลางทาง จึงต้องวัด wall clock จริงหลัง deploy
 
 เพิ่ม runnable VM regression ตรวจลำดับ feed:a → detail slice → feed:b → detail slice → tail queue Strict tests 61 files / 520 tests ผ่าน ไม่มี skip; Lint ผ่าน ไม่มีการแก้ Production หรือส่งคอมเมนต์จริงในรอบนี้
+
+## เพิ่ม bounded content readiness หลังสลับคิว
+
+ผล Production ก่อนแก้: tried=2 succeeded=0 failed=2 ไม่เพียงพอระบุว่าล้มเพราะ React ช้าหรือยังตัดข้อความ จึงเพิ่ม readFullTexts polling exact target สูงสุด 4 ครั้งใน deadline เดิม แยก failures เป็น target_not_found/text_still_truncated/facebook_logged_out/navigation_or_parser_error และเก็บ lastReason/metrics.reasons ไม่มีการคลิกดูเพิ่มเติม ไม่มี fallback ไปบทความอื่น
+
+เพิ่ม regression เนื้อหาเป้าหมายปรากฏครั้งที่สาม Strict tests 61 files / 521 tests ผ่าน ไม่มี skip; Lint ผ่าน การแก้นี้รองรับ delayed content แต่ยังไม่ยืนยันว่าแก้รากเหตุของสองงานจริง ต้องอ่าน diagnostics หลัง deploy ก่อนขยาย selector
