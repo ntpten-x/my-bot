@@ -28,13 +28,46 @@ it("keeps Emergency Stop actionable and requests only the emergency command", as
   expect(fetch).toHaveBeenCalledWith("/api/auto-comment", expect.objectContaining({ method: "PUT", body: '{"action":"emergency"}' }));
 });
 
-it("prepares the shoe rule with buyer intent without enabling or submitting it", async () => {
+it("prepares a keyword bot preset without AI or submitting it", async () => {
   await act(async () => root.render(React.createElement(Page)));
   const preset = Array.from(container.querySelectorAll("button")).find(node => node.textContent?.includes("ใช้ตัวอย่าง"))!;
   await act(async () => preset.click());
-  expect(container.querySelector<HTMLSelectElement>("#intent-mode")!.value).toBe("buyer");
+  expect(container.querySelector("#intent-mode")).toBeNull();
   expect(container.querySelector<HTMLTextAreaElement>("#required-words")!.value).toContain("รองเท้า");
   expect(container.querySelector<HTMLTextAreaElement>("#comment-templates")!.value).toBe("");
   expect(container.textContent).toContain("กฎยังปิดอยู่");
   expect(vi.mocked(fetch).mock.calls.every(([, init]) => !init || !["POST", "PUT"].includes(init.method ?? ""))).toBe(true);
+});
+
+async function fill(selector: string, value: string) {
+  const node = container.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)!;
+  const prototype = node instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(prototype, "value")!.set!.call(node, value);
+    node.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+it("saves separate messages as an extension keyword rule with no AI dependency", async () => {
+  await act(async () => root.render(React.createElement(Page)));
+  await fill("#rule-name", "กฎทดสอบ");
+  await fill("#required-words", "รองเท้า");
+  await fill("#comment-templates", "ข้อความแรก\n---\nยังเป็นข้อความเดียว");
+  const add = Array.from(container.querySelectorAll("button")).find(node => node.textContent?.includes("เพิ่มข้อความ"))!;
+  await act(async () => add.click());
+  await fill("#comment-template-1", "ข้อความที่สอง");
+  await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+  const call = vi.mocked(fetch).mock.calls.find(([, init]) => init?.method === "POST")!;
+  expect(JSON.parse(String(call[1]!.body))).toMatchObject({
+    intentMode: "keyword", requireAi: false, messageMode: "template", deliveryMode: "extension", enabled: false,
+    templates: ["ข้อความแรก\n---\nยังเป็นข้อความเดียว", "ข้อความที่สอง"],
+  });
+});
+
+it("rejects empty keyword lists before creating a rule", async () => {
+  await act(async () => root.render(React.createElement(Page)));
+  await fill("#required-words", " , \n , ");
+  await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+  expect(container.querySelector('[role="alert"]')!.textContent).toContain("ระบุคำสำคัญอย่างน้อยหนึ่งคำ");
+  expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
 });
