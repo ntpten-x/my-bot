@@ -27,10 +27,13 @@ it("discovers every due group with bounded parallelism then drains detail work o
  loadConfig:async()=>({token:"synthetic",paused:false,schedules:{}}),takeRunLock:async()=>true,releaseRunLock:async()=>{},
  probeFacebookIdentity:async()=>null,
  getJson:async()=>({ok:true,json:async()=>({groups:[{id:"a"},{id:"b"}],maxGroupsPerCycle:20,jitterMinutes:0})}),
- quietReason:async()=>null,setQuiet:async()=>{},loadFullTextBacklog:async()=>({}),sleep:async()=>{},rememberError:async()=>{},
+ quietReason:async()=>"",setQuiet:async()=>{},loadFullTextBacklog:async()=>({}),sleep:async()=>{},rememberError:async()=>{},
  scrapeGroup:async(_cfg:unknown,g:{id:string})=>{events.push(`feed:${g.id}`);return {}},
  processFullTextQueue:async()=>{events.push("detail:tail")},
- scheduleDueWake:async()=>{}});
+ scheduleDueWake:async()=>{},
+ globalThis:{},
+ MyBotScrape:{prioritizeCoverageDue:(groups:{id:string}[])=>groups,cycleParallel:()=>2}});
+ context.globalThis=context;
  vm.runInContext(source.slice(source.indexOf("async function cycle()"),source.indexOf("const DUE_ALARM")),context);
  await vm.runInContext("cycle()",context);
  expect(events.filter((e)=>e.startsWith("feed:")).sort()).toEqual(["feed:a","feed:b"]);

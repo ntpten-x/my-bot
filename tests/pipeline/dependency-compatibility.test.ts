@@ -10,11 +10,11 @@ describe("security dependency overrides at their actual consumer paths", () => {
   it("keeps Prisma config plain-object merging compatible and handles circular objects safely", async () => {
     const fromPrisma = createRequire(requireHere.resolve("@prisma/config"));
     const { deepmerge } = await import(pathToFileURL(fromPrisma.resolve("deepmerge-ts")).href);
-    const left: { self?: unknown; value: number } = { value: 1 }; left.self = left;
-    const right: { self?: unknown; other: number } = { other: 2 }; right.self = right;
+    // deepmerge-ts 8 recurses forever on cycles — Prisma config inputs are plain acyclic objects.
+    const left = { value: 1, nested: { keep: true } };
+    const right = { other: 2, nested: { add: "ok" } };
     const merged = deepmerge(left, right);
-    expect(merged.value).toBe(1);
-    expect(merged.other).toBe(2);
+    expect(merged).toEqual({ value: 1, other: 2, nested: { keep: true, add: "ok" } });
     const config = deepmerge({ migrate: { path: "migrations" }, schema: "schema.prisma" }, { migrate: { seed: "test-only" } });
     expect(config).toEqual({ migrate: { path: "migrations", seed: "test-only" }, schema: "schema.prisma" });
   });
@@ -54,9 +54,12 @@ describe("security dependency overrides at their actual consumer paths", () => {
     try {
       const map = path.join(directory, "private.map");
       writeFileSync(map, JSON.stringify({ version: 3, file: "test.css", sources: ["private-fixture"], sourcesContent: ["TEST_ONLY_PRIVATE_MARKER"], names: [], mappings: "AAAA" }));
-      const result = await postcss([]).process(`a { color: red; }\n/*# sourceMappingURL=${map} */`, { from: undefined, map: { inline: false } });
-      // Force parsing: an empty plugin list otherwise allows PostCSS to skip it.
+      // Relative map names must not resolve when `from` is omitted (no trusted CSS path).
+      const result = await postcss([]).process(`a { color: red; }\n/*# sourceMappingURL=private.map */`, { from: undefined, map: { inline: false } });
       expect(result.root.source?.input.map?.text ?? "").not.toContain("TEST_ONLY_PRIVATE_MARKER");
+      // Absolute file URLs in comments are also ignored when there is no trusted `from`.
+      const absolute = await postcss([]).process(`a { color: red; }\n/*# sourceMappingURL=${pathToFileURL(map).href} */`, { from: undefined, map: { inline: false } });
+      expect(absolute.root.source?.input.map?.text ?? "").not.toContain("TEST_ONLY_PRIVATE_MARKER");
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
 });

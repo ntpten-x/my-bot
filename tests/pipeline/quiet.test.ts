@@ -19,3 +19,56 @@ describe("extension quiet window", () => {
     expect(Quiet.inQuietWindow("abc", at(20))).toBe(false);
   });
 });
+
+describe("pauseOnFacebook vs scrape-host tabs", () => {
+  it("treats group and Marketplace browse URLs as scrape hosts", () => {
+    expect(Quiet.isScrapeHostFacebookUrl("https://www.facebook.com/groups/Nexups")).toBe(true);
+    expect(Quiet.isScrapeHostFacebookUrl("https://www.facebook.com/groups/1/posts/2")).toBe(true);
+    expect(Quiet.isScrapeHostFacebookUrl("https://www.facebook.com/marketplace/bangkok/search?query=iphone")).toBe(true);
+    expect(Quiet.isScrapeHostFacebookUrl("https://www.facebook.com/marketplace/item/123")).toBe(false);
+    expect(Quiet.isScrapeHostFacebookUrl("https://www.facebook.com/")).toBe(false);
+    expect(Quiet.isScrapeHostFacebookUrl("https://www.facebook.com/messages/")).toBe(false);
+  });
+
+  it("does not pause while a group tab is focused or during post-scrape grace", () => {
+    const scraping = new Set([9]);
+    expect(
+      Quiet.shouldPauseForFacebook({
+        pauseOnFacebook: true,
+        activeTabUrl: "https://www.facebook.com/groups/Nexups",
+        activeTabId: 1,
+        scrapingTabIds: scraping,
+        now: 1000,
+      }),
+    ).toBe(false);
+    expect(
+      Quiet.shouldPauseForFacebook({
+        pauseOnFacebook: true,
+        activeTabUrl: "https://www.facebook.com/messages/",
+        activeTabId: 9,
+        scrapingTabIds: scraping,
+        now: 1000,
+      }),
+    ).toBe(false);
+    expect(
+      Quiet.shouldPauseForFacebook({
+        pauseOnFacebook: true,
+        activeTabUrl: "https://www.facebook.com/messages/",
+        activeTabId: 2,
+        scrapingTabIds: scraping,
+        graceUntil: 5000,
+        now: 1000,
+      }),
+    ).toBe(false);
+    expect(
+      Quiet.shouldPauseForFacebook({
+        pauseOnFacebook: true,
+        activeTabUrl: "https://www.facebook.com/messages/",
+        activeTabId: 2,
+        scrapingTabIds: scraping,
+        now: 1000,
+      }),
+    ).toBe(true);
+    expect(Quiet.shouldPauseForFacebook({ pauseOnFacebook: false, activeTabUrl: "https://www.facebook.com/", now: 1 })).toBe(false);
+  });
+});

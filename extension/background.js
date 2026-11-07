@@ -613,6 +613,11 @@ async function wakeReaderTab(reader, holdMs) {
  * Keep the reader tab active for the whole async work (deep/coverage hydrate), then restore the owner's tab.
  * Steals focus briefly — necessary because pulse-only wakes still leave Facebook at 1 article.
  */
+// After a foreground scrape restores the owner's previous Facebook tab, skip pauseOnFacebook
+// briefly so the rest of the cycle (and the next due wake) is not aborted immediately.
+let quietFacebookGraceUntil = 0;
+const QUIET_FACEBOOK_GRACE_MS = 90_000;
+
 async function withReaderForeground(reader, work) {
   if (!reader || reader.tabId === undefined || reader.windowId === undefined) return work();
   const prev = await chrome.tabs.query({ active: true, windowId: reader.windowId }).catch(() => []);
@@ -623,6 +628,7 @@ async function withReaderForeground(reader, work) {
   } finally {
     if (prevId !== null && prevId !== undefined) {
       await chrome.tabs.update(prevId, { active: true }).catch(() => undefined);
+      quietFacebookGraceUntil = Date.now() + QUIET_FACEBOOK_GRACE_MS;
     }
   }
 }
@@ -1198,8 +1204,20 @@ async function quietReason(quiet) {
   }
   if (quiet.pauseOnFacebook) {
     const win = await chrome.windows.getLastFocused({ populate: true }).catch(() => null);
-    const usingOwnFb = win && win.focused && (win.tabs || []).some((tab) => tab.active && isFacebookTab(tab) && !scrapingTabs.has(tab.id));
-    if (usingOwnFb) return "คุณกำลังใช้ Facebook อยู่";
+    const active = win && win.focused ? (win.tabs || []).find((tab) => tab.active) : null;
+    if (
+      active &&
+      globalThis.MyBotQuiet.shouldPauseForFacebook({
+        pauseOnFacebook: true,
+        activeTabUrl: active.url || "",
+        activeTabId: active.id,
+        scrapingTabIds: scrapingTabs,
+        graceUntil: quietFacebookGraceUntil,
+        now: Date.now(),
+      })
+    ) {
+      return "คุณกำลังดูฟีด/ข้อความ Facebook";
+    }
   }
   return "";
 }
