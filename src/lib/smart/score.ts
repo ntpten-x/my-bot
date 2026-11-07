@@ -20,6 +20,10 @@ export type ScoreInput = {
   sourceQuality: number;
   signals?: ScoreSignals | null;
   preference?: number;
+  /** Source is turned off — keep for history but do not treat as a hot lead. */
+  sourceEnabled?: boolean;
+  /** Post category is outside the source's bound niche (e.g. food in a games group). */
+  offNiche?: boolean;
 };
 
 function clamp(value: number, min = 0, max = 1) {
@@ -78,6 +82,15 @@ export function scoreLead(input: ScoreInput): { score: number; reason: string } 
   if (input.intent === "buyer" && detectIntent(input.text) !== "buyer" && score > UNCLEAR_BUYER_CAP) {
     score = UNCLEAR_BUYER_CAP;
     bits.push("ยังไม่ชัดว่ากำลังหา");
+  }
+
+  if (input.offNiche) {
+    score = Math.min(score, 48);
+    bits.push("นอกหมวดกลุ่ม");
+  }
+  if (input.sourceEnabled === false) {
+    score = Math.min(score, 20);
+    bits.push("แหล่งปิดอยู่");
   }
 
   return {

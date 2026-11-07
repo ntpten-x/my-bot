@@ -70,14 +70,14 @@ async function pickRefetch(sourceId: string, now: Date, legacy: string[]) {
 
 export type ReaderRun = { windowState: string; stalls: number; reloaded: boolean; throttled: boolean; fullTried: number; fullOk: number; durationMs: number };
 
-/** Pure: 24 h health of the minimized reader window (runs from extension 1.8.1+). */
+/** Pure: 24 h health of the background reader window (minimized legacy or offscreen). */
 export function summarizeReaderRuns(runs: ReaderRun[]) {
-  const minimized = runs.filter((run) => run.windowState === "minimized");
+  const background = runs.filter((run) => run.windowState === "minimized" || run.windowState === "offscreen");
   return {
     total: runs.length,
-    minimized: minimized.length,
+    minimized: background.length,
     stalled: runs.filter((run) => run.stalls > 0).length,
-    stalledMinimized: minimized.filter((run) => run.stalls > 0).length,
+    stalledMinimized: background.filter((run) => run.stalls > 0).length,
     reloaded: runs.filter((run) => run.reloaded).length,
     throttled: runs.filter((run) => run.throttled).length,
     fullTried: runs.reduce((sum, run) => sum + run.fullTried, 0),
@@ -242,7 +242,7 @@ export async function recordScrapeRun(input: ScrapeRunInput, now = new Date(), r
       extVersion: String(cov.extVersion ?? "").slice(0, 20),
     },
   });
-  const flags = [cov.hitLimit && !cov.reachedKnownPost ? "⚠ ถึงขีดจำกัดก่อนเจอโพสต์เก่า" : "", cov.stalls ? `โหลดค้าง ${cov.stalls} ครั้ง` : "", cov.usedWindow ? "ใช้หน้าต่างแยก (รุ่นเก่า)" : "", cov.windowState ? `หน้าต่าง ${cov.windowState}` : "", cov.reloaded ? `รีโหลดซ้ำ (ค้าง ${cov.stallsFirst ?? 0} → ${cov.stallsRetry ?? 0})` : "", cov.throttled ? "Chrome หน่วงหน้าต่างย่อ" : "", cov.fullTried ? `อ่านข้อความเต็ม ${cov.fullOk ?? 0}/${cov.fullTried}` : ""].filter(Boolean).join(" · ");
+  const flags = [cov.hitLimit && !cov.reachedKnownPost ? "⚠ ถึงขีดจำกัดก่อนเจอโพสต์เก่า" : "", cov.stalls ? `โหลดค้าง ${cov.stalls} ครั้ง` : "", cov.usedWindow ? "ใช้หน้าต่างแยก (รุ่นเก่า)" : "", cov.windowState ? `หน้าต่าง ${cov.windowState}` : "", cov.reloaded ? `รีโหลดซ้ำ (ค้าง ${cov.stallsFirst ?? 0} → ${cov.stallsRetry ?? 0})` : "", cov.throttled ? "Chrome หน่วงหน้าต่างพื้นหลัง" : "", cov.fullTried ? `อ่านข้อความเต็ม ${cov.fullOk ?? 0}/${cov.fullTried}` : ""].filter(Boolean).join(" · ");
   const prefix = mode === "audit" ? `ตรวจความครบ: เจอโพสต์ที่ยังไม่มีในระบบ ${input.newPosts} โพสต์ · ` : `รอบอ่าน (${MODE_LABEL[mode]}): `;
   await prisma.fetchLog.create({
     data: {

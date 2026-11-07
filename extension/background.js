@@ -527,13 +527,14 @@ async function injectReaders(tabId) {
   throw lastError || new Error("Could not inject readers");
 }
 
-// All reading happens in ONE dedicated Chrome window created minimized and never focused, so nothing
-// appears in the owner's own windows. It is reused (one tab, sent back to about:blank when idle),
-// recreated minimized if the owner closes it, and closed after a long idle spell.
-// Older builds tracked tabs/windows in session storage; those leftovers are closed on boot.
+// All reading happens in ONE dedicated Chrome window parked OFF-SCREEN (not minimized).
+// Minimized windows are heavily throttled by Chrome and often load ≤1 post; an off-screen
+// normal window stays invisible on the owner's desktop but keeps Facebook loading reliably.
+// Reused one tab → about:blank when idle; recreated if closed; closed after a long idle spell.
 const BOOT_ID = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const READER_MAX_AGE_MS = 15 * 60 * 1000;
 const SCRAPE_IDLE_CLOSE_MS = 20 * 60 * 1000;
+const OFFSCREEN = { left: -12000, top: 0, width: 1100, height: 900 };
 let scrapeWindowRef = null;
 
 async function loadScrapeWindow() {
@@ -553,7 +554,20 @@ function isScrapeWindowTab(tab) {
   return Boolean(tab && scrapeWindowRef && tab.windowId === scrapeWindowRef.windowId);
 }
 
-// Returns { windowId, tabId } of the minimized reader window, creating it (minimized, unfocused) if needed.
+function readerWindowState(win) {
+  if (!win) return "unknown";
+  if (win.state === "minimized") return "minimized";
+  if (typeof win.left === "number" && win.left <= -2000) return "offscreen";
+  return win.state || "normal";
+}
+
+async function parkOffscreen(windowId) {
+  await chrome.windows
+    .update(windowId, { focused: false, state: "normal", left: OFFSCREEN.left, top: OFFSCREEN.top, width: OFFSCREEN.width, height: OFFSCREEN.height })
+    .catch(() => undefined);
+}
+
+// Returns { windowId, tabId } of the off-screen reader window, creating it if needed.
 async function ensureScrapeWindow() {
   const ref = await loadScrapeWindow();
   if (ref) {
@@ -561,20 +575,30 @@ async function ensureScrapeWindow() {
     if (win && win.tabs && win.tabs.length) {
       const keep = win.tabs.find((tab) => tab.id === ref.tabId) || win.tabs[0];
       for (const tab of win.tabs) if (tab.id !== keep.id) await chrome.tabs.remove(tab.id).catch(() => undefined);
-      // Never bring it forward: only push it back down if it is open but not what the owner is looking at.
-      if (win.state !== "minimized" && !win.focused) await chrome.windows.update(win.id, { state: "minimized" }).catch(() => undefined);
+      // Never steal focus. If the owner is not looking at it, keep it parked off-screen (not minimized).
+      if (!win.focused) await parkOffscreen(win.id);
       const next = { windowId: win.id, tabId: keep.id, usedAt: Date.now() };
       await saveScrapeWindow(next);
       return next;
     }
   }
-  const win = await chrome.windows.create({ url: "about:blank", state: "minimized", focused: false });
+  const win = await chrome.windows.create({
+    url: "about:blank",
+    focused: false,
+    type: "normal",
+    state: "normal",
+    left: OFFSCREEN.left,
+    top: OFFSCREEN.top,
+    width: OFFSCREEN.width,
+    height: OFFSCREEN.height,
+  });
   const tab = win.tabs && win.tabs[0];
   const next = { windowId: win.id, tabId: tab ? tab.id : undefined, usedAt: Date.now() };
   if (next.tabId === undefined) {
     const tabs = await chrome.tabs.query({ windowId: win.id }).catch(() => []);
     next.tabId = tabs[0] && tabs[0].id;
   }
+  await parkOffscreen(next.windowId);
   await saveScrapeWindow(next);
   return next;
 }
@@ -618,7 +642,7 @@ async function closeOrphanReaders() {
   if (changed) await chrome.storage.session.set({ readers });
 }
 
-// Loads a feed in the minimized reader window's tab (never in the owner's windows, never focused).
+// Loads a feed in the off-screen reader window's tab (never in the owner's windows, never focused).
 async function openReader(url) {
   const ref = await ensureScrapeWindow();
   const reader = { tabId: ref.tabId, windowId: ref.windowId };
@@ -628,7 +652,7 @@ async function openReader(url) {
   return reader;
 }
 
-// Sends the tab back to about:blank (frees Facebook's memory) but keeps the minimized window for reuse.
+// Sends the tab back to about:blank (frees Facebook's memory) but keeps the off-screen window for reuse.
 async function closeReader(reader) {
   if (!reader) return;
   if (reader.tabId !== undefined) await chrome.tabs.update(reader.tabId, { url: "about:blank" }).catch(() => undefined);
@@ -695,11 +719,11 @@ async function scrapeGroup(cfg, group, remote, options) {
     const url = Scrape.scrapeUrl(group.url, kind);
     reader = await openReader(url);
     const win = reader.windowId !== undefined ? await chrome.windows.get(reader.windowId).catch(() => null) : null;
-    const reading = { windowState: (win && win.state) || "unknown", reloaded: false, stallsFirst: 0, stallsRetry: 0, throttled: false };
+    if (reader.windowId !== undefined && win && !win.focused) await parkOffscreen(reader.windowId);
+    const reading = { windowState: readerWindowState(win), reloaded: false, stallsFirst: 0, stallsRetry: 0, throttled: false };
     let run = await readFeed(reader, kind, plan, group.knownKeys || [], result);
     reading.stallsFirst = run.stalls || 0;
-    // A minimized window can be throttled by Chrome. Never un-minimize: reload once and read again with
-    // patience; if it still stalls, later cycles use smaller batches and the catch-up sweeps fill the gap.
+    // Background windows can still stall. Reload once and read again; never focus the reader.
     if (run.found === 0 && run.stalls >= 2 && run.stoppedBy !== "seen" && Date.now() - startedAt < 30_000) {
       await chrome.tabs.reload(reader.tabId).catch(() => undefined);
       await sleep(2500);

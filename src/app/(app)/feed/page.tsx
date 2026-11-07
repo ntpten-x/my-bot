@@ -33,6 +33,8 @@ type Filters = {
   minScore: string;
   semantic: boolean;
   area: boolean;
+  hideInactiveSources: boolean;
+  followedOnly: boolean;
 };
 
 const INITIAL: Filters = {
@@ -49,10 +51,12 @@ const INITIAL: Filters = {
   hideAds: true,
   hideForbidden: true,
   hideDuplicates: true,
-  sort: "new",
+  sort: "score",
   minScore: "",
   semantic: false,
   area: false,
+  hideInactiveSources: true,
+  followedOnly: true,
 };
 
 const PAGE_SIZE = 20;
@@ -69,7 +73,12 @@ function readUrl(): { filters: Filters; page: number } {
     if (value === null) continue;
     filters[key] = typeof fallback === "boolean" ? value === "1" : value;
   }
-  return { filters: { ...(filters as Filters), sort: sort === "score" || sort === "captured" ? sort : "new" }, page };
+  const next = { ...(filters as Filters), sort: sort === "score" || sort === "captured" ? sort : INITIAL.sort };
+  // Booleans that default to true are stored as 0 when off (same pattern as hideAds).
+  if (params.get("hideInactiveSources") === "0") next.hideInactiveSources = false;
+  if (params.get("followedOnly") === "0") next.followedOnly = false;
+  if (params.get("followedOnly") === "1") next.followedOnly = true;
+  return { filters: next, page };
 }
 
 function pageList(page: number, pages: number): (number | "...")[] {
@@ -97,6 +106,9 @@ function queryFrom(filters: Filters, page: number) {
   if (!filters.hideAds) params.set("hideAds", "0");
   if (!filters.hideForbidden) params.set("hideForbidden", "0");
   if (!filters.hideDuplicates) params.set("hideDuplicates", "0");
+  if (!filters.hideInactiveSources) params.set("hideInactiveSources", "0");
+  if (!filters.followedOnly) params.set("followedOnly", "0");
+  else params.set("followedOnly", "1");
   if (filters.sort) params.set("sort", filters.sort);
   if (filters.minScore) params.set("minScore", filters.minScore);
   if (filters.semantic) params.set("semantic", "1");
@@ -295,6 +307,8 @@ export default function FeedPage() {
         <label className="flex items-center gap-2"><input type="checkbox" checked={filters.hideAds} onChange={(event) => update({ hideAds: event.target.checked })} /> ซ่อนโฆษณา</label>
         <label className="flex items-center gap-2"><input type="checkbox" checked={filters.hideForbidden} onChange={(event) => update({ hideForbidden: event.target.checked })} /> ซ่อนคำต้องห้าม</label>
         <label className="flex items-center gap-2"><input type="checkbox" checked={filters.hideDuplicates} onChange={(event) => update({ hideDuplicates: event.target.checked })} /> ยุบโพสต์คล้ายกัน</label>
+        <label className="flex items-center gap-2" title="ซ่อนโพสต์จากแหล่งที่ปิดชั่วคราว เช่น มาร์เก็ตเพลสที่ไม่เฝ้าแล้ว"><input type="checkbox" checked={filters.hideInactiveSources} onChange={(event) => update({ hideInactiveSources: event.target.checked })} /> เฉพาะแหล่งที่เปิด</label>
+        <label className="flex items-center gap-2" title="แสดงเฉพาะโพสต์ที่ติดดาว Roblox/PUBG ฯลฯ"><input type="checkbox" checked={filters.followedOnly} onChange={(event) => update({ followedOnly: event.target.checked })} /> เฉพาะที่ติดตาม</label>
         <label className="flex items-center gap-2"><input type="checkbox" checked={filters.semantic} onChange={(event) => update({ semantic: event.target.checked })} /> ค้นตามความหมาย</label>
         <label className="flex items-center gap-2" title="ตั้งจังหวัดได้ที่หน้า กฎอัตโนมัติ"><input type="checkbox" checked={filters.area} onChange={(event) => update({ area: event.target.checked })} /> เฉพาะพื้นที่ให้บริการ</label>
       </div>

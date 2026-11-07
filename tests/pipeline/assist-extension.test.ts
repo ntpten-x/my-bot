@@ -151,7 +151,7 @@ describe("extension safety policy", () => {
       commands: Record<string, { suggested_key?: { default?: string } }>;
       permissions: string[];
     };
-    expect(manifest.version).toBe("1.10.1");
+    expect(manifest.version).toBe("1.10.2");
     expect(manifest.permissions).not.toContain("cookies");
     expect(manifest.permissions).not.toContain("webRequest");
     expect(Object.keys(manifest.commands).sort()).toEqual(["mark-sent", "mark-skip"]);
@@ -174,6 +174,14 @@ describe("extension safety policy", () => {
     expect(src).toMatch(/attempt < 3/);
     expect(src).toMatch(/READER_FILES/);
     expect(src).toMatch(/await injectReaders\(tabId\)/);
+  });
+
+  it("parks the reader window off-screen instead of minimizing it", () => {
+    const src = code("background.js");
+    expect(src).toMatch(/parkOffscreen/);
+    expect(src).toMatch(/OFFSCREEN/);
+    expect(src).toMatch(/left:\s*OFFSCREEN\.left|left: OFFSCREEN\.left/);
+    expect(src).not.toMatch(/state:\s*["']minimized["']/);
   });
 
   it("background only injects for a pending request from the MY-BOT origin", () => {

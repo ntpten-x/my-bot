@@ -40,9 +40,9 @@ describe("full-text refetch ranking", () => {
 });
 
 describe("reader stats", () => {
-  it("counts stalls in the minimized window", () => {
+  it("counts stalls in the background reader window", () => {
     const r = summarizeReaderRuns([
-      { windowState: "minimized", stalls: 2, reloaded: true, throttled: false, fullTried: 3, fullOk: 2, durationMs: 4000 },
+      { windowState: "offscreen", stalls: 2, reloaded: true, throttled: false, fullTried: 3, fullOk: 2, durationMs: 4000 },
       { windowState: "minimized", stalls: 0, reloaded: false, throttled: false, fullTried: 0, fullOk: 0, durationMs: 2000 },
     ]);
     expect(r).toMatchObject({ total: 2, minimized: 2, stalledMinimized: 1, reloaded: 1, fullTried: 3, fullOk: 2, avgSeconds: 3 });

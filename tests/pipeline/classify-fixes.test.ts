@@ -70,6 +70,16 @@ describe("classification fixes (real misclassified posts)", () => {
     const { score } = scoreLead({ text: "หา iPad มือสอง ด่วน งบ 8000", intent: "buyer", isAd: false, forbidden: false, keywordHits: 1, ageHours: 1, sourceQuality: 1 });
     expect(score).toBeGreaterThan(80);
   });
+
+  it("caps score for off-niche posts and disabled sources", () => {
+    const base = { text: "หาร้านต่อผมด่วน", intent: "buyer" as const, isAd: false, forbidden: false, keywordHits: 0, ageHours: 1, sourceQuality: 1, signals: { urgency: 0.95, hasBudget: true, specificity: 1 } };
+    const off = scoreLead({ ...base, offNiche: true });
+    expect(off.score).toBeLessThanOrEqual(48);
+    expect(off.reason).toContain("นอกหมวดกลุ่ม");
+    const disabled = scoreLead({ ...base, sourceEnabled: false });
+    expect(disabled.score).toBeLessThanOrEqual(20);
+    expect(disabled.reason).toContain("แหล่งปิดอยู่");
+  });
 });
 
 describe("truncated post text", () => {

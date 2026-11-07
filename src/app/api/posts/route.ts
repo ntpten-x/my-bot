@@ -7,6 +7,7 @@ import { getSettings } from "@/lib/settings";
 import { semanticRank } from "@/lib/smart/enrich";
 import { isListedAd, rankHybrid, searchTokens } from "@/lib/smart/search";
 import { recordTiming } from "@/lib/metrics";
+import { readFollowedProducts } from "@/lib/product-admin";
 
 export const dynamic = "force-dynamic";
 
@@ -35,6 +36,12 @@ export async function GET(request: Request) {
   if (params.get("hideForbidden") !== "0") and.push({ forbiddenHit: false });
   if (params.get("hideDismissed") !== "0") and.push({ dismissed: false });
   if (params.get("hideDuplicates") !== "0") and.push({ duplicateOfId: null });
+  // Default: hide posts from paused/disabled sources so old marketplace noise drops out of the feed.
+  if (params.get("hideInactiveSources") !== "0") and.push({ source: { enabled: true } });
+  if (params.get("followedOnly") === "1") {
+    const followed = await readFollowedProducts();
+    if (followed.length) and.push({ productId: { in: followed } });
+  }
   const minScore = params.get("minScore");
   if (minScore) and.push({ score: { gte: Number(minScore) } });
   if (params.get("unread") === "1") and.push({ isRead: false });

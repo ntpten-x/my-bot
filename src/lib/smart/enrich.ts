@@ -104,6 +104,9 @@ export async function enrichPosts(postIds: string[], classified: AiItem[], setti
     const signals = item
       ? { urgency: item.urgency, hasBudget: item.hasBudget, specificity: item.specificity }
       : ruleSignals(post.text);
+    const bound = (post.source.boundCategorySlug || "").trim();
+    const categorySlug = post.category?.slug || "";
+    const offNiche = Boolean(bound && categorySlug && categorySlug !== bound && categorySlug !== "other");
     const scored = scoreLead({
       text: post.text,
       intent: post.intent,
@@ -114,6 +117,8 @@ export async function enrichPosts(postIds: string[], classified: AiItem[], setti
       sourceQuality: post.source.lastError ? 0.35 : 0.85,
       signals,
       preference,
+      sourceEnabled: post.source.enabled,
+      offNiche,
     });
     await prisma.post.updateMany({
       where: { id: post.id, textRevision: post.textRevision },
