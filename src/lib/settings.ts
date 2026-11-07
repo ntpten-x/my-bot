@@ -102,7 +102,7 @@ export async function getSettings(): Promise<AppSettings> {
     maxGroupsPerCycle: num(map.max_groups_per_cycle, 20, 1, 20),
     scrollScreens: num(map.scroll_screens, 5, 0, 10),
     maxPostAgeHours: num(map.max_post_age_hours, 24, 1, 24),
-    maxPostsPerRun: num(map.max_posts_per_run, 40, 5, 40),
+    maxPostsPerRun: num(map.max_posts_per_run, 40, 5, 200),
     extensionToken: pick(map.extension_token, undefined),
     lineToken: pick(map.line_token, env.LINE_CHANNEL_ACCESS_TOKEN),
     lineUserId: pick(map.line_user_id, env.LINE_USER_ID),

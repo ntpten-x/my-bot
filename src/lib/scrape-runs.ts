@@ -1,5 +1,4 @@
 import { prisma } from "./prisma";
-import { isTruncatedText } from "./pipeline/truncation";
 import { getSettings } from "./settings";
 import { findSourceByUrl } from "./sources";
 import {
@@ -10,9 +9,17 @@ import {
   nextAdaptiveInterval,
   nextRunAfter,
   normalizePriority,
-  postKeyFromUrl,
   sortDue,
 } from "./scrape-plan";
+import {
+  REFETCH_BACKOFF_MS,
+  REFETCH_MAX_ATTEMPTS,
+  REFETCH_PER_SOURCE,
+  buildKnownHints,
+  mergeRefetchUrls,
+  pickRefetchFromPool,
+  rankRefetch,
+} from "./scrape-hints";
 
 export const STOP_REASON_LABEL: Record<string, string> = {
   seen: "เจอโพสต์ที่เก็บแล้ว",
@@ -24,50 +31,7 @@ export const STOP_REASON_LABEL: Record<string, string> = {
   error: "ผิดพลาด",
 };
 
-export const REFETCH_PER_SOURCE = 10;
-export const REFETCH_MAX_ATTEMPTS = 8;
-const REFETCH_BACKOFF_MS = 45 * 60_000;
-
-type RefetchRow = { id: string; externalUrl: string; score: number; createdAt: Date; refetchAttempts: number };
-
-/** Pure: newest and high-score first; posts tried fewer times win ties. */
-export function rankRefetch(rows: RefetchRow[], now: Date, limit = REFETCH_PER_SOURCE) {
-  const weight = (row: RefetchRow) => {
-    const ageHours = Math.max(0, (now.getTime() - row.createdAt.getTime()) / 3600_000);
-    return row.score + Math.max(0, 48 - ageHours) - row.refetchAttempts * 5;
-  };
-  return [...rows].sort((a, b) => weight(b) - weight(a)).slice(0, limit);
-}
-
-// Backlog of truncated posts (7 days). Handing one out pushes its next try back (45 min x attempts),
-// so a post that keeps failing waits longer and stops after REFETCH_MAX_ATTEMPTS.
-async function pickRefetch(sourceId: string, now: Date, legacy: string[]) {
-  const rows = await prisma.post.findMany({
-    where: {
-      sourceId,
-      truncated: true,
-      refetchAttempts: { lt: REFETCH_MAX_ATTEMPTS },
-      createdAt: { gte: new Date(now.getTime() - 7 * 24 * 3600_000) },
-      OR: [{ refetchAfter: null }, { refetchAfter: { lte: now } }],
-    },
-    orderBy: { createdAt: "desc" },
-    take: 60,
-    select: { id: true, externalUrl: true, score: true, createdAt: true, refetchAttempts: true },
-  });
-  const picked = rankRefetch(rows, now);
-  const byAttempts = new Map<number, string[]>();
-  for (const row of picked) byAttempts.set(row.refetchAttempts, [...(byAttempts.get(row.refetchAttempts) ?? []), row.id]);
-  for (const [attempts, ids] of byAttempts) {
-    await prisma.post.updateMany({
-      where: { id: { in: ids } },
-      data: { refetchAttempts: attempts + 1, refetchAfter: new Date(now.getTime() + REFETCH_BACKOFF_MS * (attempts + 1)) },
-    });
-  }
-  const urls = picked.map((row) => row.externalUrl);
-  // Older rows saved before the truncated flag existed.
-  for (const url of legacy) if (urls.length < REFETCH_PER_SOURCE && !urls.includes(url)) urls.push(url);
-  return urls;
-}
+export { REFETCH_PER_SOURCE, REFETCH_MAX_ATTEMPTS, rankRefetch };
 
 export type ReaderRun = { windowState: string; stalls: number; reloaded: boolean; throttled: boolean; fullTried: number; fullOk: number; durationMs: number };
 
@@ -95,6 +59,62 @@ export async function readerHealth(now = new Date()) {
   return summarizeReaderRuns(runs);
 }
 
+/** One batched knownKeys + refetch load for the due sources about to open this cycle. */
+async function loadHintsForDue(sourceIds: string[], since: Date, now: Date) {
+  const hints = new Map<string, { keys: string[]; lastSeenAt: string | null; refetch: string[] }>();
+  if (!sourceIds.length) return hints;
+
+  const rows = await prisma.post.findMany({
+    where: {
+      sourceId: { in: sourceIds },
+      OR: [{ postedAt: { gte: since } }, { postedAt: null, createdAt: { gte: since } }],
+    },
+    orderBy: [{ postedAt: "desc" }, { createdAt: "desc" }],
+    select: { sourceId: true, externalUrl: true, postedAt: true, createdAt: true, text: true },
+  });
+  const known = buildKnownHints(sourceIds, rows, now);
+
+  const pool = await prisma.post.findMany({
+    where: {
+      sourceId: { in: sourceIds },
+      truncated: true,
+      refetchAttempts: { lt: REFETCH_MAX_ATTEMPTS },
+      createdAt: { gte: new Date(now.getTime() - 7 * 24 * 3600_000) },
+      OR: [{ refetchAfter: null }, { refetchAfter: { lte: now } }],
+    },
+    orderBy: { createdAt: "desc" },
+    take: Math.min(2000, sourceIds.length * 60),
+    select: { id: true, sourceId: true, externalUrl: true, score: true, createdAt: true, refetchAttempts: true },
+  });
+  const refetchBySource = pickRefetchFromPool(sourceIds, pool, now);
+
+  const bumpIds: { id: string; attempts: number }[] = [];
+  for (const id of sourceIds) {
+    const urls = new Set(refetchBySource.get(id) ?? []);
+    for (const row of pool) {
+      if (row.sourceId === id && urls.has(row.externalUrl)) bumpIds.push({ id: row.id, attempts: row.refetchAttempts });
+    }
+  }
+  const byAttempts = new Map<number, string[]>();
+  for (const row of bumpIds) byAttempts.set(row.attempts, [...(byAttempts.get(row.attempts) ?? []), row.id]);
+  for (const [attempts, ids] of byAttempts) {
+    await prisma.post.updateMany({
+      where: { id: { in: ids } },
+      data: { refetchAttempts: attempts + 1, refetchAfter: new Date(now.getTime() + REFETCH_BACKOFF_MS * (attempts + 1)) },
+    });
+  }
+
+  for (const id of sourceIds) {
+    const base = known.get(id) ?? { keys: [], lastSeenAt: null, legacyTruncated: [] };
+    hints.set(id, {
+      keys: base.keys,
+      lastSeenAt: base.lastSeenAt,
+      refetch: mergeRefetchUrls(refetchBySource.get(id) ?? [], base.legacyTruncated, REFETCH_PER_SOURCE),
+    });
+  }
+  return hints;
+}
+
 export async function buildExtensionConfig(now = new Date()) {
   const settings = await getSettings();
   const sources = await prisma.source.findMany({
@@ -103,30 +123,11 @@ export async function buildExtensionConfig(now = new Date()) {
   });
   const due = sortDue(sources.filter((source) => isDue(source, now.getTime())));
   const ordered = [...due, ...sources.filter((source) => !due.includes(source))];
-  // Known post keys for the sources the extension is likely to open this cycle, so it can stop scrolling early.
-  const hints = new Map<string, { keys: string[]; lastSeenAt: string | null; refetch: string[] }>();
   // Keep keys for the ingest window (≤24 h) so catch-up / sweeps stop on known posts.
   const ageHours = Math.min(24, Math.max(1, settings.maxPostAgeHours));
   const since = new Date(now.getTime() - ageHours * 3600_000);
-  for (const source of due.slice(0, settings.maxGroupsPerCycle + 2)) {
-    const rows = await prisma.post.findMany({
-      where: {
-        sourceId: source.id,
-        OR: [{ postedAt: { gte: since } }, { postedAt: null, createdAt: { gte: since } }],
-      },
-      orderBy: [{ postedAt: "desc" }, { createdAt: "desc" }],
-      take: 300,
-      select: { externalUrl: true, postedAt: true, createdAt: true, text: true },
-    });
-    const keys = [...new Set(rows.map((row) => postKeyFromUrl(row.externalUrl)).filter(Boolean))];
-    const newest = rows.reduce<Date | null>((max, row) => {
-      const at = row.postedAt ?? null;
-      return at && (!max || at > max) ? at : max;
-    }, null);
-    // Posts stored cut off at "See more": the extension opens their permalinks (read-only) for the full text.
-    const refetch = await pickRefetch(source.id, now, rows.filter((row) => isTruncatedText(row.text)).map((row) => row.externalUrl));
-    hints.set(source.id, { keys, lastSeenAt: newest?.toISOString() ?? null, refetch });
-  }
+  const hintIds = due.slice(0, settings.maxGroupsPerCycle + 2).map((source) => source.id);
+  const hints = await loadHintsForDue(hintIds, since, now);
   return {
     groups: ordered.map((source) => {
       const priority = normalizePriority(source.priority);
@@ -135,6 +136,8 @@ export async function buildExtensionConfig(now = new Date()) {
         ok: source.lastRunStop !== "error",
         postsFound: source.lastRunFound,
         stoppedBy: source.lastRunStop || "",
+        hitLimit: source.lastRunStop === "limit",
+        reachedKnown: source.lastRunStop === "seen" || source.lastRunStop === "old" || source.lastRunStop === "cap",
       });
       return {
         id: source.id,
@@ -202,15 +205,19 @@ export async function recordScrapeRun(input: ScrapeRunInput, now = new Date(), r
   if (!source) return null;
   const settings = await getSettings();
   const base = source.intervalMinutes || PRIORITY_INTERVAL[normalizePriority(source.priority)];
+  const cov = input.coverage ?? {};
   const incomplete = isIncompleteScrape({
     ok: input.ok,
     postsFound: input.postsFound,
     stoppedBy: input.stoppedBy,
+    hitLimit: Boolean(cov.hitLimit),
+    reachedKnown: Boolean(cov.reachedKnownPost),
   });
   const interval = nextAdaptiveInterval({
     current: source.currentIntervalMinutes || base,
     base,
     newPosts: input.newPosts,
+    seenNew: cov.newCount,
     ok: input.ok,
     incomplete,
   });
@@ -234,7 +241,6 @@ export async function recordScrapeRun(input: ScrapeRunInput, now = new Date(), r
   });
   const reason = STOP_REASON_LABEL[stop] ?? stop;
   const mode = input.mode && MODE_LABEL[input.mode] ? input.mode : "normal";
-  const cov = input.coverage ?? {};
   await prisma.scrapeRun.create({
     data: {
       sourceId: source.id,

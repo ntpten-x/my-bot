@@ -19,10 +19,18 @@ export const BUSY_RUN_NEW_POSTS = 5;
 export const SHALLOW_FOUND = 3;
 
 /** True when the last scrape likely missed posts inside the 24 h window. */
-export function isIncompleteScrape(input: { ok: boolean; postsFound: number; stoppedBy: string }) {
+export function isIncompleteScrape(input: {
+  ok: boolean;
+  postsFound: number;
+  stoppedBy: string;
+  hitLimit?: boolean;
+  reachedKnown?: boolean;
+}) {
   if (!input.ok) return false;
   const stop = String(input.stoppedBy || "");
   if (stop === "seen" || stop === "old" || stop === "cap") return false;
+  // Used the scroll/time budget before meeting known posts → coverage was cut short.
+  if (input.hitLimit && !input.reachedKnown) return true;
   if ((stop === "end" || stop === "limit" || !stop) && input.postsFound < SHALLOW_FOUND) return true;
   return false;
 }
@@ -55,17 +63,20 @@ export function nextAdaptiveInterval(input: {
   current: number;
   base: number;
   newPosts: number;
+  /** Fresh posts seen this run (before insert dedupe). Prefer this over inserted-only counts. */
+  seenNew?: number;
   ok: boolean;
   incomplete?: boolean;
 }) {
   const base = Math.max(MIN_INTERVAL_MINUTES, input.base || PRIORITY_INTERVAL.normal);
   const max = maxIntervalFor(base);
   const current = Number.isFinite(input.current) && input.current > 0 ? input.current : base;
+  const newPosts = Math.max(0, input.newPosts, input.seenNew ?? 0);
   let next = current;
   if (!input.ok) next = current;
   else if (input.incomplete) next = Math.min(current, Math.max(MIN_INTERVAL_MINUTES, base * 0.7));
-  else if (input.newPosts >= BUSY_RUN_NEW_POSTS) next = current * 0.6;
-  else if (input.newPosts > 0) next = Math.min(current, base);
+  else if (newPosts >= BUSY_RUN_NEW_POSTS) next = current * 0.6;
+  else if (newPosts > 0) next = Math.min(current, base);
   else next = current * 1.5;
   next = Math.min(max, Math.max(MIN_INTERVAL_MINUTES, next));
   return Math.round(next * 10) / 10;

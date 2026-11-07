@@ -15,9 +15,10 @@ it("batches collected posts so every request is accepted by the real ingest vali
   const context = vm.createContext({ Date, Set, Map, sourceKind: () => "marketplace", scrapeSettingsFor: async () => ({}),
     chrome: { storage: { local: { get: async () => ({ sweeps: {} }), set: async () => undefined } }, windows: { get: async () => ({ state: "minimized" }) }, runtime: { getManifest: () => ({ version: "synthetic" }) } },
     MyBotScrape: {
-      planRun: () => ({ mode: "normal" }),
+      planRun: () => ({ mode: "normal", maxScrolls: 20 }),
       scrapeUrl: () => "https://www.facebook.com/groups/12345",
-      runStats: () => ({ scrolls: 0 }),
+      feedBudgetMs: () => 60_000,
+      runStats: () => ({ scrolls: 0, hitLimit: false, reachedKnownPost: true, newCount: 120 }),
       isShallowRun: () => false,
       MIN_FOUND_BEFORE_END: 3,
     },

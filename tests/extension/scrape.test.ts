@@ -11,13 +11,19 @@ type Plan = { mode: string; maxAgeMs: number; maxScrolls: number; knownStreak: n
 const scrape = require(path.resolve(__dirname, "../../extension/scrape.js")) as {
   postKey(url: string): string;
   scrapeSettings(remote: unknown): { screens: number; maxAgeMs: number; maxPosts: number };
-  scrollWaitMs(random?: () => number): number;
+  scrollWaitMs(random?: () => number, opts?: { growing?: boolean }): number;
+  feedBudgetMs(plan: { maxScrolls?: number }, pass: number): number;
   scrapeUrl(url: string, kind: string): string;
   createRun(opts: { knownKeys?: string[]; maxAgeMs?: number; maxPosts?: number; maxScrolls?: number; knownStreak?: number; mode?: string; now?: number }): Run;
-  planRun(opts: { now?: number; group?: Record<string, unknown>; lastSweepAt?: number; audit?: boolean }): Plan;
+  planRun(opts: { now?: number; group?: Record<string, unknown>; lastSweepAt?: number; audit?: boolean; settings?: { screens: number; maxAgeMs: number; maxPosts: number } }): Plan;
   runStats(run: Run): { reachedKnownPost: boolean; hitLimit: boolean; scrolls: number; newCount: number };
   addStep(run: Run, posts: Post[]): string;
   cleanupText(text: string): string;
+  emptyBudget(run: Run): number;
+  isShallowRun(run: Run): boolean;
+  COLD_EMPTY_STREAK: number;
+  EMPTY_STREAK: number;
+  MIN_FOUND_BEFORE_END: number;
 };
 
 const NOW = Date.parse("2026-11-04T12:00:00+07:00");
@@ -118,7 +124,8 @@ describe("scroll scrape plan (extension/scrape.js)", () => {
 
   it("plans normal runs, hourly sweeps, 24 h catch-up and audits", () => {
     const recent = new Date(NOW - 10 * 60_000).toISOString();
-    expect(scrape.planRun({ now: NOW, group: { lastFetchedAt: recent, intervalMinutes: 15 }, lastSweepAt: NOW - 5 * 60_000 })).toMatchObject({ mode: "normal", knownStreak: 3, maxScrolls: 20, maxPosts: 200 });
+    // Default screens=3 → maxScrolls 10+3*2=16; without remote settings planRun still uses scrapeSettings defaults.
+    expect(scrape.planRun({ now: NOW, group: { lastFetchedAt: recent, intervalMinutes: 15 }, lastSweepAt: NOW - 5 * 60_000 })).toMatchObject({ mode: "normal", knownStreak: 3, maxScrolls: 16, maxPosts: 200 });
     expect(scrape.planRun({ now: NOW, group: { lastFetchedAt: recent, intervalMinutes: 15 }, lastSweepAt: NOW - 61 * 60_000 })).toMatchObject({ mode: "sweep", maxScrolls: 30, maxAgeMs: 24 * 3600_000 });
     // Chrome was closed for 30 h: still capped at 24 h (owner rule).
     const closed = scrape.planRun({ now: NOW, group: { lastFetchedAt: new Date(NOW - 30 * 3600_000).toISOString(), lastSeenAt: new Date(NOW - 31 * 3600_000).toISOString() } });
@@ -133,6 +140,29 @@ describe("scroll scrape plan (extension/scrape.js)", () => {
     expect(
       scrape.planRun({ now: NOW, group: { lastFetchedAt: recent, intervalMinutes: 10, needsCoverage: true }, lastSweepAt: NOW }),
     ).toMatchObject({ mode: "catchup", maxScrolls: 30, maxAgeMs: 24 * 3600_000 });
+  });
+
+  it("honours scrollScreens and maxPostsPerRun from settings", () => {
+    const recent = new Date(NOW - 10 * 60_000).toISOString();
+    const settings = scrape.scrapeSettings({ scrollScreens: 5, maxPostsPerRun: 40, maxAgeHours: 24 });
+    expect(settings).toMatchObject({ screens: 5, maxPosts: 40 });
+    // screens 5 → 10 + 5*2 = 20 scrolls; maxPosts 40
+    expect(
+      scrape.planRun({ now: NOW, group: { lastFetchedAt: recent, intervalMinutes: 10 }, lastSweepAt: NOW, settings }),
+    ).toMatchObject({ mode: "normal", maxScrolls: 20, maxPosts: 40 });
+    const deep = scrape.planRun({
+      now: NOW,
+      group: { lastFetchedAt: recent, intervalMinutes: 10, needsCoverage: true },
+      lastSweepAt: NOW,
+      settings: scrape.scrapeSettings({ scrollScreens: 10, maxPostsPerRun: 80 }),
+    });
+    expect(deep).toMatchObject({ mode: "catchup", maxScrolls: 30, maxPosts: 80 });
+  });
+
+  it("scales feed time budget with scroll depth and retry pass", () => {
+    expect(scrape.feedBudgetMs({ maxScrolls: 20 }, 1)).toBeGreaterThanOrEqual(60_000);
+    expect(scrape.feedBudgetMs({ maxScrolls: 20 }, 2)).toBeGreaterThan(scrape.feedBudgetMs({ maxScrolls: 20 }, 1));
+    expect(scrape.feedBudgetMs({ maxScrolls: 30 }, 2)).toBeLessThanOrEqual(120_000);
   });
 
   it("catch-up stops on posts older than 24 h instead of reading further back", () => {

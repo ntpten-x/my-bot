@@ -311,7 +311,7 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
       level: enabledFb.length ? (activeInstalls.some((row) => row.enabled) || !newest ? "ok" : "bad") : "off",
       value: `${enabledFb.length} กลุ่ม/Marketplace ที่เปิดไว้ · แท็บ Facebook ที่เปิดอยู่ ${openTabs.length} แท็บ`,
       detail: enabledFb.length ? enabledFb.slice(0, 8).map((source) => source.name).join(", ") : "ยังไม่ได้เพิ่มกลุ่ม Facebook หรือ Marketplace",
-      hint: newest && !activeInstalls.some((row) => row.enabled) && enabledFb.length ? "ส่วนขยายถูกพักไว้ — ติ๊ก “ดึงข้อมูลอัตโนมัติเบื้องหลัง” ในป๊อปอัปของส่วนขยาย" : "อ่านเองเบื้องหลังในหน้าต่างแยกที่จอดมุมจอ (Chrome ห้ามซ่อนทั้งบาน) ไม่แย่งโฟกัส — เปิด Chrome + ล็อกอิน Facebook ทิ้งไว้ ปิดหน้าต่างอ่านได้ ระบบสร้างใหม่เอง",
+      hint: newest && !activeInstalls.some((row) => row.enabled) && enabledFb.length ? "ส่วนขยายถูกพักไว้ — ติ๊ก “ดึงข้อมูลอัตโนมัติเบื้องหลัง” ในป๊อปอัปของส่วนขยาย" : "อ่านจากหน้าต่าง Chrome ที่มี Facebook เปิดอยู่ (แท็บพื้นหลัง ไม่แย่งโฟกัส) — เปิด Chrome + ล็อกอิน Facebook ทิ้งไว้ อย่าย่อหน้าต่างทั้งบาน",
     },
     await (async () => {
       const r = await readerHealth(new Date(now)).catch(() => null);
@@ -322,7 +322,7 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
         level: (!r || !r.total ? "off" : stallPct >= 0.3 || r.throttled > 0 ? "warn" : "ok") as "ok" | "warn" | "off",
         value: r && r.total ? `${r.total} รอบ · นอกจอ/ย่อ ${r.minimized} · ค้าง ${r.stalled} (ขณะพื้นหลัง ${r.stalledMinimized}) · รีโหลดซ้ำ ${r.reloaded} · หน่วง ${r.throttled}` : "ยังไม่มีข้อมูล",
         detail: r && r.total ? `อ่านข้อความเต็มสำเร็จ ${r.fullOk}/${r.fullTried} · เฉลี่ย ${r.avgSeconds} วินาที/รอบ` : "บันทึกจากส่วนขยาย v1.8.1 ขึ้นไป",
-        hint: r && stallPct >= 0.3 ? "Chrome หน่วงหน้าต่างพื้นหลังบ่อย — ลดจำนวนกลุ่มที่เปิด และเปิด Chrome ทิ้งไว้ (หน้าต่างอ่านจอดมุมจอ ไม่แย่งโฟกัส)" : undefined,
+        hint: r && stallPct >= 0.3 ? "Chrome หน่วงแท็บพื้นหลังบ่อย — ลดจำนวนกลุ่มที่เปิด และเปิด Chrome ทิ้งไว้ (อย่าย่อหน้าต่าง Facebook ทั้งบาน)" : undefined,
       };
     })(),
     {

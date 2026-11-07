@@ -151,7 +151,7 @@ describe("extension safety policy", () => {
       commands: Record<string, { suggested_key?: { default?: string } }>;
       permissions: string[];
     };
-    expect(manifest.version).toBe("1.10.14");
+    expect(manifest.version).toBe("1.10.15");
     expect(manifest.permissions).not.toContain("cookies");
     expect(manifest.permissions).not.toContain("webRequest");
     expect(Object.keys(manifest.commands).sort()).toEqual(["mark-sent", "mark-skip"]);
@@ -192,14 +192,19 @@ describe("extension safety policy", () => {
   it("fail-fasts dead feeds, wakes the tab, and reloads shallow runs", () => {
     // Read raw: the comment-strip helper treats /* inside template strings as block comments.
     const raw = readFileSync(path.join(ext, "background.js"), "utf8");
-    expect(raw).toMatch(/budgetMs:\s*40_000/);
-    expect(raw).toMatch(/budgetMs:\s*55_000/);
+    expect(raw).toMatch(/feedBudgetMs\(plan,\s*1\)/);
+    expect(raw).toMatch(/feedBudgetMs\(plan,\s*2\)/);
+    expect(raw).toMatch(/hitLimit\s*&&\s*!.*reachedKnownPost/);
+    expect(raw).toMatch(/recentlyThrottled\s*\?\s*1\s*:\s*PARALLEL_SCRAPE/);
     expect(raw).toMatch(/wakeReaderTab/);
     expect(raw).toMatch(/PARALLEL_SCRAPE\s*=\s*2/);
     expect(raw).toMatch(/isShallowRun/);
+    expect(raw).toMatch(/state:\s*["']normal["']/); // restore minimized without left/top bounds
     expect(code("scrape.js")).toMatch(/COLD_EMPTY_STREAK/);
     expect(code("scrape.js")).toMatch(/needsCoverage/);
     expect(code("scrape.js")).toMatch(/isShallowRun/);
+    expect(code("scrape.js")).toMatch(/feedBudgetMs/);
+    expect(code("scrape.js")).toMatch(/scrollBudget/);
   });
 
   it("background only injects for a pending request from the MY-BOT origin", () => {

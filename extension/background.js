@@ -696,12 +696,18 @@ async function findOwnerWindowId() {
   return undefined;
 }
 
-// Host = owner's Facebook Chrome window only. Never create a popup/about:blank window.
+// Host = owner's Facebook Chrome window only. Never create a popup/about:blank window,
+// and never set left/top bounds (Chrome rejects windows that are <50% on-screen).
 async function ensureScrapeWindow() {
   const windowId = await findOwnerWindowId();
   if (windowId === undefined) throw new Error("เปิด facebook.com ใน Chrome ที่จับคู่ส่วนขยายไว้ค้างไว้ก่อน ระบบจะอ่านจากหน้าต่างนั้น");
-  const win = await chrome.windows.get(windowId, { populate: true }).catch(() => null);
+  let win = await chrome.windows.get(windowId, { populate: true }).catch(() => null);
   if (!isNormalChromeWindow(win)) throw new Error("ไม่พบหน้าต่าง Chrome ที่มี Facebook");
+  // Restore minimized windows without custom bounds — keeps ≥50% on the visible display.
+  if (win.state === "minimized") {
+    await chrome.windows.update(win.id, { state: "normal", focused: false }).catch(() => undefined);
+    win = await chrome.windows.get(windowId, { populate: true }).catch(() => win);
+  }
   const hasFb = (win.tabs || []).some((tab) => isFacebookTab(tab));
   if (!hasFb) throw new Error("เปิดแท็บ facebook.com ในหน้าต่างนี้ค้างไว้ก่อน");
   const anchor = (win.tabs || []).find((tab) => tab.active) || (win.tabs || [])[0];
@@ -878,20 +884,25 @@ async function scrapeGroup(cfg, group, remote, options) {
     reader = await openReader(url);
     const win = reader.windowId !== undefined ? await chrome.windows.get(reader.windowId).catch(() => null) : null;
     const reading = { windowState: readerWindowState(win), reloaded: false, stallsFirst: 0, stallsRetry: 0, throttled: false };
-    // Pass 1 stays short; incomplete → wake tab (unthrottle) + reload + longer pass 2.
-    let run = await readFeed(reader, kind, plan, group.knownKeys || [], result, { budgetMs: 40_000 });
+    // Pass 1 budget scales with scroll depth; incomplete/hitLimit → wake + reload + longer pass 2.
+    let run = await readFeed(reader, kind, plan, group.knownKeys || [], result, { budgetMs: Scrape.feedBudgetMs(plan, 1) });
     reading.stallsFirst = run.stalls || 0;
-    const needsRetry = Scrape.isShallowRun(run) || (run.found === 0 && run.stalls >= 2);
+    const statsProbe = Scrape.runStats(run);
+    const needsRetry =
+      Scrape.isShallowRun(run) ||
+      (statsProbe.hitLimit && !statsProbe.reachedKnownPost) ||
+      (run.found === 0 && run.stalls >= 2);
     if (needsRetry && run.stoppedBy !== "seen" && run.stoppedBy !== "old") {
       await wakeReaderTab(reader);
       await chrome.tabs.reload(reader.tabId).catch(() => undefined);
       await sleep(2800);
       reading.reloaded = true;
-      const again = await readFeed(reader, kind, plan, group.knownKeys || [], result, { budgetMs: 55_000 });
+      const again = await readFeed(reader, kind, plan, group.knownKeys || [], result, { budgetMs: Scrape.feedBudgetMs(plan, 2) });
       reading.stallsRetry = again.stalls || 0;
       again.stalls += run.stalls;
       if (again.found >= run.found) run = again;
-      if (Scrape.isShallowRun(run)) {
+      const after = Scrape.runStats(run);
+      if (Scrape.isShallowRun(run) || (after.hitLimit && !after.reachedKnownPost)) {
         reading.throttled = true;
         await chrome.storage.local.set({ throttledAt: Date.now() }).catch(() => undefined);
       }
@@ -1047,17 +1058,22 @@ async function cycle() {
       if (until > now) return false;
       return true;
     });
-    // Chrome throttled recently → smaller batch. Otherwise take every due group (up to maxGroupsPerCycle).
+    // Chrome throttled recently → smaller batch + single-tab parallel. Otherwise up to PARALLEL_SCRAPE.
     const { throttledAt } = await chrome.storage.local.get({ throttledAt: 0 });
+    const recentlyThrottled = Date.now() - throttledAt < 30 * 60 * 1000;
     const limit = remote.maxGroupsPerCycle || 20;
-    const batch = due.slice(0, Date.now() - throttledAt < 30 * 60 * 1000 ? Math.min(limit, 2) : limit);
-    if (Object.keys(await loadFullTextBacklog()).length >= 10) await processFullTextQueue(cfg, remote.groups || [], { budgetMs: 20000, maxItems: 2 });
+    const batch = due.slice(0, recentlyThrottled ? Math.min(limit, 2) : limit);
+    const parallel = recentlyThrottled ? 1 : PARALLEL_SCRAPE;
+    // Full-text must not steal tabs before discovery when many groups are due or Chrome is throttling.
+    if (!recentlyThrottled && batch.length <= 2 && Object.keys(await loadFullTextBacklog()).length >= 10) {
+      await processFullTextQueue(cfg, remote.groups || [], { budgetMs: 15000, maxItems: 2 });
+    }
     const started = Date.now();
     for (const group of batch) schedules[group.id] = started + INFLIGHT_MS;
     await chrome.storage.local.set({ schedules });
-    // Up to PARALLEL_SCRAPE tabs at once, staggered; remaining due groups queue in the same cycle.
-    const settled = await mapPool(batch, PARALLEL_SCRAPE, async (group, index) => {
-      if (index > 0) await sleep(1200 * Math.min(index, PARALLEL_SCRAPE));
+    // Up to PARALLEL_SCRAPE tabs at once (1 while throttled), staggered; remaining due groups queue in the same cycle.
+    const settled = await mapPool(batch, parallel, async (group, index) => {
+      if (index > 0) await sleep(1200 * Math.min(index, Math.max(1, parallel)));
       if (await quietReason(remote.quiet)) return { group, result: { ok: false, message: "quiet", nextRunAt: Date.now() + 60_000 } };
       const result = await scrapeGroup(cfg, group, remote);
       return { group, result };
@@ -1070,7 +1086,13 @@ async function cycle() {
         : Date.now() + interval * 60 * 1000;
     }
     await chrome.storage.local.set({ schedules });
-    if (!await quietReason(remote.quiet)) await processFullTextQueue(cfg, remote.groups || []);
+    // Detail reads run after discovery with a smaller budget when Chrome just throttled.
+    if (!await quietReason(remote.quiet)) {
+      await processFullTextQueue(cfg, remote.groups || [], {
+        budgetMs: recentlyThrottled ? 20_000 : 60_000,
+        maxItems: recentlyThrottled ? 4 : 10,
+      });
+    }
     await scheduleDueWake(remote.groups || [], schedules);
   } catch (error) {
     // เปิดแอปไม่ติดหรือเน็ตหลุด — รอรอบถัดไป

@@ -29,7 +29,7 @@ const putSchema = z.object({
   maxGroupsPerCycle: z.number().int().min(1).max(20).optional(),
   scrollScreens: z.number().int().min(0).max(10).optional(),
   maxPostAgeHours: z.number().int().min(1).max(24).optional(),
-  maxPostsPerRun: z.number().int().min(5).max(40).optional(),
+  maxPostsPerRun: z.number().int().min(5).max(200).optional(),
   lineUserId: z.string().optional(),
   updateLineToken: z.boolean().optional(),
   lineToken: z.string().optional(),

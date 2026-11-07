@@ -5,7 +5,7 @@
   const MAX_SCREENS = 10;
   const MAX_POSTS_PER_RUN = 200;
   const MAX_SCROLLS = 30;
-  const NORMAL_SCROLLS = 20;
+  const MIN_SCROLLS = 10;
   const KNOWN_STREAK = 3;
   const SWEEP_STREAK = 8;
   const OLD_STREAK = 3;
@@ -45,7 +45,7 @@
   }
 
   // Settings from /api/v1/extension-config, with safe defaults for older servers.
-  // maxPosts is only a sane upper bound now; runs stop on known posts, not on a small cap.
+  // maxPosts caps fresh posts per run; runs still stop early on known/old posts.
   function scrapeSettings(remote) {
     const source = remote || {};
     return {
@@ -53,6 +53,22 @@
       maxAgeMs: clampInt(source.maxAgeHours, 24, 1, 24) * 3600 * 1000,
       maxPosts: clampInt(source.maxPostsPerRun, MAX_POSTS_PER_RUN, 1, MAX_POSTS_PER_RUN),
     };
+  }
+
+  /** Map settings.scrollScreens (0–10) → scroll budget 10–30 (default 3 → 16, 5 → 20). */
+  function scrollBudget(screens) {
+    const s = clampInt(screens, DEFAULT_SCREENS, 0, MAX_SCREENS);
+    return Math.min(MAX_SCROLLS, Math.max(MIN_SCROLLS, MIN_SCROLLS + s * 2));
+  }
+
+  /**
+   * Time budget for one feed pass. Scales with scroll depth; pass 2 is longer for shallow/incomplete recovery.
+   * pass 1 with 20 scrolls ≈ 75 s; pass 2 ≈ 94 s; hard cap 120 s.
+   */
+  function feedBudgetMs(plan, pass) {
+    const scrolls = Math.max(MIN_SCROLLS, Number(plan && plan.maxScrolls) || MIN_SCROLLS);
+    if (pass === 2) return Math.min(120_000, 50_000 + scrolls * 2200);
+    return Math.min(90_000, 35_000 + scrolls * 2000);
   }
 
   const HOUR = 3600 * 1000;
@@ -76,19 +92,22 @@
     const lastRun = Date.parse(group.lastFetchedAt || "") || 0;
     const lastSeen = Date.parse(group.lastSeenAt || "") || 0;
     const interval = Math.max(5, Number(group.intervalMinutes) || 15) * 60 * 1000;
-    const base = { maxPosts: MAX_POSTS_PER_RUN, maxScrolls: NORMAL_SCROLLS, knownStreak: KNOWN_STREAK, maxAgeMs: Math.min(CATCHUP_MAX_MS, Math.max(settings.maxAgeMs, HOUR)) };
-    if (opts.audit) return { ...base, mode: "audit", maxScrolls: MAX_SCROLLS, knownStreak: Infinity, maxAgeMs: CATCHUP_MAX_MS };
+    const normalScrolls = scrollBudget(settings.screens);
+    const deepScrolls = Math.min(MAX_SCROLLS, Math.max(normalScrolls + 10, scrollBudget(MAX_SCREENS)));
+    const maxPosts = clampInt(settings.maxPosts, MAX_POSTS_PER_RUN, 1, MAX_POSTS_PER_RUN);
+    const base = { maxPosts, maxScrolls: normalScrolls, knownStreak: KNOWN_STREAK, maxAgeMs: Math.min(CATCHUP_MAX_MS, Math.max(settings.maxAgeMs, HOUR)) };
+    if (opts.audit) return { ...base, mode: "audit", maxScrolls: deepScrolls, knownStreak: Infinity, maxAgeMs: CATCHUP_MAX_MS };
     // Server flagged the previous pass as thin — dig the full ≤24 h window again.
     if (group.needsCoverage) {
-      return { ...base, mode: "catchup", maxScrolls: MAX_SCROLLS, knownStreak: KNOWN_STREAK, maxAgeMs: CATCHUP_MAX_MS };
+      return { ...base, mode: "catchup", maxScrolls: deepScrolls, knownStreak: KNOWN_STREAK, maxAgeMs: CATCHUP_MAX_MS };
     }
     const gap = lastRun ? now - lastRun : Infinity;
     if (gap > Math.max(2 * HOUR, 3 * interval)) {
       const back = (lastSeen || lastRun) ? now - Math.min(lastSeen || now, lastRun || now) + HOUR : CATCHUP_MAX_MS;
-      return { ...base, mode: "catchup", maxScrolls: MAX_SCROLLS, knownStreak: KNOWN_STREAK, maxAgeMs: Math.min(CATCHUP_MAX_MS, Math.max(base.maxAgeMs, back)) };
+      return { ...base, mode: "catchup", maxScrolls: deepScrolls, knownStreak: KNOWN_STREAK, maxAgeMs: Math.min(CATCHUP_MAX_MS, Math.max(base.maxAgeMs, back)) };
     }
     const lastSweep = Number(opts.lastSweepAt) || 0;
-    if (now - lastSweep >= SWEEP_EVERY_MS) return { ...base, mode: "sweep", maxScrolls: MAX_SCROLLS, knownStreak: SWEEP_STREAK, maxAgeMs: CATCHUP_MAX_MS };
+    if (now - lastSweep >= SWEEP_EVERY_MS) return { ...base, mode: "sweep", maxScrolls: deepScrolls, knownStreak: SWEEP_STREAK, maxAgeMs: CATCHUP_MAX_MS };
     return { ...base, mode: "normal" };
   }
 
@@ -139,7 +158,7 @@
       stalls: 0,
       mode: opts.mode || "normal",
       knownStreak: opts.knownStreak || KNOWN_STREAK,
-      maxScrolls: opts.maxScrolls || NORMAL_SCROLLS,
+      maxScrolls: opts.maxScrolls || scrollBudget(DEFAULT_SCREENS),
       maxAgeMs: opts.maxAgeMs || 24 * HOUR,
       maxPosts: Math.min(opts.maxPosts || MAX_POSTS_PER_RUN, MAX_POSTS_PER_RUN),
       now: opts.now || Date.now(),
@@ -227,8 +246,8 @@
   }
 
   const api = {
-    postKey, scrapeSettings, planRun, scrollWaitMs, scrapeUrl, createRun, addStep, emptyBudget, isShallowRun, runStats, cleanupText,
-    MAX_SCROLLS, KNOWN_STREAK, DEFAULT_SCREENS, MAX_SCREENS, MAX_POSTS_PER_RUN,
+    postKey, scrapeSettings, planRun, scrollBudget, feedBudgetMs, scrollWaitMs, scrapeUrl, createRun, addStep, emptyBudget, isShallowRun, runStats, cleanupText,
+    MAX_SCROLLS, MIN_SCROLLS, KNOWN_STREAK, DEFAULT_SCREENS, MAX_SCREENS, MAX_POSTS_PER_RUN,
     EMPTY_STREAK, COLD_EMPTY_STREAK, MIN_FOUND_BEFORE_END,
   };
   root.MyBotScrape = api;
