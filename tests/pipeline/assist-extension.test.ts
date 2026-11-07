@@ -151,7 +151,7 @@ describe("extension safety policy", () => {
       commands: Record<string, { suggested_key?: { default?: string } }>;
       permissions: string[];
     };
-    expect(manifest.version).toBe("1.10.17");
+    expect(manifest.version).toBe("1.10.18");
     expect(manifest.permissions).not.toContain("cookies");
     expect(manifest.permissions).not.toContain("webRequest");
     expect(Object.keys(manifest.commands).sort()).toEqual(["mark-sent", "mark-skip"]);
@@ -192,14 +192,14 @@ describe("extension safety policy", () => {
   it("fail-fasts dead feeds, wakes the tab, and reloads shallow runs", () => {
     // Read raw: the comment-strip helper treats /* inside template strings as block comments.
     const raw = readFileSync(path.join(ext, "background.js"), "utf8");
-    expect(raw).toMatch(/feedBudgetMs\(plan,\s*1\)/);
-    expect(raw).toMatch(/feedBudgetMs\(plan,\s*2\)/);
+    expect(raw).toMatch(/feedBudgetMs\(plan,\s*pass\)/);
     expect(raw).toMatch(/hitLimit\s*&&\s*!.*reachedKnownPost/);
     expect(raw).toMatch(/cycleParallel/);
     expect(raw).toMatch(/shouldAbortDeadFeed/);
     expect(raw).toMatch(/postWakeSettleMs/);
-    expect(raw).toMatch(/shouldKeepAwake/);
-    expect(raw).toMatch(/shouldPulseWake/);
+    expect(raw).toMatch(/shouldHoldForeground/);
+    expect(raw).toMatch(/withReaderForeground/);
+    expect(raw).toMatch(/heldForeground/);
     expect(raw).toMatch(/prioritizeCoverageDue/);
     expect(raw).toMatch(/wakeReaderTab/);
     expect(raw).toMatch(/PARALLEL_SCRAPE\s*=\s*2/);
@@ -213,6 +213,7 @@ describe("extension safety policy", () => {
     expect(code("scrape.js")).toMatch(/shouldAbortDeadFeed/);
     expect(code("scrape.js")).toMatch(/cycleParallel/);
     expect(code("scrape.js")).toMatch(/shouldKeepAwake/);
+    expect(code("scrape.js")).toMatch(/shouldHoldForeground/);
     expect(code("scrape.js")).toMatch(/prioritizeCoverageDue/);
   });
 

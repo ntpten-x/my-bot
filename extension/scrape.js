@@ -170,12 +170,20 @@
   }
 
   /**
+   * Hold the reader tab active for the whole feed pass (not just a pulse).
+   * Same gate as shouldKeepAwake — catchup/sweep/audit or server needsCoverage.
+   */
+  function shouldHoldForeground(plan, group) {
+    return shouldKeepAwake(plan, group);
+  }
+
+  /**
    * Mid-feed pulse: while keepAwake and the feed is still thin, briefly foreground every 2 steps.
-   * Once several posts appear, stop pulsing so the owner keeps their tab.
+   * Used only when we are not already holding the tab in the foreground for the whole pass.
    */
   function shouldPulseWake(input) {
     const opts = input || {};
-    if (!opts.keepAwake) return false;
+    if (!opts.keepAwake || opts.holdForeground) return false;
     if ((opts.found || 0) >= MIN_FOUND_BEFORE_END) return false;
     const steps = opts.steps || 0;
     return steps > 0 && steps % 2 === 0;
@@ -303,7 +311,7 @@
 
   const api = {
     postKey, scrapeSettings, planRun, scrollBudget, feedBudgetMs, scrollWaitMs, scrapeUrl, createRun, addStep, emptyBudget, isShallowRun,
-    isDeepMode, shouldAbortDeadFeed, postWakeSettleMs, cycleParallel, shouldKeepAwake, shouldPulseWake, prioritizeCoverageDue,
+    isDeepMode, shouldAbortDeadFeed, postWakeSettleMs, cycleParallel, shouldKeepAwake, shouldHoldForeground, shouldPulseWake, prioritizeCoverageDue,
     runStats, cleanupText,
     MAX_SCROLLS, MIN_SCROLLS, KNOWN_STREAK, DEFAULT_SCREENS, MAX_SCREENS, MAX_POSTS_PER_RUN,
     EMPTY_STREAK, COLD_EMPTY_STREAK, MIN_FOUND_BEFORE_END,

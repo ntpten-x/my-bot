@@ -609,6 +609,24 @@ async function wakeReaderTab(reader, holdMs) {
   if (prevId !== null && prevId !== undefined) await chrome.tabs.update(prevId, { active: true }).catch(() => undefined);
 }
 
+/**
+ * Keep the reader tab active for the whole async work (deep/coverage hydrate), then restore the owner's tab.
+ * Steals focus briefly — necessary because pulse-only wakes still leave Facebook at 1 article.
+ */
+async function withReaderForeground(reader, work) {
+  if (!reader || reader.tabId === undefined || reader.windowId === undefined) return work();
+  const prev = await chrome.tabs.query({ active: true, windowId: reader.windowId }).catch(() => []);
+  const prevId = prev && prev[0] && prev[0].id !== reader.tabId ? prev[0].id : null;
+  await chrome.tabs.update(reader.tabId, { active: true }).catch(() => undefined);
+  try {
+    return await work();
+  } finally {
+    if (prevId !== null && prevId !== undefined) {
+      await chrome.tabs.update(prevId, { active: true }).catch(() => undefined);
+    }
+  }
+}
+
 // Lazy loading stalled: scroll up a little and back to the bottom so the feed asks for more (scrollTop only).
 async function nudgeScroll(tabId) {
   await chrome.scripting.executeScript({
@@ -829,6 +847,7 @@ async function readFeed(reader, kind, plan, knownKeys, result, options = {}) {
   if (first.groupId) result.groupId = first.groupId;
   result.sample = (first.posts || []).slice(0, 8);
   const keepAwake = Boolean(options.keepAwake);
+  const holdForeground = Boolean(options.holdForeground);
   const pulseWake = typeof options.pulseWake === "function" ? options.pulseWake : null;
   let stop = Scrape.addStep(run, first.posts);
   while (!stop && Date.now() < feedDeadline) {
@@ -839,7 +858,7 @@ async function readFeed(reader, kind, plan, knownKeys, result, options = {}) {
       run.stoppedBy = "end";
       break;
     }
-    if (pulseWake && Scrape.shouldPulseWake({ keepAwake, found: run.found, steps: run.steps })) {
+    if (pulseWake && Scrape.shouldPulseWake({ keepAwake, holdForeground, found: run.found, steps: run.steps })) {
       await pulseWake();
     }
     const before = state.count;
@@ -891,17 +910,23 @@ async function scrapeGroup(cfg, group, remote, options) {
     const url = Scrape.scrapeUrl(group.url, kind);
     reader = await openReader(url);
     const win = reader.windowId !== undefined ? await chrome.windows.get(reader.windowId).catch(() => null) : null;
-    const reading = { windowState: readerWindowState(win), reloaded: false, stallsFirst: 0, stallsRetry: 0, throttled: false };
-    const keepAwake = Scrape.shouldKeepAwake(plan, group);
-    const pulseWake = keepAwake ? () => wakeReaderTab(reader, 450) : null;
-    // Deep / coverage: wake before pass 1 so the first paint is not a single throttled article.
-    if (keepAwake) await wakeReaderTab(reader, 1600);
-    // Pass 1 budget scales with scroll depth; incomplete/hitLimit → wake + reload + longer pass 2.
-    let run = await readFeed(reader, kind, plan, group.knownKeys || [], result, {
-      budgetMs: Scrape.feedBudgetMs(plan, 1),
-      keepAwake,
-      pulseWake,
-    });
+    const reading = { windowState: readerWindowState(win), reloaded: false, stallsFirst: 0, stallsRetry: 0, throttled: false, heldForeground: false };
+    const holdFg = Scrape.shouldHoldForeground(plan, group);
+    const knownKeys = group.knownKeys || [];
+    const runPass = (pass, hold) => {
+      const exec = () =>
+        readFeed(reader, kind, plan, knownKeys, result, {
+          budgetMs: Scrape.feedBudgetMs(plan, pass),
+          keepAwake: hold,
+          holdForeground: hold,
+          // Pulse only when we are not already holding the tab in the foreground.
+          pulseWake: hold ? null : () => wakeReaderTab(reader, 450),
+        });
+      return hold ? withReaderForeground(reader, exec) : exec();
+    };
+    // Deep / coverage: hold the reader in the foreground for the whole pass so Facebook hydrates.
+    reading.heldForeground = holdFg;
+    let run = await runPass(1, holdFg);
     reading.stallsFirst = run.stalls || 0;
     const statsProbe = Scrape.runStats(run);
     const needsRetry =
@@ -909,17 +934,18 @@ async function scrapeGroup(cfg, group, remote, options) {
       (statsProbe.hitLimit && !statsProbe.reachedKnownPost) ||
       (run.found === 0 && run.stalls >= 2);
     if (needsRetry && run.stoppedBy !== "seen" && run.stoppedBy !== "old") {
-      const deep = Scrape.isDeepMode(plan.mode) || keepAwake;
-      await wakeReaderTab(reader, deep ? 1800 : 1400);
-      await chrome.tabs.reload(reader.tabId).catch(() => undefined);
-      await sleep(Scrape.postWakeSettleMs(plan, 2));
-      // Second short wake after reload — Chrome often re-throttles inactive tabs immediately.
-      await wakeReaderTab(reader, deep ? 1600 : 1100);
       reading.reloaded = true;
-      const again = await readFeed(reader, kind, plan, group.knownKeys || [], result, {
-        budgetMs: Scrape.feedBudgetMs(plan, 2),
-        keepAwake: true,
-        pulseWake: () => wakeReaderTab(reader, 450),
+      reading.heldForeground = true;
+      // Shallow recovery always holds foreground for reload + pass 2 (hydrate beats pulse).
+      const again = await withReaderForeground(reader, async () => {
+        await chrome.tabs.reload(reader.tabId).catch(() => undefined);
+        await sleep(Scrape.postWakeSettleMs(plan, 2));
+        return readFeed(reader, kind, plan, knownKeys, result, {
+          budgetMs: Scrape.feedBudgetMs(plan, 2),
+          keepAwake: true,
+          holdForeground: true,
+          pulseWake: null,
+        });
       });
       reading.stallsRetry = again.stalls || 0;
       again.stalls += run.stalls;

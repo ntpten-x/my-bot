@@ -19,6 +19,7 @@ it("batches collected posts so every request is accepted by the real ingest vali
       scrapeUrl: () => "https://www.facebook.com/groups/12345",
       feedBudgetMs: () => 60_000,
       shouldKeepAwake: () => false,
+      shouldHoldForeground: () => false,
       shouldPulseWake: () => false,
       isDeepMode: () => false,
       runStats: () => ({ scrolls: 0, hitLimit: false, reachedKnownPost: true, newCount: 120 }),

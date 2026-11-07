@@ -17,7 +17,8 @@ const scrape = require(path.resolve(__dirname, "../../extension/scrape.js")) as 
   postWakeSettleMs(plan: { mode?: string }, pass: number): number;
   cycleParallel(input: { recentlyThrottled?: boolean; batch?: Array<{ needsCoverage?: boolean }>; defaultParallel?: number }): number;
   shouldKeepAwake(plan: { mode?: string }, group: { needsCoverage?: boolean }): boolean;
-  shouldPulseWake(input: { keepAwake?: boolean; found?: number; steps?: number }): boolean;
+  shouldHoldForeground(plan: { mode?: string }, group: { needsCoverage?: boolean }): boolean;
+  shouldPulseWake(input: { keepAwake?: boolean; holdForeground?: boolean; found?: number; steps?: number }): boolean;
   prioritizeCoverageDue<T extends { id?: string; needsCoverage?: boolean }>(groups: T[]): T[];
   scrapeUrl(url: string, kind: string): string;
   createRun(opts: { knownKeys?: string[]; maxAgeMs?: number; maxPosts?: number; maxScrolls?: number; knownStreak?: number; mode?: string; now?: number }): Run & { stalls: number; steps: number; mode: string };
@@ -204,9 +205,17 @@ describe("scroll scrape plan (extension/scrape.js)", () => {
     expect(scrape.shouldKeepAwake({ mode: "normal" }, { needsCoverage: true })).toBe(true);
     expect(scrape.shouldKeepAwake({ mode: "normal" }, {})).toBe(false);
     expect(scrape.shouldPulseWake({ keepAwake: true, found: 1, steps: 2 })).toBe(true);
+    expect(scrape.shouldPulseWake({ keepAwake: true, holdForeground: true, found: 1, steps: 2 })).toBe(false);
     expect(scrape.shouldPulseWake({ keepAwake: true, found: 1, steps: 1 })).toBe(false);
     expect(scrape.shouldPulseWake({ keepAwake: true, found: 5, steps: 4 })).toBe(false);
     expect(scrape.shouldPulseWake({ keepAwake: false, found: 1, steps: 2 })).toBe(false);
+  });
+
+  it("holds the reader in the foreground for the whole deep / coverage pass", () => {
+    expect(scrape.shouldHoldForeground({ mode: "catchup" }, {})).toBe(true);
+    expect(scrape.shouldHoldForeground({ mode: "sweep" }, {})).toBe(true);
+    expect(scrape.shouldHoldForeground({ mode: "normal" }, { needsCoverage: true })).toBe(true);
+    expect(scrape.shouldHoldForeground({ mode: "normal" }, {})).toBe(false);
   });
 
   it("orders coverage-needy groups ahead of healthy ones in a cycle", () => {
