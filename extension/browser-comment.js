@@ -71,7 +71,7 @@
       if (normalize(box.value ?? box.textContent) !== normalize(payload.message)) return { ok: false, outcome: "failed", reason: "editor_text_not_accepted" };
       const buttons = Array.from(form.querySelectorAll('button,[role="button"]')).filter(el => {
         const label = normalize(el.getAttribute("aria-label") || el.textContent).toLowerCase();
-        return visible(el) && !el.disabled && el.getAttribute("aria-disabled") !== "true" && /^(post a comment|post comment|comment|send|ส่ง|ส่งความคิดเห็น|แสดงความคิดเห็น)$/.test(label);
+        return visible(el) && !el.disabled && el.getAttribute("aria-disabled") !== "true" && /^(post a comment|post comment|comment|send|ส่ง|ส่งความคิดเห็น|โพสต์ความคิดเห็น|แสดงความคิดเห็น)$/.test(label);
       });
       if (buttons.length !== 1) return { ok: false, outcome: "failed", reason: "submit_not_unique_or_ready" };
       memory.__mybotCommentSession = { id: payload.id, box, button: buttons[0], article, before: memory.__mybotCommentSession.before, message: payload.message, at: now(), clicked: false };

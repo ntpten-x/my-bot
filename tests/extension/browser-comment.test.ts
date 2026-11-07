@@ -84,3 +84,11 @@ it("fails without a false success when a controlled editor rejects input", async
   expect(await action('prepare', payload, f.env)).toMatchObject({ ok: false, reason: 'editor_text_not_accepted' });
   expect(f.click).not.toHaveBeenCalled(); f.dom.window.close();
 });
+
+it("recognizes the Thai Facebook post-comment button", async () => {
+ const f=fixture('<main><article role="article"><a href="/groups/12345/posts/8888/">post</a><form><textarea aria-label="เขียนความคิดเห็นที่แสดงต่อสาธารณะ..."></textarea><button type="button" aria-label="โพสต์ความคิดเห็น"></button></form></article></main>');
+ expect((await action('prepare',payload,f.env)).ok).toBe(true);
+ expect(f.click).not.toHaveBeenCalled();
+ expect((await action('send',{...payload,permitUntil:2000},f.env)).ok).toBe(true);
+ expect(f.click).toHaveBeenCalledTimes(1); f.dom.window.close();
+});
