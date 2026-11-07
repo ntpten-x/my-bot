@@ -37,3 +37,14 @@ it("waits for delayed exact-target content rather than failing after navigation"
  const result=await vm.runInContext('readFullTexts(1,"group",["target"])',context);
  expect(reads).toBe(3);expect(result.found).toHaveLength(1);expect(result.failed).toHaveLength(0);
 });
+it("matches equivalent Facebook permalinks while rejecting ambiguous or foreign targets", () => {
+ const source=readFileSync("extension/background.js","utf8"); const context=vm.createContext({URL});
+ vm.runInContext(source.slice(source.indexOf("function postKey(url)"),source.indexOf("// Posts cut off")),context);
+ const key=(url:string)=>vm.runInContext(`postKey(${JSON.stringify(url)})`,context);
+ const target="https://www.facebook.com/groups/123/posts/456/";
+ expect(key(target)).toBe("group:123:456");
+ expect(key("https://web.facebook.com/groups/123/?multi_permalinks=456&ref=test")).toBe(key(target));
+ expect(key("https://m.facebook.com/groups/123/permalink/456")).toBe(key(target));
+ expect(key("https://www.facebook.com/groups/999/?multi_permalinks=456")).not.toBe(key(target));
+ for(const url of ["https://evil.test/groups/123/posts/456", "https://www.facebook.com/groups/123/?multi_permalinks=456,789", "https://www.facebook.com/groups/123/posts/456?multi_permalinks=789", "https://www.facebook.com/groups/123/posts/456?comment_id=1", "https://www.facebook.com/groups/123/?multi_permalinks=456&multi_permalinks=789"]) expect(key(url)).toBe("");
+});

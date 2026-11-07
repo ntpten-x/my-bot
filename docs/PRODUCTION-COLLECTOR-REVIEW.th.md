@@ -67,3 +67,9 @@ Strict tests 61 files / 519 tests ผ่าน และ Lint ผ่าน ย�
 ผล Production ก่อนแก้: tried=2 succeeded=0 failed=2 ไม่เพียงพอระบุว่าล้มเพราะ React ช้าหรือยังตัดข้อความ จึงเพิ่ม readFullTexts polling exact target สูงสุด 4 ครั้งใน deadline เดิม แยก failures เป็น target_not_found/text_still_truncated/facebook_logged_out/navigation_or_parser_error และเก็บ lastReason/metrics.reasons ไม่มีการคลิกดูเพิ่มเติม ไม่มี fallback ไปบทความอื่น
 
 เพิ่ม regression เนื้อหาเป้าหมายปรากฏครั้งที่สาม Strict tests 61 files / 521 tests ผ่าน ไม่มี skip; Lint ผ่าน การแก้นี้รองรับ delayed content แต่ยังไม่ยืนยันว่าแก้รากเหตุของสองงานจริง ต้องอ่าน diagnostics หลัง deploy ก่อนขยาย selector
+
+## แก้ URL identity จากหลักฐาน Production
+
+หน้าโพสต์จริง parse ข้อความเต็มได้ แต่ลิงก์เป็น /groups/<group>/?multi_permalinks=<post> ขณะที่เป้าหมายเป็น /posts/<post> จึงถูกปฏิเสธโดยตัวเทียบ path เดิม แก้ background postKey ให้ canonical เป็น group:<group>:<post> รองรับ posts/permalink/multi_permalinks เฉพาะ HTTPS Facebook hosts ตรวจ group ด้วย ปฏิเสธหลาย id/query ซ้ำ/comment links/credentials/port/conflicting ids ไม่มีการใช้ longest-text fallback และไม่เปลี่ยน shared scheduling keys ใน scrape.js
+
+Tests 61 files / 522 tests ผ่าน ไม่มี skip; Lint ผ่าน ต้องอัปเดต Extension และตรวจ full-text success บน Production อีกครั้ง ไม่ใช่การรับรองว่าทุกโพสต์แสดงข้อความเต็มแล้ว

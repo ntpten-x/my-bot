@@ -408,7 +408,21 @@ async function saveFullTextBacklog(backlog) {
 }
 
 function postKey(url) {
-  return String(url || "").split("?")[0].replace(/\/+$/, "");
+  try {
+    const parsed = new URL(String(url || ""));
+    if (parsed.protocol !== "https:" || !["facebook.com", "www.facebook.com", "web.facebook.com", "m.facebook.com"].includes(parsed.hostname) || parsed.username || parsed.password || parsed.port) return "";
+    if (parsed.searchParams.has("comment_id") || parsed.searchParams.has("reply_comment_id")) return "";
+    const path = parsed.pathname.match(/^\/groups\/([a-zA-Z0-9._-]+)(?:\/(?:posts|permalink)\/(\d+))?\/?$/);
+    if (path) {
+      const ids = parsed.searchParams.getAll("multi_permalinks");
+      if (ids.length > 1 || (ids.length && !/^\d+$/.test(ids[0]))) return "";
+      if (path[2] && ids.length && path[2] !== ids[0]) return "";
+      const id = path[2] || ids[0];
+      return id ? `group:${path[1]}:${id}` : "";
+    }
+    const item = parsed.pathname.match(/^\/marketplace\/item\/(\d+)\/?$/);
+    return item ? `marketplace:${item[1]}` : "";
+  } catch { return ""; }
 }
 
 // Posts cut off at "See more": open each permalink in the same background tab and read the text
