@@ -89,20 +89,30 @@ describe("scroll scrape plan (extension/scrape.js)", () => {
     expect(scrape.runStats(capped)).toMatchObject({ hitLimit: true, reachedKnownPost: false });
   });
 
-  it("stops at the scroll budget and after five empty screens", () => {
+  it("stops at the scroll budget and after empty screens (colder while the feed is still thin)", () => {
     const run = scrape.createRun({ maxScrolls: 2, now: NOW });
     expect(scrape.addStep(run, [post(1)])).toBe("");
     expect(scrape.addStep(run, [post(2)])).toBe("");
     expect(scrape.addStep(run, [post(3)])).toBe("limit"); // first screen + 2 scrolls
     expect(scrape.runStats(run).hitLimit).toBe(true);
 
-    const empty = scrape.createRun({ now: NOW });
-    scrape.addStep(empty, [post(1)]);
-    expect(scrape.addStep(empty, [post(1)])).toBe(""); // already seen → empty 1
-    expect(scrape.addStep(empty, [])).toBe("");
-    expect(scrape.addStep(empty, [])).toBe("");
-    expect(scrape.addStep(empty, [])).toBe("");
-    expect(scrape.addStep(empty, [])).toBe("end");
+    // found < MIN_FOUND_BEFORE_END → need COLD_EMPTY_STREAK empty screens
+    const thin = scrape.createRun({ now: NOW });
+    scrape.addStep(thin, [post(1)]);
+    expect(scrape.emptyBudget(thin)).toBe(scrape.COLD_EMPTY_STREAK);
+    for (let i = 0; i < scrape.COLD_EMPTY_STREAK - 1; i += 1) {
+      expect(scrape.addStep(thin, [])).toBe("");
+    }
+    expect(scrape.addStep(thin, [])).toBe("end");
+
+    // Enough distinct posts → normal EMPTY_STREAK
+    const full = scrape.createRun({ now: NOW });
+    scrape.addStep(full, [post(1), post(2), post(3)]);
+    expect(scrape.emptyBudget(full)).toBe(scrape.EMPTY_STREAK);
+    for (let i = 0; i < scrape.EMPTY_STREAK - 1; i += 1) {
+      expect(scrape.addStep(full, [])).toBe("");
+    }
+    expect(scrape.addStep(full, [])).toBe("end");
   });
 
   it("plans normal runs, hourly sweeps, 24 h catch-up and audits", () => {

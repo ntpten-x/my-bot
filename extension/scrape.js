@@ -9,7 +9,14 @@
   const KNOWN_STREAK = 3;
   const SWEEP_STREAK = 8;
   const OLD_STREAK = 3;
+  /** Empty screens in a row before "end" when the feed already showed several posts. */
   const EMPTY_STREAK = 5;
+  /**
+   * Background Facebook tabs often paint 0–1 articles first. Do not treat that as end-of-feed
+   * until we have seen at least this many distinct posts, or hit the colder empty budget.
+   */
+  const MIN_FOUND_BEFORE_END = 3;
+  const COLD_EMPTY_STREAK = 10;
 
   function postKey(input) {
     const value = String(input || "").trim();
@@ -126,10 +133,14 @@
    * Feed the posts parsed after one screen, in page order. Returns the reason to stop or "".
    * - seen: knownStreak known posts in a row (a pinned/featured known post alone never stops the run)
    * - old:  OLD_STREAK dated posts in a row older than the run window (one out-of-order old post does not stop it)
-   * - end:  EMPTY_STREAK screens in a row showed nothing new
+   * - end:  empty screens in a row (EMPTY_STREAK, or COLD_EMPTY_STREAK while found < MIN_FOUND_BEFORE_END)
    * - cap:  the sane upper bound of fresh posts for one run
    * - limit: the scroll budget for this mode is used up (caller checks run.steps)
    */
+  function emptyBudget(run) {
+    return run.found < MIN_FOUND_BEFORE_END ? COLD_EMPTY_STREAK : EMPTY_STREAK;
+  }
+
   function addStep(run, posts) {
     run.steps += 1;
     let newly = 0;
@@ -167,7 +178,7 @@
     if (!stop) {
       if (!newly) {
         run.emptySteps += 1;
-        if (run.emptySteps >= EMPTY_STREAK) stop = "end";
+        if (run.emptySteps >= emptyBudget(run)) stop = "end";
       } else run.emptySteps = 0;
     }
     if (!stop && run.steps > run.maxScrolls) {
@@ -197,7 +208,11 @@
       .trim();
   }
 
-  const api = { postKey, scrapeSettings, planRun, scrollWaitMs, scrapeUrl, createRun, addStep, runStats, cleanupText, MAX_SCROLLS, KNOWN_STREAK, DEFAULT_SCREENS, MAX_SCREENS, MAX_POSTS_PER_RUN };
+  const api = {
+    postKey, scrapeSettings, planRun, scrollWaitMs, scrapeUrl, createRun, addStep, emptyBudget, runStats, cleanupText,
+    MAX_SCROLLS, KNOWN_STREAK, DEFAULT_SCREENS, MAX_SCREENS, MAX_POSTS_PER_RUN,
+    EMPTY_STREAK, COLD_EMPTY_STREAK, MIN_FOUND_BEFORE_END,
+  };
   root.MyBotScrape = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);
