@@ -151,7 +151,7 @@ describe("extension safety policy", () => {
       commands: Record<string, { suggested_key?: { default?: string } }>;
       permissions: string[];
     };
-    expect(manifest.version).toBe("1.10.15");
+    expect(manifest.version).toBe("1.10.16");
     expect(manifest.permissions).not.toContain("cookies");
     expect(manifest.permissions).not.toContain("webRequest");
     expect(Object.keys(manifest.commands).sort()).toEqual(["mark-sent", "mark-skip"]);
@@ -195,7 +195,9 @@ describe("extension safety policy", () => {
     expect(raw).toMatch(/feedBudgetMs\(plan,\s*1\)/);
     expect(raw).toMatch(/feedBudgetMs\(plan,\s*2\)/);
     expect(raw).toMatch(/hitLimit\s*&&\s*!.*reachedKnownPost/);
-    expect(raw).toMatch(/recentlyThrottled\s*\?\s*1\s*:\s*PARALLEL_SCRAPE/);
+    expect(raw).toMatch(/cycleParallel/);
+    expect(raw).toMatch(/shouldAbortDeadFeed/);
+    expect(raw).toMatch(/postWakeSettleMs/);
     expect(raw).toMatch(/wakeReaderTab/);
     expect(raw).toMatch(/PARALLEL_SCRAPE\s*=\s*2/);
     expect(raw).toMatch(/isShallowRun/);
@@ -205,6 +207,8 @@ describe("extension safety policy", () => {
     expect(code("scrape.js")).toMatch(/isShallowRun/);
     expect(code("scrape.js")).toMatch(/feedBudgetMs/);
     expect(code("scrape.js")).toMatch(/scrollBudget/);
+    expect(code("scrape.js")).toMatch(/shouldAbortDeadFeed/);
+    expect(code("scrape.js")).toMatch(/cycleParallel/);
   });
 
   it("background only injects for a pending request from the MY-BOT origin", () => {

@@ -47,4 +47,14 @@ describe("reader stats", () => {
     ]);
     expect(r).toMatchObject({ total: 2, minimized: 2, stalledMinimized: 1, reloaded: 1, fullTried: 3, fullOk: 2, avgSeconds: 3 });
   });
+
+  it("can filter reader runs down to the current extension version", () => {
+    const rows = [
+      { windowState: "normal", stalls: 1, reloaded: false, throttled: false, fullTried: 0, fullOk: 0, durationMs: 1000, extVersion: "1.10.14" },
+      { windowState: "normal", stalls: 0, reloaded: false, throttled: false, fullTried: 1, fullOk: 1, durationMs: 2000, extVersion: "1.10.16" },
+      { windowState: "minimized", stalls: 2, reloaded: true, throttled: true, fullTried: 0, fullOk: 0, durationMs: 3000, extVersion: "1.10.16" },
+    ];
+    const current = summarizeReaderRuns(rows.filter((row) => row.extVersion === "1.10.16"));
+    expect(current).toMatchObject({ total: 2, minimized: 1, stalled: 1, throttled: 1, fullTried: 1, fullOk: 1 });
+  });
 });

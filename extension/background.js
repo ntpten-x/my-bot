@@ -599,12 +599,13 @@ async function waitForGrowth(tabId, kind, before, timeoutMs) {
 }
 
 /** Briefly activate the reader tab so Chrome unthrottles timers, then restore the owner's tab. */
-async function wakeReaderTab(reader) {
+async function wakeReaderTab(reader, holdMs) {
   if (!reader || reader.tabId === undefined || reader.windowId === undefined) return;
   const prev = await chrome.tabs.query({ active: true, windowId: reader.windowId }).catch(() => []);
   const prevId = prev && prev[0] && prev[0].id !== reader.tabId ? prev[0].id : null;
   await chrome.tabs.update(reader.tabId, { active: true }).catch(() => undefined);
-  await sleep(450);
+  // Hold longer than before — Facebook needs a real foreground tick to hydrate articles.
+  await sleep(Math.max(900, Number(holdMs) || 1400));
   if (prevId !== null && prevId !== undefined) await chrome.tabs.update(prevId, { active: true }).catch(() => undefined);
 }
 
@@ -830,7 +831,8 @@ async function readFeed(reader, kind, plan, knownKeys, result, options = {}) {
   let stop = Scrape.addStep(run, first.posts);
   while (!stop && Date.now() < feedDeadline) {
     // Dead feed: stop early so scrapeGroup can wake + reload instead of idling to the deadline.
-    if (run.stalls >= 4 && run.found < 2 && run.steps >= 3) {
+    // Catchup/sweep/audit tolerate more stalls before aborting (see shouldAbortDeadFeed).
+    if (Scrape.shouldAbortDeadFeed(run)) {
       stop = "end";
       run.stoppedBy = "end";
       break;
@@ -850,13 +852,14 @@ async function readFeed(reader, kind, plan, knownKeys, result, options = {}) {
     const page = await readPage(tabId, kind);
     stop = Scrape.addStep(run, page.posts);
     // Soft end once: only when the cold budget fired and a little time remains.
-    if (stop === "end" && run.found < (Scrape.MIN_FOUND_BEFORE_END || 3) && remaining(6000) > 0 && run.stalls < 6) {
+    const softStallCap = Scrape.isDeepMode(run.mode) ? 10 : 6;
+    if (stop === "end" && run.found < (Scrape.MIN_FOUND_BEFORE_END || 3) && remaining(6000) > 0 && run.stalls < softStallCap) {
       run.stalls += 1;
       run.stoppedBy = "";
       run.emptySteps = Math.max(0, (run.emptySteps || 0) - 3);
       await nudgeScroll(tabId);
-      await sleep(remaining(1500));
-      state = await waitForGrowth(tabId, kind, state.count, remaining(3500));
+      await sleep(remaining(Scrape.isDeepMode(run.mode) ? 2500 : 1500));
+      state = await waitForGrowth(tabId, kind, state.count, remaining(Scrape.isDeepMode(run.mode) ? 5000 : 3500));
       const again = await readPage(tabId, kind);
       stop = Scrape.addStep(run, again.posts);
     }
@@ -893,9 +896,12 @@ async function scrapeGroup(cfg, group, remote, options) {
       (statsProbe.hitLimit && !statsProbe.reachedKnownPost) ||
       (run.found === 0 && run.stalls >= 2);
     if (needsRetry && run.stoppedBy !== "seen" && run.stoppedBy !== "old") {
-      await wakeReaderTab(reader);
+      const deep = Scrape.isDeepMode(plan.mode);
+      await wakeReaderTab(reader, deep ? 1800 : 1400);
       await chrome.tabs.reload(reader.tabId).catch(() => undefined);
-      await sleep(2800);
+      await sleep(Scrape.postWakeSettleMs(plan, 2));
+      // Second short wake after reload — Chrome often re-throttles inactive tabs immediately.
+      await wakeReaderTab(reader, deep ? 1600 : 1100);
       reading.reloaded = true;
       const again = await readFeed(reader, kind, plan, group.knownKeys || [], result, { budgetMs: Scrape.feedBudgetMs(plan, 2) });
       reading.stallsRetry = again.stalls || 0;
@@ -1058,12 +1064,14 @@ async function cycle() {
       if (until > now) return false;
       return true;
     });
-    // Chrome throttled recently → smaller batch + single-tab parallel. Otherwise up to PARALLEL_SCRAPE.
+    // Chrome throttled / coverage recovery → smaller batch + single-tab parallel. Otherwise up to PARALLEL_SCRAPE.
+    const Scrape = globalThis.MyBotScrape;
     const { throttledAt } = await chrome.storage.local.get({ throttledAt: 0 });
     const recentlyThrottled = Date.now() - throttledAt < 30 * 60 * 1000;
+    const needsCoverageDue = due.some((group) => group.needsCoverage);
     const limit = remote.maxGroupsPerCycle || 20;
-    const batch = due.slice(0, recentlyThrottled ? Math.min(limit, 2) : limit);
-    const parallel = recentlyThrottled ? 1 : PARALLEL_SCRAPE;
+    const batch = due.slice(0, recentlyThrottled || needsCoverageDue ? Math.min(limit, 2) : limit);
+    const parallel = Scrape.cycleParallel({ recentlyThrottled, batch, defaultParallel: PARALLEL_SCRAPE });
     // Full-text must not steal tabs before discovery when many groups are due or Chrome is throttling.
     if (!recentlyThrottled && batch.length <= 2 && Object.keys(await loadFullTextBacklog()).length >= 10) {
       await processFullTextQueue(cfg, remote.groups || [], { budgetMs: 15000, maxItems: 2 });

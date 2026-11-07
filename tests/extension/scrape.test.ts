@@ -13,8 +13,11 @@ const scrape = require(path.resolve(__dirname, "../../extension/scrape.js")) as 
   scrapeSettings(remote: unknown): { screens: number; maxAgeMs: number; maxPosts: number };
   scrollWaitMs(random?: () => number, opts?: { growing?: boolean }): number;
   feedBudgetMs(plan: { maxScrolls?: number }, pass: number): number;
+  shouldAbortDeadFeed(run: Run & { stalls?: number; steps?: number; mode?: string }): boolean;
+  postWakeSettleMs(plan: { mode?: string }, pass: number): number;
+  cycleParallel(input: { recentlyThrottled?: boolean; batch?: Array<{ needsCoverage?: boolean }>; defaultParallel?: number }): number;
   scrapeUrl(url: string, kind: string): string;
-  createRun(opts: { knownKeys?: string[]; maxAgeMs?: number; maxPosts?: number; maxScrolls?: number; knownStreak?: number; mode?: string; now?: number }): Run;
+  createRun(opts: { knownKeys?: string[]; maxAgeMs?: number; maxPosts?: number; maxScrolls?: number; knownStreak?: number; mode?: string; now?: number }): Run & { stalls: number; steps: number; mode: string };
   planRun(opts: { now?: number; group?: Record<string, unknown>; lastSweepAt?: number; audit?: boolean; settings?: { screens: number; maxAgeMs: number; maxPosts: number } }): Plan;
   runStats(run: Run): { reachedKnownPost: boolean; hitLimit: boolean; scrolls: number; newCount: number };
   addStep(run: Run, posts: Post[]): string;
@@ -163,6 +166,34 @@ describe("scroll scrape plan (extension/scrape.js)", () => {
     expect(scrape.feedBudgetMs({ maxScrolls: 20 }, 1)).toBeGreaterThanOrEqual(60_000);
     expect(scrape.feedBudgetMs({ maxScrolls: 20 }, 2)).toBeGreaterThan(scrape.feedBudgetMs({ maxScrolls: 20 }, 1));
     expect(scrape.feedBudgetMs({ maxScrolls: 30 }, 2)).toBeLessThanOrEqual(120_000);
+  });
+
+  it("aborts dead feeds sooner in normal mode than in catchup", () => {
+    const normal = scrape.createRun({ mode: "normal", now: NOW });
+    normal.stalls = 4;
+    normal.found = 1;
+    normal.steps = 3;
+    expect(scrape.shouldAbortDeadFeed(normal)).toBe(true);
+
+    const catchup = scrape.createRun({ mode: "catchup", now: NOW });
+    catchup.stalls = 4;
+    catchup.found = 1;
+    catchup.steps = 3;
+    expect(scrape.shouldAbortDeadFeed(catchup)).toBe(false);
+    catchup.stalls = 8;
+    catchup.steps = 6;
+    expect(scrape.shouldAbortDeadFeed(catchup)).toBe(true);
+  });
+
+  it("settles longer after wake on deep retry passes", () => {
+    expect(scrape.postWakeSettleMs({ mode: "normal" }, 1)).toBeLessThan(scrape.postWakeSettleMs({ mode: "catchup" }, 2));
+    expect(scrape.postWakeSettleMs({ mode: "catchup" }, 2)).toBeGreaterThanOrEqual(5000);
+  });
+
+  it("forces single-tab parallel when any due group needs coverage", () => {
+    expect(scrape.cycleParallel({ recentlyThrottled: false, batch: [{ needsCoverage: false }], defaultParallel: 2 })).toBe(2);
+    expect(scrape.cycleParallel({ recentlyThrottled: false, batch: [{ needsCoverage: true }, { needsCoverage: false }], defaultParallel: 2 })).toBe(1);
+    expect(scrape.cycleParallel({ recentlyThrottled: true, batch: [], defaultParallel: 2 })).toBe(1);
   });
 
   it("catch-up stops on posts older than 24 h instead of reading further back", () => {

@@ -1,4 +1,5 @@
 import { prisma } from "./prisma";
+import { EXPECTED_EXTENSION_VERSION } from "./extension-heartbeat";
 import { getSettings } from "./settings";
 import { findSourceByUrl } from "./sources";
 import {
@@ -33,7 +34,16 @@ export const STOP_REASON_LABEL: Record<string, string> = {
 
 export { REFETCH_PER_SOURCE, REFETCH_MAX_ATTEMPTS, rankRefetch };
 
-export type ReaderRun = { windowState: string; stalls: number; reloaded: boolean; throttled: boolean; fullTried: number; fullOk: number; durationMs: number };
+export type ReaderRun = {
+  windowState: string;
+  stalls: number;
+  reloaded: boolean;
+  throttled: boolean;
+  fullTried: number;
+  fullOk: number;
+  durationMs: number;
+  extVersion?: string;
+};
 
 /** Pure: 24 h health of the background reader window (minimized legacy or offscreen). */
 export function summarizeReaderRuns(runs: ReaderRun[]) {
@@ -51,12 +61,17 @@ export function summarizeReaderRuns(runs: ReaderRun[]) {
   };
 }
 
-export async function readerHealth(now = new Date()) {
+/** Reader health for the current extension version only — older installs must not mask a fresh deploy. */
+export async function readerHealth(now = new Date(), extVersion?: string) {
+  const version = (extVersion || EXPECTED_EXTENSION_VERSION).trim();
   const runs = await prisma.scrapeRun.findMany({
-    where: { createdAt: { gte: new Date(now.getTime() - 24 * 3600_000) }, extVersion: { not: "" } },
-    select: { windowState: true, stalls: true, reloaded: true, throttled: true, fullTried: true, fullOk: true, durationMs: true },
+    where: {
+      createdAt: { gte: new Date(now.getTime() - 24 * 3600_000) },
+      ...(version ? { extVersion: version } : { extVersion: { not: "" } }),
+    },
+    select: { windowState: true, stalls: true, reloaded: true, throttled: true, fullTried: true, fullOk: true, durationMs: true, extVersion: true },
   });
-  return summarizeReaderRuns(runs);
+  return { ...summarizeReaderRuns(runs), extVersion: version };
 }
 
 /** One batched knownKeys + refetch load for the due sources about to open this cycle. */

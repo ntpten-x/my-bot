@@ -130,6 +130,39 @@
     return (run.found || 0) < MIN_FOUND_BEFORE_END;
   }
 
+  function isDeepMode(mode) {
+    return mode === "catchup" || mode === "sweep" || mode === "audit";
+  }
+
+  /**
+   * Background tab looks dead — abort so scrapeGroup can wake+reload.
+   * Deep modes tolerate more stalls/steps before giving up (coverage recovery).
+   */
+  function shouldAbortDeadFeed(run) {
+    if (!run) return true;
+    if ((run.found || 0) >= 2) return false;
+    const deep = isDeepMode(run.mode);
+    const stallLimit = deep ? 8 : 4;
+    const stepLimit = deep ? 6 : 3;
+    return (run.stalls || 0) >= stallLimit && (run.steps || 0) >= stepLimit;
+  }
+
+  /** Settle after wake+reload before reading again. Deep retry waits longer for hydrate. */
+  function postWakeSettleMs(plan, pass) {
+    if (pass === 2 && isDeepMode(plan && plan.mode)) return 5500;
+    if (pass === 2) return 4000;
+    return 2800;
+  }
+
+  /** Cycle concurrency: single tab while throttled or any due group needs coverage. */
+  function cycleParallel(input) {
+    const opts = input || {};
+    if (opts.recentlyThrottled) return 1;
+    if ((opts.batch || []).some((group) => group && group.needsCoverage)) return 1;
+    const fallback = Number(opts.defaultParallel);
+    return Number.isFinite(fallback) && fallback > 0 ? Math.floor(fallback) : 2;
+  }
+
   // Marketplace results sorted newest first; group feeds in chronological order. Read-only URL changes only.
   function scrapeUrl(url, kind) {
     const parsed = new URL(url);
@@ -246,7 +279,8 @@
   }
 
   const api = {
-    postKey, scrapeSettings, planRun, scrollBudget, feedBudgetMs, scrollWaitMs, scrapeUrl, createRun, addStep, emptyBudget, isShallowRun, runStats, cleanupText,
+    postKey, scrapeSettings, planRun, scrollBudget, feedBudgetMs, scrollWaitMs, scrapeUrl, createRun, addStep, emptyBudget, isShallowRun,
+    isDeepMode, shouldAbortDeadFeed, postWakeSettleMs, cycleParallel, runStats, cleanupText,
     MAX_SCROLLS, MIN_SCROLLS, KNOWN_STREAK, DEFAULT_SCREENS, MAX_SCREENS, MAX_POSTS_PER_RUN,
     EMPTY_STREAK, COLD_EMPTY_STREAK, MIN_FOUND_BEFORE_END,
   };

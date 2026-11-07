@@ -316,12 +316,15 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
     await (async () => {
       const r = await readerHealth(new Date(now)).catch(() => null);
       const stallPct = r && r.minimized ? r.stalledMinimized / r.minimized : 0;
+      const ver = r && "extVersion" in r && r.extVersion ? String(r.extVersion) : EXPECTED_EXTENSION_VERSION;
       return {
         key: "ext-reader-health",
         label: "การอ่านเบื้องหลัง (24 ชม.)",
         level: (!r || !r.total ? "off" : stallPct >= 0.3 || r.throttled > 0 ? "warn" : "ok") as "ok" | "warn" | "off",
         value: r && r.total ? `${r.total} รอบ · นอกจอ/ย่อ ${r.minimized} · ค้าง ${r.stalled} (ขณะพื้นหลัง ${r.stalledMinimized}) · รีโหลดซ้ำ ${r.reloaded} · หน่วง ${r.throttled}` : "ยังไม่มีข้อมูล",
-        detail: r && r.total ? `อ่านข้อความเต็มสำเร็จ ${r.fullOk}/${r.fullTried} · เฉลี่ย ${r.avgSeconds} วินาที/รอบ` : "บันทึกจากส่วนขยาย v1.8.1 ขึ้นไป",
+        detail: r && r.total
+          ? `เฉพาะส่วนขยาย v${ver} · อ่านข้อความเต็มสำเร็จ ${r.fullOk}/${r.fullTried} · เฉลี่ย ${r.avgSeconds} วินาที/รอบ`
+          : `ยังไม่มีรอบจากส่วนขยาย v${ver} ใน 24 ชม. (ไม่นับเวอร์ชันเก่า)`,
         hint: r && stallPct >= 0.3 ? "Chrome หน่วงแท็บพื้นหลังบ่อย — ลดจำนวนกลุ่มที่เปิด และเปิด Chrome ทิ้งไว้ (อย่าย่อหน้าต่าง Facebook ทั้งบาน)" : undefined,
       };
     })(),
