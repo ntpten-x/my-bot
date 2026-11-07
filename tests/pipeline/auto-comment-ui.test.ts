@@ -27,3 +27,14 @@ it("keeps Emergency Stop actionable and requests only the emergency command", as
   expect(emergency.disabled).toBe(false); await act(async () => emergency.click());
   expect(fetch).toHaveBeenCalledWith("/api/auto-comment", expect.objectContaining({ method: "PUT", body: '{"action":"emergency"}' }));
 });
+
+it("prepares the shoe rule with buyer intent without enabling or submitting it", async () => {
+  await act(async () => root.render(React.createElement(Page)));
+  const preset = Array.from(container.querySelectorAll("button")).find(node => node.textContent?.includes("ใช้ตัวอย่าง"))!;
+  await act(async () => preset.click());
+  expect(container.querySelector<HTMLSelectElement>("#intent-mode")!.value).toBe("buyer");
+  expect(container.querySelector<HTMLTextAreaElement>("#required-words")!.value).toContain("รองเท้า");
+  expect(container.querySelector<HTMLTextAreaElement>("#comment-templates")!.value).toBe("");
+  expect(container.textContent).toContain("กฎยังปิดอยู่");
+  expect(vi.mocked(fetch).mock.calls.every(([, init]) => !init || !["POST", "PUT"].includes(init.method ?? ""))).toBe(true);
+});

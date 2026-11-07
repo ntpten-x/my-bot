@@ -141,7 +141,7 @@ describe("extension safety policy", () => {
   it("only exposes the bridge to the local MY-BOT app or an HTTPS Render deployment", () => {
     const manifest = JSON.parse(readFileSync(path.join(ext, "manifest.json"), "utf8")) as { content_scripts: { matches: string[]; js: string[] }[] };
     for (const script of manifest.content_scripts.filter((entry) => entry.js.includes("bridge.js"))) {
-      for (const match of script.matches) expect(match).toMatch(/^(http:\/\/(localhost|127\.0\.0\.1)\/|https:\/\/\*\.onrender\.com\/)/);
+      for (const match of script.matches) expect(match).toMatch(/^(http:\/\/(localhost|127\.0\.0\.1)\/|https:\/\/my-bot-e6bt\.onrender\.com\/)/);
     }
   });
 
@@ -151,7 +151,7 @@ describe("extension safety policy", () => {
       commands: Record<string, { suggested_key?: { default?: string } }>;
       permissions: string[];
     };
-    expect(manifest.version).toBe("1.9.3");
+    expect(manifest.version).toBe("1.10.0");
     expect(manifest.permissions).not.toContain("cookies");
     expect(manifest.permissions).not.toContain("webRequest");
     expect(Object.keys(manifest.commands).sort()).toEqual(["mark-sent", "mark-skip"]);

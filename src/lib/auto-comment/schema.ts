@@ -6,6 +6,8 @@ export const autoCommentRuleSchema = z.object({
   sourceIds: z.array(z.string().min(1)).max(100).default([]),
   keywords: z.string().max(1000).default(""), excludeKeywords: z.string().max(1000).default(""),
   keywordMode: z.enum(["any", "all"]).default("any"), selectionMode: z.enum(["sequential", "random"]).default("sequential"),
+  intentMode: z.enum(["keyword", "buyer", "seller"]).default("keyword"),
+  priority: z.number().int().min(0).max(100).default(0),
   templates: z.array(z.string().trim().min(1).max(2000)).max(30).default([]),
   startMinute: z.number().int().min(0).max(1439).default(0), endMinute: minute.default(1440),
   days: z.array(z.number().int().min(0).max(6)).min(1).max(7).default([0, 1, 2, 3, 4, 5, 6]),
@@ -17,6 +19,7 @@ export const autoCommentRuleSchema = z.object({
   browserFbUserId: z.string().regex(/^\d{5,20}$|^$/).default(""),
   browserConsent: z.boolean().default(false), requireAi: z.boolean().default(false),
   messageMode: z.enum(["template", "ai_draft"]).default("template"),
+  businessFacts: z.string().max(4000).default(""), draftInstruction: z.string().max(1000).default(""),
   pageToken: z.string().max(4096).optional(), managerToken: z.string().max(4096).optional(), clearCredentials: z.boolean().optional(),
 }).refine(data => data.startMinute !== data.endMinute, "ช่วงเวลาเริ่มและสิ้นสุดต้องต่างกัน")
   .refine(data => data.deliveryMode !== "extension" || !data.enabled || Boolean(data.browserDeviceId && data.browserFbUserId && data.browserConsent && data.sourceIds.length), "ต้องเลือกอุปกรณ์ บัญชี และยืนยันสิทธิ์ใช้งานกลุ่มก่อนเปิดกฎ")

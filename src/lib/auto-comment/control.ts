@@ -27,7 +27,7 @@ export async function readCommentControl(db: Pick<Prisma.TransactionClient, "set
   return parseControl((await db.setting.findUnique({ where: { key: CONTROL_KEY } }))?.value);
 }
 export async function lockCommentControl(tx: Prisma.TransactionClient) {
-  await tx.$executeRaw`INSERT INTO "Setting" (key, value, "updatedAt") VALUES (${CONTROL_KEY}, ${JSON.stringify(defaultControl)}, now()) ON CONFLICT (key) DO NOTHING`;
+  await tx.$executeRaw`INSERT INTO "Setting" (key, value, "updatedAt") VALUES (${CONTROL_KEY}, ${JSON.stringify(defaultControl)}, (clock_timestamp() AT TIME ZONE 'UTC')) ON CONFLICT (key) DO NOTHING`;
   const rows = await tx.$queryRaw<{ value: string }[]>`SELECT value FROM "Setting" WHERE key=${CONTROL_KEY} FOR UPDATE`;
   return parseControl(rows[0]?.value);
 }
@@ -40,7 +40,7 @@ export async function updateCommentControl(input: {
 }) {
   return prisma.$transaction(async tx => {
     const old = await lockCommentControl(tx);
-    if (input.dryRun === false && old.dryRun && input.liveAcknowledged !== true) throw new Error("ยืนยันการส่งจริงผ่าน API ก่อนปิด Dry Run");
+    if (input.dryRun === false && old.dryRun && input.liveAcknowledged !== true) throw new Error("ยืนยันการส่งจริงตามกฎ ก่อนปิด Dry Run");
     if (input.action === "start" && old.emergency) throw new Error("ต้องปลด Emergency Stop ขณะระบบหยุดก่อน");
     if (input.action === "reset" && old.state !== "stopped") throw new Error("ปลด Emergency Stop ได้เฉพาะขณะหยุด");
     const invalidate = input.action === "stop" || input.action === "emergency" || (input.dryRun !== undefined && input.dryRun !== old.dryRun);
@@ -59,7 +59,7 @@ export async function updateCommentControl(input: {
     };
     await storeCommentControl(tx, next);
     if (invalidate) await tx.autoCommentJob.updateMany({ where: { status: { in: ["pending", "pending_ai", "browser_ready", "claimed"] } }, data: { status: "cancelled", claimToken: null, claimUntil: null, lastError: "เจ้าของหยุดระบบหรือเปลี่ยนโหมด" } });
-    await tx.autoCommentLog.create({ data: { event: input.action || "settings", message: next.dryRun ? "Dry Run" : "ส่งจริงผ่าน API" } });
+    await tx.autoCommentLog.create({ data: { event: input.action || "settings", message: next.dryRun ? "Dry Run" : "ส่งจริงตามกฎ" } });
     return next;
   }, { timeout: 20_000, maxWait: 20_000 });
 }

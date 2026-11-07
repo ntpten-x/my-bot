@@ -166,7 +166,8 @@ export async function ingestPosts(input: {
   for (const item of fresh) {
     const ids = resolveCategoryIds(rows, item.lead.categorySlug, item.lead.subcategorySlug);
     try {
-      const post = await prisma.post.create({
+      const post = await prisma.$transaction(async tx => {
+        const created = await tx.post.create({
         data: {
           sourceId: source.id,
           externalUrl: item.url,
@@ -187,6 +188,9 @@ export async function ingestPosts(input: {
           suggestedReply: item.lead.suggestedReply,
           aiProvider: "rules",
         },
+      });
+        await tx.aiJob.create({ data: { postId: created.id } });
+        return created;
       });
       createdIds.push(post.id);
     } catch (error) {

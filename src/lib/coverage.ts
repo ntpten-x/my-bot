@@ -25,7 +25,7 @@ export type Coverage = {
 };
 
 const LABEL: Record<CoverageLevel, string> = {
-  ok: "ครบ",
+  ok: "ไม่พบสัญญาณตกหล่น",
   warn: "อาจตกหล่น",
   bad: "น่าจะตกหล่น",
   unknown: "ยังไม่มีข้อมูล",

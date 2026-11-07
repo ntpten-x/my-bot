@@ -18,7 +18,7 @@ export type AiCacheStore = {
 export function aiCacheKey(text: string, catalog: CatNode[], contentHash?: string): string {
   // Include actual text even with a supplied hash (legacy rows may have stale hashes;
   // OCR can also change independently of the stored post hash).
-  const basis = `${catalogVersion(catalog)}|${contentHash ?? ""}|${normalizeText(text)}`;
+  const basis = `classify-v3|${catalogVersion(catalog)}|${contentHash ?? ""}|${normalizeText(text)}`;
   return createHash("sha256").update(basis).digest("hex");
 }
 

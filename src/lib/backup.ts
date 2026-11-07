@@ -1,5 +1,11 @@
-import { mkdir, readdir, stat, unlink, writeFile, rename } from "node:fs/promises";
-import { gzipSync } from "node:zlib";
+import { mkdir, readdir, stat, unlink, appendFile, rename } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
+import { pipeline } from "node:stream/promises";
+import { once } from "node:events";
+import { backupCipher } from "./backup-crypto";
+import { uploadBackup } from "./backup-upload";
+import { writeBackupJson } from "./backup-stream";
+import { createGzip, gzipSync } from "node:zlib";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { snapshotDatabase } from "./backup-format";
@@ -22,6 +28,7 @@ export async function exportDatabase() {
 }
 
 export async function backupDatabase(name?: string) {
+  if (process.env.RENDER && !process.env.BACKUP_UPLOAD_URL) throw new Error("Cloud backup requires an off-host destination; configure BACKUP_UPLOAD_URL");
   const day = bangkokClock().day;
   const directory = path.resolve("data", "backups");
   await mkdir(directory, { recursive: true });
@@ -29,8 +36,22 @@ export async function backupDatabase(name?: string) {
   if (path.basename(file) !== file) throw new Error("Invalid backup filename");
   const target = path.join(directory, file);
   const temporary = `${target}.${randomUUID()}.tmp`;
-  await writeFile(temporary, await exportDatabase(), { mode: 0o600, flag: "wx" });
-  await rename(temporary, target);
+  const secret = process.env.BACKUP_ENCRYPTION_KEY || process.env.AI_KEY_SECRET || "";
+  if (process.env.BACKUP_UPLOAD_URL && secret.length < 16) throw new Error("Remote backups require encryption");
+  const output = createWriteStream(temporary, { mode: 0o600, flags: "wx" });
+  const gzip = createGzip();
+  const encryption = secret.length >= 16 ? backupCipher(secret) : null;
+  if (encryption) output.write(encryption.header);
+  const writing = encryption ? pipeline(gzip, encryption.cipher, output) : pipeline(gzip, output);
+  // Attach immediately so early stream errors cannot become unhandled rejections.
+  void writing.catch(() => undefined);
+  try {
+    await writeBackupJson(prisma, async chunk => { if (!gzip.write(chunk)) await once(gzip, "drain"); });
+    gzip.end(); await writing;
+    if (encryption) await appendFile(temporary, encryption.cipher.getAuthTag());
+    await rename(temporary, target);
+  } catch (error) { gzip.destroy(); output.destroy(); await writing.catch(() => undefined); await unlink(temporary).catch(() => undefined); throw error; }
+  const remote = await uploadBackup(target, file);
   const entries = await readdir(directory);
   const files = await Promise.all(
     entries.map(async (entry) => ({ name: entry, mtimeMs: (await stat(path.join(directory, entry))).mtimeMs })),
@@ -41,6 +62,8 @@ export async function backupDatabase(name?: string) {
   await upsertSettings({
     backup_last_at: new Date().toISOString(),
     backup_last_file: `data/backups/${file}`,
+    backup_storage: remote ? "remote" : "local",
+    ...(remote ? { backup_remote_key: remote.objectKey, backup_remote_sha256: remote.sha256 } : {}),
   });
   return `data/backups/${file}`;
 }
@@ -52,7 +75,8 @@ export async function maybeBackupDatabase() {
   try {
     await backupDatabase();
     await upsertSettings({ backup_last_day: clock.day });
-  } catch (error) {
-    console.error("[backup]", error instanceof Error ? error.message : error);
+  } catch {
+    console.error("[backup] Backup failed; check storage configuration and connectivity");
+    await upsertSettings({ backup_last_error_at: new Date().toISOString() }).catch(() => undefined);
   }
 }

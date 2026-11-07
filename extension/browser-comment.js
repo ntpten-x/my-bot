@@ -76,7 +76,16 @@
       });
       if (buttons.length !== 1) return { ok: false, outcome: "failed", reason: "submit_not_unique_or_ready" };
       memory.__mybotCommentSession = { id: payload.id, box, button: buttons[0], article, before: memory.__mybotCommentSession.before, message: payload.message, at: now(), clicked: false };
-      return { ok: true };
+      const profiles = Array.from(doc.querySelectorAll('[role="banner"] a[href][aria-label],header a[href][aria-label]')).filter(a => visible(a) && /^(your profile|โปรไฟล์ของคุณ)$/i.test(a.getAttribute("aria-label") || "")).map(a => new URL(a.getAttribute("href"), loc.href).pathname.replace(/\/$/, ""));
+      return { ok: true, baseline: memory.__mybotCommentSession.before.length <= 500 ? memory.__mybotCommentSession.before : null, profiles };
+    }
+    if (kind === "reconcile") {
+      // Read only: no composer, focus, input or submit operations on this path.
+      if (!Array.isArray(payload.baseline) || payload.baseline.length > 500 || !payload.sentAt || now() - payload.sentAt > 10 * 60_000) return { ok: false, outcome: "uncertain" };
+      const surfaces = Array.from(doc.querySelectorAll('[role="main"],main,[role="dialog"]')).filter(el => Array.from(el.querySelectorAll("a[href]")).some(a => postId(new URL(a.getAttribute("href"), loc.href).href) === postId(payload.externalUrl)));
+      const article = surfaces[0]; if (!article) return { ok: false, outcome: "uncertain" };
+      memory.__mybotCommentSession = { id: payload.id, message: payload.message, article, before: payload.baseline, profiles: payload.profiles || [], clicked: true };
+      kind = "observe";
     }
     const session = memory.__mybotCommentSession;
     if (!session || session.id !== payload.id || session.message !== payload.message || !session.article.isConnected) return { ok: false, outcome: "uncertain" };
@@ -97,7 +106,7 @@
         const comment = anchor?.closest('[role="article"],[data-commentid]');
         if (comment && comment !== session.article && normalize(comment.textContent).includes(normalize(payload.message))
           && Array.from(comment.querySelectorAll("a[href]")).some(author => {
-            try { const u = new URL(author.getAttribute("href"), loc.href); return ["www.facebook.com", "facebook.com", "web.facebook.com", "m.facebook.com"].includes(u.hostname) && (u.pathname.replace(/\/$/, "") === "/" + payload.fbUserId || (u.pathname === "/profile.php" && u.searchParams.get("id") === payload.fbUserId)); } catch { return false; }
+            try { const u = new URL(author.getAttribute("href"), loc.href); return ["www.facebook.com", "facebook.com", "web.facebook.com", "m.facebook.com"].includes(u.hostname) && (u.pathname.replace(/\/$/, "") === "/" + payload.fbUserId || (u.pathname === "/profile.php" && u.searchParams.get("id") === payload.fbUserId) || (session.profiles || payload.profiles || []).includes(u.pathname.replace(/\/$/, ""))); } catch { return false; }
           })) return { ok: true, outcome: "observed", commentUrl: url };
       }
       return { ok: false, outcome: "uncertain" };

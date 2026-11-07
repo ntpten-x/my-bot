@@ -34,7 +34,7 @@ function normalizeBase(value) {
 
 function needsOptionalPermission(base) {
   const url = new URL(base);
-  return url.protocol === "https:" && !/\.onrender\.com$/i.test(url.hostname);
+  return url.protocol === "https:" && url.hostname !== "my-bot-e6bt.onrender.com";
 }
 
 function showPairState(cfg) {
@@ -56,7 +56,12 @@ chrome.storage.local.get({ apiBase: DEFAULT_BASE, token: "", paused: false, quie
 
 async function ensurePermission(base) {
   if (!needsOptionalPermission(base)) return true;
-  return chrome.permissions.request({ origins: [base + "/*"] });
+  const allowed = await chrome.permissions.request({ origins: [base + "/*"] });
+  if (allowed) {
+    await chrome.scripting.unregisterContentScripts({ ids: ["mybot-owner-server"] }).catch(() => undefined);
+    await chrome.scripting.registerContentScripts([{ id: "mybot-owner-server", matches: [base + "/*"], js: ["bridge.js"], runAt: "document_start" }]);
+  }
+  return allowed;
 }
 
 document.getElementById("pair").addEventListener("click", async () => {
@@ -105,3 +110,15 @@ document.getElementById("save").addEventListener("click", async () => {
   if (!status.textContent.startsWith("โทเคนแบบเดิม")) status.textContent = "บันทึกแล้ว";
   chrome.runtime.sendMessage({ type: "heartbeat-now" }, () => void chrome.runtime.lastError);
 });
+
+async function showOutbox() {
+  const { outbox = [], outboxRejectedItems = 0 } = await chrome.storage.local.get({ outbox: [], outboxRejectedItems: 0 });
+  document.getElementById("outboxStatus").textContent = `คิวข้อมูล ${outbox.length} ชุด · ต้องตรวจ ${outbox.filter(item => item.problem).length} ชุด · ไม่รับเพิ่มเพราะเต็ม ${outboxRejectedItems} รายการ`;
+}
+document.getElementById("clearOutboxProblems").addEventListener("click", async () => {
+  if (!confirm("ยืนยันว่าตรวจรายการหมดอายุ/ถูกปฏิเสธแล้ว และยอมรับการลบข้อมูลเฉพาะรายการเหล่านี้?")) return;
+  const { outbox = [] } = await chrome.storage.local.get({ outbox: [] });
+  await chrome.storage.local.set({ outbox: outbox.filter(item => !item.problem), outboxBlocked: false });
+  await showOutbox();
+});
+void showOutbox();

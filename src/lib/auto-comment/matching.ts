@@ -1,11 +1,13 @@
 import { createHash, randomInt } from "node:crypto";
+import { commentIntent } from "./intent";
 import { normalizeText } from "../pipeline/normalize";
 
 export type MatchRule = {
+  intentMode?: string;
   enabled: boolean; pausedReason: string; sourceIdsJson: string; keywords: string; excludeKeywords: string;
   keywordMode: string; startMinute: number; endMinute: number; daysJson: string; maxAgeHours: number;
 };
-export type MatchPost = { text: string; sourceId: string; createdAt: Date; postedAt: Date | null; isAd: boolean; forbiddenHit: boolean; duplicateOfId: string | null; dismissed: boolean };
+export type MatchPost = { intent?: string; aiProvider?: string | null; text: string; sourceId: string; createdAt: Date; postedAt: Date | null; isAd: boolean; forbiddenHit: boolean; duplicateOfId: string | null; dismissed: boolean };
 export function jsonList<T>(value: string, fallback: T[] = []): T[] {
   try { const out = JSON.parse(value); return Array.isArray(out) ? out : fallback; } catch { return fallback; }
 }
@@ -31,6 +33,8 @@ export function explainCommentRule(rule: MatchRule, post: MatchPost, now = new D
   const required = words(rule.keywords);
   const matchedKeywords = required.filter(word => text.includes(word));
   const excludedKeywords = words(rule.excludeKeywords).filter(word => text.includes(word));
+  const intent = commentIntent(post);
+  const smart = Boolean(rule.intentMode && rule.intentMode !== "keyword");
   const checks = [
     { code: "enabled", label: "กฎเปิดใช้งาน", passed: rule.enabled },
     { code: "not_paused", label: "กฎไม่ถูกพัก", passed: !rule.pausedReason },
@@ -38,13 +42,17 @@ export function explainCommentRule(rule: MatchRule, post: MatchPost, now = new D
     { code: "not_forbidden", label: "ไม่พบคำต้องห้าม", passed: !post.forbiddenHit },
     { code: "not_duplicate", label: "ไม่ใช่โพสต์ซ้ำ", passed: !post.duplicateOfId },
     { code: "not_dismissed", label: "ไม่ได้ข้ามโพสต์", passed: !post.dismissed },
+    ...(smart ? [
+      { code: "open_intent", label: "ยังไม่ปิดการหา/ขาย และไม่มีข้อความปฏิเสธ", passed: !intent.closed },
+      { code: "intent", label: rule.intentMode === "buyer" ? "คนกำลังหาซื้อหรือขอคำแนะนำ" : "คนเสนอขายสินค้า/บริการ", passed: intent.value === rule.intentMode },
+    ] : []),
     { code: "source", label: "แหล่งข้อมูลอยู่ใน Allowlist", passed: jsonList<string>(rule.sourceIdsJson).includes(post.sourceId) },
     { code: "window", label: "อยู่ในวันและเวลาทำงาน (Asia/Bangkok)", passed: inCommentWindow(rule, now) },
     { code: "age", label: "อายุโพสต์อยู่ในช่วงที่รับได้", passed: Number.isFinite(age) && age >= -3600_000 && age <= rule.maxAgeHours * 3600_000 },
     { code: "excluded", label: "ไม่พบคำยกเว้น", passed: !excludedKeywords.length },
     { code: "keywords", label: rule.keywordMode === "all" ? "พบคำสำคัญครบทุกคำ" : "พบคำสำคัญอย่างน้อยหนึ่งคำ หรือไม่ได้กำหนดคำ", passed: !required.length || (rule.keywordMode === "all" ? matchedKeywords.length === required.length : matchedKeywords.length > 0) },
   ];
-  return { matched: checks.every(check => check.passed), checks, matchedKeywords, excludedKeywords };
+  return { intent, matched: checks.every(check => check.passed), checks, matchedKeywords, excludedKeywords };
 }
 export function templateIndex(mode: string, count: number, next: number, random = randomInt) {
   if (!count) throw new Error("ไม่มีข้อความคอมเมนต์");

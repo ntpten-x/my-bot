@@ -7,7 +7,7 @@ export const BACKUP_TABLES = [
   "Summary", "Keyword", "Note", "Notification", "Setting", "AiCache", "FetchTask", "ParseSample", "FetchLog",
   "ReplyTemplate", "AutomationRule", "RuleHit", "ReplyQueueItem", "FbAccount", "ExtensionHeartbeat", "PostTombstone",
   "LabelCorrection", "AiProvider", "ExtensionPairingCode", "ExtensionDevice", "LoginGuard", "ScrapeRun", "Lease", "SentKey",
-  "AutoCommentRule", "AutoCommentTemplate", "AutoCommentJob", "AutoCommentLog",
+  "AutoCommentRule", "AutoCommentTemplate", "AutoCommentJob", "AutoCommentLog", "AutoCommentEvaluation", "IngestReceipt",
 ] as const;
 type Row = Record<string, unknown>;
 type Tables = Record<string, Row[]>;
@@ -35,10 +35,11 @@ export function validateBackup(input: unknown, allowLegacy = false): Tables {
   for (const name of Object.keys(data.tables)) if (!models.has(name)) throw new Error("Backup contains an unknown table");
   for (const name of BACKUP_TABLES) {
     const rows = data.tables[name];
+    const legacyEvaluation = allowLegacy && ["AutoCommentEvaluation", "IngestReceipt"].includes(name) && rows === undefined && data.manifest?.[name] === undefined;
     const legacyAutoTable = legacyAutoTables && name.startsWith("AutoComment") && rows === undefined;
-    if (!Array.isArray(rows) && !(data.version === 1 && allowLegacy && rows === undefined) && !legacyAutoTable) throw new Error(`Missing backup table: ${name}`);
+    if (!Array.isArray(rows) && !(data.version === 1 && allowLegacy && rows === undefined) && !legacyAutoTable && !legacyEvaluation) throw new Error(`Missing backup table: ${name}`);
     tables[name] = rows ?? [];
-    if (data.version === 2 && !legacyAutoTable) {
+    if (data.version === 2 && !legacyAutoTable && !legacyEvaluation) {
       const entry = data.manifest?.[name];
       if (!entry || entry.count !== rows.length || entry.sha256 !== checksum(rows)) throw new Error(`Backup integrity check failed: ${name}`);
     }
@@ -90,7 +91,7 @@ export async function restoreDatabase(db: PrismaClient, input: unknown, allowLeg
     // Block a standby worker from acquiring leadership between the check and commit.
     await tx.$executeRawUnsafe('LOCK TABLE "Lease" IN EXCLUSIVE MODE');
     // Do not replace a live worker's data. The caller must stop every host sharing this DB.
-    const active = await tx.$queryRaw<unknown[]>`SELECT 1 FROM "Lease" WHERE "expiresAt" > now() LIMIT 1`;
+    const active = await tx.$queryRaw<unknown[]>`SELECT 1 FROM "Lease" WHERE "expiresAt" > (clock_timestamp() AT TIME ZONE 'UTC') LIMIT 1`;
     if (active.length) throw new Error("Stop all MY-BOT workers and wait for the lease to expire before restoring");
     for (const name of [...BACKUP_TABLES].reverse()) await delegate(tx, name).deleteMany();
     const counts: Record<string, number> = {};

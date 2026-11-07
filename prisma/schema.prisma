@@ -153,6 +153,7 @@ model Post {
   feedback         Feedback[]
   labelFixes       LabelCorrection[]
   autoCommentJobs  AutoCommentJob[]
+  commentEvaluations AutoCommentEvaluation[]
 
   @@unique([sourceId, externalUrl])
   @@index([createdAt])
@@ -579,6 +580,8 @@ model AutoCommentRule {
   keywords         String   @default("")
   excludeKeywords  String   @default("")
   keywordMode      String   @default("any")
+  intentMode       String   @default("keyword")
+  priority         Int      @default(0)
   selectionMode    String   @default("sequential")
   nextTemplate     Int      @default(0)
   startMinute      Int      @default(0)
@@ -593,6 +596,8 @@ model AutoCommentRule {
   browserConsent   Boolean  @default(false)
   requireAi        Boolean  @default(false)
   messageMode      String   @default("template")
+  businessFacts    String   @default("")
+  draftInstruction String   @default("")
   pageTokenEnc     String?
   managerTokenEnc  String?
   pausedReason     String   @default("")
@@ -631,6 +636,8 @@ model AutoCommentJob {
   deliveryMode    String   @default("official")
   browserDeviceId String   @default("")
   browserFbUserId String   @default("")
+  draftInputKey   String   @default("")
+  draftProvider   String   @default("")
   remotePostId    String   @default("")
   ruleRevision    Int
   textRevision    Int
@@ -674,4 +681,34 @@ model AutoCommentLog {
   @@index([pageId, event, createdAt])
   @@index([sourceId, event, createdAt])
   @@index([jobId])
+}
+
+/// Durable evaluation checkpoint, repaired from Post/Source changes without relying on a cursor.
+model AutoCommentEvaluation {
+  id               String   @id @default(cuid())
+  postId           String
+  post             Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  generation       String
+  postUpdatedAt    DateTime
+  sourceUpdatedAt  DateTime
+  inputFingerprint String   @default("")
+  rulesFingerprint String
+  state            String
+  reasonsJson      String   @default("[]")
+  nextEvaluateAt   DateTime?
+  evaluatedAt      DateTime @default(now())
+
+  @@unique([generation, postId])
+  @@index([state, nextEvaluateAt])
+}
+
+model IngestReceipt {
+  id String @id @default(cuid())
+  deviceKey String
+  batchId String
+  itemId String
+  outcome String
+  createdAt DateTime @default(now())
+  @@unique([deviceKey, batchId, itemId])
+  @@index([createdAt])
 }

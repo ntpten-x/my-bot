@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { prisma } from "@/lib/prisma";
+import { normalizeUrl } from "@/lib/pipeline/normalize";
 import { z } from "zod";
 import { requireExtensionToken } from "@/lib/auth";
 import { corsPreflight, json, withCors } from "@/lib/http";
@@ -7,15 +10,17 @@ import { countCapturedPosts, noteBadExtensionToken } from "@/lib/extension-heart
 export const dynamic = "force-dynamic";
 
 const bodySchema = z.object({
-  sourceUrl: z.string().url(),
+  batchId: z.string().uuid().optional(),
+  sourceUrl: z.string().url().max(2000),
   posts: z
     .array(
       z.object({
-        url: z.string().url(),
-        authorName: z.string().optional(),
-        text: z.string().min(1),
+        itemId: z.string().uuid().optional(),
+        url: z.string().url().max(2000),
+        authorName: z.string().max(200).optional(),
+        text: z.string().min(1).max(20000),
         postedAt: z.string().nullable().optional(),
-        images: z.array(z.string()).optional(),
+        images: z.array(z.string().url().max(2000)).max(6).optional(),
       }),
     )
     .max(40),
@@ -31,13 +36,23 @@ export async function POST(request: Request) {
     await noteBadExtensionToken();
     return withCors(json({ error: "โทเคนไม่ถูกต้อง" }, 401));
   }
+  if (Number(request.headers.get("content-length")) > 1_500_000) return withCors(json({ error: "ข้อมูลชุดใหญ่เกินกำหนด" }, 413));
   const parsed = bodySchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return withCors(json({ error: "รูปแบบข้อมูลไม่ถูกต้อง" }, 400));
   try {
-    const { fbUserId, ...data } = parsed.data;
+    const { fbUserId, batchId, ...data } = parsed.data;
+    const itemIds = data.posts.map(post => post.itemId);
+    if (batchId && (itemIds.some(id => !id) || new Set(itemIds).size !== itemIds.length)) return withCors(json({ error: "รายการต้องมี itemId ไม่ซ้ำ" }, 400));
     const result = await ingestPosts({ ...data, actor: "extension" });
     await countCapturedPosts(fbUserId, result.inserted).catch(() => undefined);
-    return withCors(json(result, result.ok ? 200 : 404));
+    if (!batchId || !result.ok) return withCors(json(result, result.ok ? 200 : 404));
+    const deviceKey = createHash("sha256").update(request.headers.get("authorization") || "").digest("hex");
+    const stored = await prisma.post.findMany({ where: { externalUrl: { in: data.posts.map(post => normalizeUrl(post.url)) } }, select: { externalUrl: true } });
+    const urls = new Set(stored.map(post => post.externalUrl));
+    const receipts = data.posts.map(post => ({ itemId: post.itemId!, outcome: urls.has(normalizeUrl(post.url)) ? "accepted" : "skipped" }));
+    await prisma.ingestReceipt.createMany({ data: receipts.map(receipt => ({ ...receipt, deviceKey, batchId })), skipDuplicates: true });
+    const persisted = await prisma.ingestReceipt.findMany({ where: { deviceKey, batchId }, select: { itemId: true, outcome: true } });
+    return withCors(json({ ...result, batchId, receipts: persisted }));
   } catch (error) {
     const code = error && typeof error === "object" && "code" in error ? error.code : "";
     const schemaMissing = code === "P2021" || code === "P2022";

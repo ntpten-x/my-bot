@@ -1,3 +1,4 @@
+import { fetchImage } from "./image-download";
 import { createHash } from "crypto";
 import { prisma } from "./prisma";
 import type { AppSettings } from "./settings";
@@ -8,7 +9,6 @@ export function ocrRunsInThisProcess() {
   return process.env.MYBOT_PROCESS === "worker";
 }
 
-const MAX_BYTES = 2_000_000;
 const MAX_IMAGES = 3;
 
 export function imageHash(bytes: Buffer) {
@@ -16,14 +16,7 @@ export function imageHash(bytes: Buffer) {
 }
 
 export async function downloadImage(url: string): Promise<Buffer | null> {
-  if (!/^https?:\/\//i.test(url)) return null;
-  const response = await fetch(url, { signal: AbortSignal.timeout(8000) });
-  if (!response.ok) return null;
-  const length = Number(response.headers.get("content-length") || "0");
-  if (length > MAX_BYTES) return null;
-  const bytes = Buffer.from(await response.arrayBuffer());
-  if (!bytes.length || bytes.length > MAX_BYTES) return null;
-  return bytes;
+  return fetchImage(url).catch(() => null);
 }
 
 async function readWithVision(bytes: Buffer, settings: AppSettings): Promise<string | null> {

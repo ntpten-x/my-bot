@@ -34,11 +34,12 @@
         await deps.sleep(1000);
       }
       if (!prepared?.ok) { await report(prepared?.outcome === "blocked" ? "blocked" : "failed"); return; }
+      job.baseline = prepared.baseline; job.profiles = prepared.profiles || [];
       const latest = await deps.loadConfig();
       const enabled = await chrome.storage.local.get({ browserCommentsEnabled: false });
       if (latest.paused || !enabled.browserCommentsEnabled || deps.base(latest) !== deps.base(cfg) || latest.token !== cfg.token) { await report("failed"); return; }
       // Mark locally before asking. Losing the authorization response is an ambiguous dispatch too.
-      await chrome.storage.local.set({ commentJournal: { id: job.id, claimToken: job.claimToken, apiBase: deps.base(cfg), state: "sending", at: Date.now() } });
+      await chrome.storage.local.set({ commentJournal: { id: job.id, claimToken: job.claimToken, apiBase: deps.base(cfg), state: "sending", at: Date.now(), job: { ...job, sentAt: Date.now() } } });
       authorized = true;
       const started = Date.now();
       const grant = (await request({ action: "authorize", id: job.id, claimToken: job.claimToken, fbUserId })).grant;
@@ -48,9 +49,12 @@
       const sent = await execute("send", { permitUntil: started + Math.min(3000, grant.ttlMs) });
       if (!sent.ok) { await report(sent.outcome === "blocked" ? "blocked" : "uncertain"); return; }
       let observed;
-      for (let attempt = 0; attempt < 10; attempt++) {
+      for (let attempt = 0; attempt < 30; attempt++) {
         await deps.sleep(1000); observed = await execute("observe");
         if (observed.ok || observed.outcome === "blocked") break;
+      }
+      if (!observed?.ok && observed?.outcome !== "blocked") {
+        observed = await execute("reconcile", { baseline: job.baseline, profiles: job.profiles, sentAt: started });
       }
       await report(observed?.outcome || "uncertain", observed?.commentUrl);
     } catch {
@@ -74,7 +78,16 @@
     if (!journal) return;
     const cfg = await deps.loadConfig(); if (deps.base(cfg) !== journal.apiBase) return;
     try {
-      const response = await deps.postJson(cfg, "/api/v1/extension/comments", { action: "report", id: journal.id, claimToken: journal.claimToken, outcome: journal.state === "sending" ? "uncertain" : "failed" }, { retries: 0, timeoutMs: 15000 });
+      let observed = null;
+      if (journal.state === "sending" && journal.job && Date.now() - journal.at < 10 * 60_000) {
+        const tabs = await chrome.tabs.query({ url: ["https://www.facebook.com/groups/*", "https://web.facebook.com/groups/*"] });
+        const tab = tabs.find(tab => tab.url?.split("?")[0].replace(/\/$/, "") === journal.job.externalUrl.replace(/\/$/, ""));
+        if (tab?.id !== undefined) {
+          const results = await chrome.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] }, func: root.MyBotBrowserComment.action, args: ["reconcile", journal.job] });
+          observed = results[0]?.result;
+        }
+      }
+      const response = await deps.postJson(cfg, "/api/v1/extension/comments", { action: "report", id: journal.id, claimToken: journal.claimToken, outcome: observed?.ok ? "observed" : journal.state === "sending" ? "uncertain" : "failed", ...(observed?.commentUrl ? { commentUrl: observed.commentUrl } : {}) }, { retries: 0, timeoutMs: 15000 });
       if (response.ok) await chrome.storage.local.remove("commentJournal");
     } catch { /* no retry of sending */ }
   }

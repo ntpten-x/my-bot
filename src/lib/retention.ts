@@ -87,6 +87,12 @@ export async function purgeExpired(now = new Date(), options: { batchSize?: numb
     prisma.notification.deleteMany({ where: { createdAt: { lt: historyCut } } }),
     prisma.postTombstone.deleteMany({ where: { createdAt: { lt: new Date(now.getTime() - policy.tombstoneDays * DAY) } } }),
   ]);
+  // Preserve durable live dedupe keys/jobs, trim only bulky terminal payloads and old logs.
+  const auditCut = new Date(now.getTime() - Math.max(90, policy.postDays) * DAY);
+  await prisma.autoCommentLog.deleteMany({ where: { createdAt: { lt: auditCut } } });
+  await prisma.autoCommentJob.updateMany({ where: { createdAt: { lt: auditCut }, status: { in: ["browser_observed", "sent", "dry_run", "cancelled", "failed", "unsupported"] } }, data: { message: "", lastError: "" } });
+  await prisma.ingestReceipt.deleteMany({ where: { createdAt: { lt: new Date(now.getTime() - 14 * DAY) } } });
+  await prisma.aiCache.deleteMany({ where: { createdAt: { lt: new Date(now.getTime() - 30 * DAY) } } });
   const sentBefore = await prisma.sentKey.count();
   await pruneSentKeys(Math.max(30, policy.postDays));
   const sentKeys = sentBefore - (await prisma.sentKey.count());
@@ -98,15 +104,17 @@ export async function maybeRunRetention(now = new Date()) {
   const clock = bangkokClock(now);
   const last = await prisma.setting.findUnique({ where: { key: "retention_last_day" } });
   if (!shouldSendSummary(clock.time, "03:30", last?.value ?? null, clock.day)) return null;
-  await upsertSettings({ retention_last_day: clock.day });
+  const retry = await prisma.setting.findUnique({ where: { key: "retention_retry_after" } });
+  if (retry && Date.parse(retry.value) > now.getTime()) return null;
   try {
     const result = await purgeExpired(now);
-    await upsertSettings({ retention_last_result: JSON.stringify(result) });
+    await upsertSettings({ retention_last_result: JSON.stringify(result), retention_retry_after: "", ...(result.more ? {} : { retention_last_day: clock.day }) });
     await workerLog({
       message: `ลบข้อมูลเก่าอัตโนมัติ: โพสต์ ${result.posts} (เกิน ${result.policy.postDays} วัน, ลีดเกิน ${result.policy.leadDays} วัน) บันทึกดึง ${result.fetchLogs} รอบอ่าน ${result.scrapeRuns} แจ้งเตือน ${result.notifications}${result.more ? " — ยังเหลือ จะลบต่อพรุ่งนี้" : ""}`,
     }).catch(() => undefined);
     return result;
   } catch (error) {
+    await upsertSettings({ retention_retry_after: new Date(now.getTime() + 5 * 60_000).toISOString() }).catch(() => undefined);
     await workerLog({ level: "error", message: "ลบข้อมูลเก่าไม่สำเร็จ", error: String(error).slice(0, 300) }).catch(() => undefined);
     return null;
   }

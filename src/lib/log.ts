@@ -39,7 +39,13 @@ export async function persistWorkerLine(line: string, write: (file: string, line
   }
 }
 
+export function redactLog(value: string) {
+  let text = value.replace(/postgres(?:ql)?:\/\/[^\s"']+/gi, "postgresql://***").replace(/Bearer\s+[\w.\-]+/gi, "Bearer ***").replace(/([?&](?:key|token|api_key)=)[^&\s]+/gi, "$1***");
+  for (const [name, secret] of Object.entries(process.env)) if (/SECRET|TOKEN|PASSWORD|API_KEY|DATABASE_URL|DIRECT_URL/.test(name) && secret && secret.length >= 8) text = text.split(secret).join("***");
+  return text;
+}
 export async function workerLog(entry: WorkerLog) {
+  entry = { ...entry, message: redactLog(entry.message), ...(entry.error ? { error: redactLog(entry.error) } : {}) };
   try {
     consoleLine(entry);
   } catch {

@@ -164,42 +164,62 @@ async function errorSummary() {
 // ---- Outbox: posts that could not reach MY-BOT wait here (chrome.storage) and are re-sent later ----
 const OUTBOX_MAX = 200;
 const OUTBOX_MAX_AGE_MS = 72 * 3600000;
+let outboxLock = Promise.resolve();
+function withOutboxLock(fn) {
+  const task = outboxLock.then(fn); outboxLock = task.catch(() => undefined); return task;
+}
+function outboxId() { return typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => { const n = Math.floor(Math.random() * 16); return (c === "x" ? n : (n & 3) | 8).toString(16); }); }
 async function loadOutbox() {
   const stored = await chrome.storage.local.get({ outbox: [] });
-  const now = Date.now();
-  return (Array.isArray(stored.outbox) ? stored.outbox : []).filter((item) => item && now - (item.at || 0) < OUTBOX_MAX_AGE_MS);
+  return (Array.isArray(stored.outbox) ? stored.outbox : []).filter(Boolean);
 }
-
 async function queueOutbox(item) {
-  const outbox = await loadOutbox();
-  outbox.push({ ...item, at: Date.now() });
-  await chrome.storage.local.set({ outbox: outbox.slice(-OUTBOX_MAX) });
+  return withOutboxLock(async () => {
+    const outbox = await loadOutbox();
+    if (outbox.length >= OUTBOX_MAX) {
+      const stats = await chrome.storage.local.get({ outboxRejectedItems: 0 });
+      await chrome.storage.local.set({ outboxBlocked: true, outboxRejectedItems: stats.outboxRejectedItems + item.posts.length });
+      await rememberError("คิวข้อมูลเต็ม หยุดอ่านเพิ่ม กรุณาตรวจรายการค้างในส่วนขยาย");
+      throw new Error("outbox full");
+    }
+    const queued = { ...item, batchId: outboxId(), posts: item.posts.map(post => ({ ...post, itemId: outboxId() })), at: Date.now() };
+    outbox.push(queued); await chrome.storage.local.set({ outbox, outboxBlocked: false }); return queued;
+  });
 }
-
 let flushing = false;
 async function flushOutbox(cfg) {
   if (flushing || cfg.paused || !cfg.token) return;
   flushing = true;
+  const results = {};
   try {
-    let outbox = await loadOutbox();
-    for (let sent = 0; outbox.length && sent < 10; sent += 1) {
-      const item = outbox[0];
-      if (item.apiBase && item.apiBase !== base(cfg)) break;
-      const response = await postJson(cfg, "/api/v1/ingest", { sourceUrl: item.sourceUrl, posts: item.posts, fbUserId: item.fbUserId || undefined }, { timeoutMs: 45000, retries: 0 }).catch(() => null);
-      if (!response || RETRY_STATUS.has(response.status) || response.status >= 500) break;
-      if ([401, 403].includes(response.status)) {
-        await rememberError("การเชื่อมต่อหมดสิทธิ์ ข้อมูลยังอยู่ในคิว กรุณาจับคู่ Extension ใหม่");
-        break;
+    for (let sent = 0; sent < 10; sent++) {
+      const item = (await loadOutbox()).find(entry => !entry.problem);
+      if (!item || (item.apiBase && item.apiBase !== base(cfg))) break;
+      if (Date.now() - item.at >= OUTBOX_MAX_AGE_MS) {
+        await withOutboxLock(async () => { const entries = await loadOutbox(); const match = entries.find(e => item.batchId ? e.batchId === item.batchId : e.at === item.at && e.sourceUrl === item.sourceUrl); if (match) match.problem = "expired"; await chrome.storage.local.set({ outbox: entries }); });
+        await rememberError("ข้อมูลค้างเกิน 72 ชั่วโมง เก็บไว้ให้ตรวจเอง ไม่ลบทิ้งเงียบ ๆ"); continue;
       }
-      // Sent, or rejected for good (4xx): either way it leaves the outbox.
-      if (response.ok) await countSent(item.posts.length);
-      outbox = (await loadOutbox()).filter((entry) => !(entry.at === item.at && entry.sourceUrl === item.sourceUrl));
-      await chrome.storage.local.set({ outbox });
+      const response = await postJson(cfg, "/api/v1/ingest", { ...(item.batchId ? { batchId: item.batchId } : {}), sourceUrl: item.sourceUrl, posts: item.posts, fbUserId: item.fbUserId || undefined }, { timeoutMs: 45000, retries: 0 }).catch(() => null);
+      if (!response || RETRY_STATUS.has(response.status) || response.status >= 500) break;
+      if ([401, 403].includes(response.status)) { await rememberError("การเชื่อมต่อหมดสิทธิ์ ข้อมูลยังอยู่ในคิว กรุณาจับคู่ Extension ใหม่"); break; }
+      const data = response.json ? await response.json().catch(() => ({})) : {};
+      const ack = new Set(response.ok && data.batchId === item.batchId ? (data.receipts || []).filter(r => ["accepted", "skipped"].includes(r.outcome)).map(r => r.itemId) : []);
+      if (response.ok && item.batchId && !ack.size) break; // old server: retain until upgraded
+      await withOutboxLock(async () => {
+        const entries = await loadOutbox();
+        const index = entries.findIndex(entry => item.batchId ? entry.batchId === item.batchId : entry.at === item.at && entry.sourceUrl === item.sourceUrl);
+        if (index < 0) return;
+        if (!response.ok) entries[index].problem = `http_${response.status}`;
+        else if (item.batchId) { entries[index].posts = entries[index].posts.filter(post => !ack.has(post.itemId)); if (!entries[index].posts.length) entries.splice(index, 1); }
+        else entries.splice(index, 1); // compatibility for batches saved by older extension
+        await chrome.storage.local.set({ outbox: entries, outboxBlocked: entries.length >= OUTBOX_MAX });
+      });
+      if (!response.ok) { await rememberError(`ข้อมูลถูกปฏิเสธ HTTP ${response.status} เก็บไว้ให้ตรวจ ไม่ลบออกจากคิว`); continue; }
+      results[item.batchId] = data;
+      await countSent(Number(data.inserted) || 0);
     }
-    if (!outbox.length) await chrome.storage.local.set({ outbox: [] });
-  } finally {
-    flushing = false;
-  }
+    return results;
+  } finally { flushing = false; }
 }
 
 async function countSent(count) {
@@ -226,22 +246,9 @@ async function currentFbUserId() {
 async function sendPosts(cfg, sourceUrl, posts) {
   if (!posts.length) return null;
   const fbUserId = await currentFbUserId();
-  let response = null;
-  try {
-    response = await postJson(cfg, "/api/v1/ingest", { sourceUrl, posts, fbUserId: fbUserId || undefined });
-  } catch (error) {
-    await queueOutbox({ sourceUrl, posts, fbUserId, apiBase: base(cfg) });
-    await rememberError(`ส่งโพสต์ไม่สำเร็จ เก็บไว้ส่งใหม่ ${posts.length} โพสต์: ${String(error && error.message ? error.message : error).slice(0, 120)}`);
-    return null;
-  }
-  if (response.ok) {
-    await countSent(posts.length);
-  } else {
-    if (response.status >= 500 || RETRY_STATUS.has(response.status) || [401, 403].includes(response.status)) await queueOutbox({ sourceUrl, posts, fbUserId, apiBase: base(cfg) });
-    const data = await response.clone().json().catch(() => ({}));
-    await rememberError(`ส่งโพสต์เข้า MY-BOT ไม่สำเร็จ (${response.status}) ${data.error || ""}`.trim());
-  }
-  return response;
+  const queued = await queueOutbox({ sourceUrl, posts, fbUserId, apiBase: base(cfg) });
+  const result = (await flushOutbox(cfg))?.[queued.batchId];
+  return result ? { ok: true, clone: () => ({ json: async () => result }) } : null;
 }
 
 function browserName() {
@@ -736,6 +743,7 @@ async function releaseRunLock() {
 }
 
 async function cycle() {
+  if ((await chrome.storage.local.get({ outboxBlocked: false })).outboxBlocked) return;
   if (cycling) return;
   const cfg = await loadConfig();
   if (cfg.paused || !cfg.token) return;

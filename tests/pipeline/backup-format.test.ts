@@ -28,6 +28,14 @@ describe("backup preflight", () => {
     delete old.tables.ExtensionDevice;
     expect(() => validateBackup(old, true)).toThrow(/Missing backup table/);
   });
+  it("requires explicit consent for backups predating the evaluation table", () => {
+    const old = makeBackup(emptyTables());
+    delete old.tables.AutoCommentEvaluation; delete old.manifest.AutoCommentEvaluation;
+    expect(() => validateBackup(old)).toThrow(/Missing backup table/);
+    expect(validateBackup(old, true).AutoCommentEvaluation).toEqual([]);
+    delete old.tables.AutoCommentJob;
+    expect(() => validateBackup(old, true)).toThrow(/Missing backup table/);
+  });
   it("rejects malformed rows, duplicate ids and invalid category trees before deletion", () => {
     const tables = emptyTables();
     tables.Category = [{ id: "child", name: "child", slug: "child", parentId: "missing" }] as never[];

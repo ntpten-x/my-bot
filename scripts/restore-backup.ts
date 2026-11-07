@@ -5,7 +5,7 @@
  */
 import "../src/lib/load-env";
 import { readFileSync } from "node:fs";
-import { gunzipSync } from "node:zlib";
+import { decodeBackup } from "../src/lib/backup-crypto";
 import { PrismaClient } from "@prisma/client";
 import { restoreDatabase, validateBackup } from "../src/lib/backup-format";
 
@@ -14,7 +14,7 @@ async function main() {
   if (!file) throw new Error("usage: npm run db:restore -- <backup.json.gz> --replace");
   if (!process.argv.includes("--replace") && !process.argv.includes("--check")) throw new Error("add --replace to confirm: all current MY-BOT rows will be deleted first");
   const raw = readFileSync(file);
-  const data: unknown = JSON.parse((file.endsWith(".gz") ? gunzipSync(raw) : raw).toString("utf8"));
+  const data: unknown = JSON.parse(decodeBackup(raw).toString("utf8"));
   const allowLegacy = process.argv.includes("--allow-legacy");
   validateBackup(data, allowLegacy);
   if (process.argv.includes("--check")) { console.log("Backup validation passed (no database changes)"); return; }

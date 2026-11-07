@@ -194,7 +194,7 @@ export async function processAutoCommentQueue(options: { gateway?: CommentGatewa
 
 export async function autoCommentDashboard() {
   const control = await readCommentControl();
-  const [rules, sources, jobs, counts, observed, matched, logs] = await Promise.all([
+  const [rules, sources, jobs, counts, observed, matched, logs, evaluations] = await Promise.all([
     prisma.autoCommentRule.findMany({ orderBy: { createdAt: "asc" }, include: { templates: { orderBy: { sortOrder: "asc" } } } }),
     prisma.source.findMany({ select: { id: true, name: true, type: true, enabled: true }, orderBy: { name: "asc" } }),
     prisma.autoCommentJob.findMany({ orderBy: { createdAt: "desc" }, take: 100 }),
@@ -202,9 +202,12 @@ export async function autoCommentDashboard() {
     prisma.autoCommentLog.count({ where: { event: "observed", createdAt: { gte: new Date(control.startedAt) } } }),
     prisma.autoCommentLog.count({ where: { event: "matched", createdAt: { gte: new Date(control.startedAt) } } }),
     prisma.autoCommentLog.findMany({ orderBy: { createdAt: "desc" }, take: 60 }),
+    prisma.autoCommentEvaluation.findMany({ where: { generation: control.generation },
+      orderBy: { evaluatedAt: "desc" }, take: 50,
+      include: { post: { select: { text: true, externalUrl: true } } } }),
   ]);
   return {
-    control, sources, logs, jobs: jobs.map(job => ({ ...job, claimToken: undefined })),
+    control, sources, logs, evaluations, jobs: jobs.map(job => ({ ...job, claimToken: undefined })),
     counts: Object.fromEntries(counts.map(row => [row.status, row._count])), observed, matched,
     rules: rules.map(({ pageTokenEnc, managerTokenEnc, ...rule }) => ({ ...rule, hasPageToken: Boolean(pageTokenEnc), hasManagerToken: Boolean(managerTokenEnc), sourceIds: jsonList<string>(rule.sourceIdsJson), days: jsonList<number>(rule.daysJson) })),
   };

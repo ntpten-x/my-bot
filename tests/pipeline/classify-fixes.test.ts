@@ -88,7 +88,7 @@ describe("truncated post text", () => {
 describe("AI prompt and ad shortcut", () => {
   it("is short and slices post text", () => {
     expect(AI_SYSTEM.length).toBeLessThan(1100);
-    const prompt = userPrompt([{ id: "a", text: "x".repeat(3000) }], catalog);
+    const prompt = userPrompt([{ id: "a", text: "x".repeat(PROMPT_TEXT_LIMIT + 100) }], catalog);
     expect(prompt).toContain("x".repeat(PROMPT_TEXT_LIMIT));
     expect(prompt).not.toContain("x".repeat(PROMPT_TEXT_LIMIT + 1));
   });

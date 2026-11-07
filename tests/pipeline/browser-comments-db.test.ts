@@ -5,6 +5,10 @@ const fixture = vi.hoisted(() => {
   const helper = process.getBuiltinModule("node:module").createRequire(`${process.cwd()}/package.json`)("./tests/helpers/pg-test-db.cjs");
   return { ...helper.setupTestDatabase("test_browser_comment"), drop: helper.dropTestSchema };
 });
+vi.mock("../../src/lib/auto-comment/draft", async importOriginal => {
+  const actual = await importOriginal<typeof import("../../src/lib/auto-comment/draft")>();
+  return { ...actual, generateCommentDraft: vi.fn(async (rule, post) => ({ message: "ร่างทดสอบ", provider: "synthetic", key: actual.draftKey(rule, post) })) };
+});
 import { prisma } from "../../src/lib/prisma";
 import { autoCommentRuleSchema } from "../../src/lib/auto-comment/schema";
 import { saveCommentRule } from "../../src/lib/auto-comment/admin";
@@ -39,6 +43,109 @@ const claim = (deviceId: string) => claimBrowserComment(deviceId, "99887766");
 const permit = (deviceId: string, job: { id: string; claimToken: string }) => authorizeBrowserComment(deviceId, job.id, job.claimToken, "99887766");
 
 describe.skipIf(!fixture.enabled)("browser comment durable workflow on disposable Postgres", () => {
+  it("records rejected posts and revisits them after AI changes without a createdAt change", async () => {
+    const s = await setup({ dry: true, requireAi: true });
+    const post = await prisma.post.create({ data: { sourceId: s.source.id, externalUrl: "https://www.facebook.com/groups/12345/posts/4444/", text: "หาช่างแอร์", normalizedText: "หาช่างแอร์", contentHash: `post-${++serial}`, isAd: true } });
+    await scanBrowserComments(active);
+    expect(await prisma.autoCommentJob.count({ where: { postId: post.id } })).toBe(0);
+    expect(await prisma.autoCommentEvaluation.findFirst({ where: { postId: post.id } })).toMatchObject({ state: "waiting_ai" });
+    await prisma.aiJob.create({ data: { postId: post.id, status: "done" } });
+    await prisma.post.update({ where: { id: post.id }, data: { isAd: false, aiProvider: "gemini:mock", intent: "buyer" } });
+    await scanBrowserComments(active); await prepareBrowserComments(active);
+    expect(await prisma.autoCommentJob.findFirst({ where: { postId: post.id } })).toMatchObject({ status: "dry_run", message: "ข้อความทดสอบ" });
+    await scanBrowserComments(active); await scanBrowserComments(active);
+    expect(await prisma.autoCommentJob.count({ where: { postId: post.id } })).toBe(1);
+    expect(await prisma.autoCommentEvaluation.count({ where: { postId: post.id } })).toBe(1);
+  });
+  it("sends a configured shoe template only to buyer intent in Dry Run", async () => {
+    const s = await setup({ dry: true });
+    await saveCommentRule({ ...s.input, keywords: "รองเท้า", intentMode: "buyer", templates: ["แนะนำร้าน https://shopee.co.th/example"] }, s.ruleId);
+    for (const [id, text] of [["1111", "หารองเท้าวิ่ง"], ["2222", "ขายรองเท้า"], ["3333", "ได้รองเท้าแล้ว"]]) {
+      await prisma.post.create({ data: { sourceId: s.source.id, externalUrl: `https://www.facebook.com/groups/12345/posts/${id}/`, text, normalizedText: text, contentHash: `post-${++serial}` } });
+    }
+    await scanBrowserComments(active); await prepareBrowserComments(active);
+    const shoes = await prisma.autoCommentJob.findMany({ where: { message: { contains: "shopee" } } });
+    expect(shoes).toHaveLength(1); expect(shoes[0]).toMatchObject({ status: "dry_run", externalUrl: "https://www.facebook.com/groups/12345/posts/1111/" });
+    expect(await prisma.autoCommentEvaluation.count({ where: { state: "skipped" } })).toBeGreaterThanOrEqual(2);
+    expect(await claim(s.device.id)).toBeNull();
+  });
+  it("repairs missing evaluations across batches without replaying deliveries", async () => {
+    const s = await setup({ dry: true });
+    await prisma.post.createMany({ data: Array.from({ length: 105 }, (_, index) => ({ sourceId: s.source.id, externalUrl: `https://www.facebook.com/groups/12345/posts/${5000 + index}/`, text: "ไม่ตรงกฎ", normalizedText: "ไม่ตรงกฎ", contentHash: `batch-${++serial}` })) });
+    await scanBrowserComments(active); await scanBrowserComments(active);
+    expect(await prisma.autoCommentEvaluation.count()).toBe(106);
+    await prisma.autoCommentEvaluation.deleteMany({ where: { postId: s.post.id } });
+    await scanBrowserComments(active);
+    expect(await prisma.autoCommentEvaluation.count()).toBe(106); expect(await prisma.autoCommentJob.count()).toBe(1);
+    await prisma.autoCommentEvaluation.updateMany({ data: { nextEvaluateAt: new Date(0) } });
+    const fresh = await prisma.post.create({ data: { sourceId: s.source.id, externalUrl: "https://www.facebook.com/groups/12345/posts/9000/", text: "หาช่างแอร์", normalizedText: "หาช่างแอร์", contentHash: `post-${++serial}` } });
+    await scanBrowserComments(active);
+    expect(await prisma.autoCommentEvaluation.findFirst({ where: { postId: fresh.id } })).not.toBeNull();
+  });
+  it("revisits text revisions and re-arms only never-dispatched cancelled jobs", async () => {
+    const s = await setup({ requireAi: true });
+    await prisma.post.update({ where: { id: s.post.id }, data: { textRevision: { increment: 1 }, text: "หาช่างแอร์ด่วน", aiProvider: "owner", intent: "buyer" } });
+    await prisma.autoCommentJob.updateMany({ data: { nextAttemptAt: new Date(0) } });
+    await prepareBrowserComments(active);
+    expect(await prisma.autoCommentJob.findFirst()).toMatchObject({ status: "cancelled" });
+    await scanBrowserComments(active); await prepareBrowserComments(active);
+    expect(await prisma.autoCommentJob.findFirst()).toMatchObject({ id: s.job.id, textRevision: 1, status: "browser_ready" });
+    const c = (await claim(s.device.id))!; await permit(s.device.id, c);
+    await reportBrowserComment(s.device.id, c.id, c.claimToken, "uncertain");
+    await prisma.post.update({ where: { id: s.post.id }, data: { textRevision: { increment: 1 } } });
+    expect(await claim(s.device.id)).toBeNull();
+    expect(await prisma.autoCommentJob.findFirst()).toMatchObject({ status: "uncertain", attempts: 1 });
+  });
+  it("prefers explicit rule priority and keeps evaluation table under RLS and backup", async () => {
+    const s = await setup({ dry: true });
+    await saveCommentRule({ ...s.input, name: "priority", priority: 100, templates: ["สำคัญก่อน"] });
+    const post = await prisma.post.create({ data: { sourceId: s.source.id, externalUrl: "https://www.facebook.com/groups/12345/posts/6666/", text: "หาช่างแอร์", normalizedText: "หาช่างแอร์", contentHash: `post-${++serial}` } });
+    await scanBrowserComments(active); await prepareBrowserComments(active);
+    expect(await prisma.autoCommentJob.findFirst({ where: { postId: post.id } })).toMatchObject({ message: "สำคัญก่อน" });
+    const rows = await prisma.$queryRaw<{ relrowsecurity: boolean }[]>`SELECT c.relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=${fixture.schema} AND c.relname='AutoCommentEvaluation'`;
+    expect(rows).toEqual([{ relrowsecurity: true }]);
+    expect((await snapshotDatabase(prisma)).tables.AutoCommentEvaluation.length).toBeGreaterThan(0);
+  });
+  it("does not let a lower-priority rule bypass an applicable AI wait", async () => {
+    const s = await setup({ dry: true });
+    await saveCommentRule({ ...s.input, name: "AI priority", keywords: "รองเท้า", priority: 100, intentMode: "buyer", requireAi: true, templates: ["AI rule"] });
+    await saveCommentRule({ ...s.input, name: "fallback", keywords: "รองเท้า", templates: ["fallback"] });
+    const post = await prisma.post.create({ data: { sourceId: s.source.id, externalUrl: "https://www.facebook.com/groups/12345/posts/7777/", text: "รองเท้ารุ่นนี้", normalizedText: "รองเท้ารุ่นนี้", contentHash: `post-${++serial}` } });
+    await scanBrowserComments(active); await prepareBrowserComments(active);
+    expect(await prisma.autoCommentJob.count({ where: { postId: post.id } })).toBe(0);
+    expect(await prisma.autoCommentEvaluation.findFirst({ where: { postId: post.id } })).toMatchObject({ state: "waiting_ai" });
+    await prisma.aiJob.create({ data: { postId: post.id, status: "done" } });
+    await prisma.post.update({ where: { id: post.id }, data: { aiProvider: "gemini:mock", intent: "buyer" } });
+    await Promise.all([scanBrowserComments(active), scanBrowserComments(active)]); await prepareBrowserComments(active);
+    expect(await prisma.autoCommentJob.findMany({ where: { postId: post.id } })).toMatchObject([{ message: "AI rule", status: "dry_run" }]);
+  });
+  it("rechecks disabled sources and scheduled checkpoints without creating duplicates", async () => {
+    const s = await setup({ dry: true });
+    await prisma.source.update({ where: { id: s.source.id }, data: { enabled: false } });
+    const post = await prisma.post.create({ data: { sourceId: s.source.id, externalUrl: "https://www.facebook.com/groups/12345/posts/7778/", text: "หาช่างแอร์", normalizedText: "หาช่างแอร์", contentHash: `post-${++serial}` } });
+    await scanBrowserComments(active);
+    expect(await prisma.autoCommentJob.count({ where: { postId: post.id } })).toBe(0);
+    await prisma.source.update({ where: { id: s.source.id }, data: { enabled: true } });
+    await scanBrowserComments(active); await prepareBrowserComments(active);
+    await prisma.autoCommentEvaluation.updateMany({ where: { postId: post.id }, data: { state: "waiting_window", nextEvaluateAt: new Date(0) } });
+    await scanBrowserComments(active);
+    expect(await prisma.autoCommentEvaluation.findFirst({ where: { postId: post.id } })).toMatchObject({ nextEvaluateAt: null, state: "deduplicated" });
+    expect(await prisma.autoCommentJob.count({ where: { postId: post.id } })).toBe(1);
+  });
+  it("denies evaluation reads and changes to an unprivileged database role", async () => {
+    await setup({ dry: true });
+    const role = `${fixture.schema}_anon`;
+    await prisma.$transaction(async tx => {
+      await tx.$executeRawUnsafe(`CREATE ROLE "${role}" NOLOGIN`);
+      await tx.$executeRawUnsafe(`GRANT USAGE ON SCHEMA "${fixture.schema}" TO "${role}"`);
+      await tx.$executeRawUnsafe(`GRANT SELECT, UPDATE ON ALL TABLES IN SCHEMA "${fixture.schema}" TO "${role}"`);
+      await tx.$executeRawUnsafe(`SET LOCAL ROLE "${role}"`);
+      expect(await tx.$queryRawUnsafe(`SELECT * FROM "${fixture.schema}"."AutoCommentEvaluation"`)).toEqual([]);
+      expect(await tx.$executeRawUnsafe(`UPDATE "${fixture.schema}"."AutoCommentEvaluation" SET state='matched'`)).toBe(0);
+      await tx.$executeRawUnsafe("RESET ROLE");
+      await tx.$executeRawUnsafe(`DROP OWNED BY "${role}"`); await tx.$executeRawUnsafe(`DROP ROLE "${role}"`);
+    });
+  });
   it("does not create jobs in a web process", async () => {
     const s = await setup(); await prisma.autoCommentJob.deleteMany(); process.env.MYBOT_PROCESS = "web";
     await scanBrowserComments(active); expect(await prisma.autoCommentJob.count()).toBe(0); expect(await claim(s.device.id)).toBeNull();
@@ -124,7 +231,9 @@ describe.skipIf(!fixture.enabled)("browser comment durable workflow on disposabl
     const s = await setup(), c = (await claim(s.device.id))!; await permit(s.device.id, c);
     await prisma.setting.create({ data: { key: "groq_api_key", value: encodeSetting("groq_api_key", "synthetic-test-key") } });
     expect((await prisma.setting.findUniqueOrThrow({ where: { key: "groq_api_key" } })).value).not.toContain("synthetic-test-key");
-    const snapshot = JSON.parse(JSON.stringify(await snapshotDatabase(prisma))); await restoreDatabase(prisma, snapshot);
+    const snapshot = JSON.parse(JSON.stringify(await snapshotDatabase(prisma)));
+    await expect(restoreDatabase(prisma, snapshot)).rejects.toThrow(/Stop all/);
+    await prisma.lease.deleteMany(); await restoreDatabase(prisma, snapshot);
     expect(await readCommentControl()).toMatchObject({ state: "stopped", dryRun: true, emergency: true });
     expect((await prisma.autoCommentJob.findFirstOrThrow()).status).toBe("uncertain");
   });

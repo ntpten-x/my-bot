@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/components/api";
 import { Button, Input, Label, Select, Textarea } from "@/components/ui";
+import { evaluationReasons } from "@/lib/auto-comment/reasons";
 import { CommentRulePreview } from "@/components/comment-rule-preview";
 
-type BrowserFields = { deliveryMode: string; browserDeviceId: string; browserFbUserId: string; browserConsent: boolean; requireAi: boolean; messageMode: string };
+type BrowserFields = { businessFacts: string; draftInstruction: string; intentMode: string; priority: number; deliveryMode: string; browserDeviceId: string; browserFbUserId: string; browserConsent: boolean; requireAi: boolean; messageMode: string };
 type Rule = BrowserFields & {
   id: string; name: string; enabled: boolean; sourceIds: string[]; keywords: string; excludeKeywords: string;
   keywordMode: string; selectionMode: string; templates: { body: string }[]; startMinute: number; endMinute: number;
@@ -18,9 +19,10 @@ type Dashboard = {
   rules: Rule[]; sources: { id: string; name: string; type: string; enabled: boolean }[];
   jobs: { id: string; status: string; message: string; externalUrl: string; lastError: string; dryRun: boolean; createdAt: string; remoteCommentId: string | null }[];
   logs: { id: string; event: string; message: string; createdAt: string }[];
+  evaluations?: { id: string; state: string; reasonsJson: string; evaluatedAt: string; post: { text: string; externalUrl: string } }[];
   counts: Record<string, number>; observed: number; matched: number;
 };
-const blank = (): Form => ({ name: "", enabled: false, sourceIds: [], keywords: "", excludeKeywords: "", keywordMode: "any", selectionMode: "sequential", templates: "", startMinute: 0, endMinute: 1440, days: [0, 1, 2, 3, 4, 5, 6], maxAgeHours: 24, areaCooldownSec: 300, pageId: "", pageToken: "", managerToken: "", clearCredentials: false, deliveryMode: "extension", browserDeviceId: "", browserFbUserId: "", browserConsent: false, requireAi: true, messageMode: "template" });
+const blank = (): Form => ({ name: "", enabled: false, businessFacts: "", draftInstruction: "", intentMode: "buyer", priority: 0, sourceIds: [], keywords: "", excludeKeywords: "", keywordMode: "any", selectionMode: "sequential", templates: "", startMinute: 0, endMinute: 1440, days: [0, 1, 2, 3, 4, 5, 6], maxAgeHours: 24, areaCooldownSec: 300, pageId: "", pageToken: "", managerToken: "", clearCredentials: false, deliveryMode: "extension", browserDeviceId: "", browserFbUserId: "", browserConsent: false, requireAi: true, messageMode: "template" });
 const statuses: Record<string, string> = { pending_ai: "รอตรวจ/รอ AI", browser_ready: "รอ Extension", browser_observed: "พบคอมเมนต์ในหน้าจอ", pending: "รอส่ง", claimed: "ตรวจสิทธิ์", sending: "กำลังส่ง", sent: "ส่งสำเร็จ", dry_run: "จำลองแล้ว", unsupported: "Unsupported — ส่งเอง", permission_denied: "สิทธิ์ไม่ผ่าน", unavailable: "เข้าถึงโพสต์ไม่ได้", uncertain: "ไม่ทราบผล — ตรวจเอง ห้ามส่งซ้ำ", failed: "ล้มเหลว", cancelled: "ยกเลิกแล้ว" };
 const time = (minute: number) => `${String(Math.floor((minute % 1440) / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
 const minutes = (value: string) => Number(value.split(":")[0]) * 60 + Number(value.split(":")[1]);
@@ -28,7 +30,7 @@ function facebookLink(value: string) {
   try { const url = new URL(value); return url.protocol === "https:" && ["facebook.com", "www.facebook.com", "web.facebook.com", "m.facebook.com"].includes(url.hostname) ? url.href : null; } catch { return null; }
 }
 function editForm(rule: Rule): Form {
-  return { ...blank(), name: rule.name, enabled: rule.enabled, sourceIds: rule.sourceIds, keywords: rule.keywords, excludeKeywords: rule.excludeKeywords, keywordMode: rule.keywordMode, selectionMode: rule.selectionMode, templates: rule.templates.map(item => item.body).join("\n---\n"), startMinute: rule.startMinute, endMinute: rule.endMinute, days: rule.days, maxAgeHours: rule.maxAgeHours, areaCooldownSec: rule.areaCooldownSec, pageId: "", deliveryMode: "extension", browserDeviceId: rule.browserDeviceId || "", browserFbUserId: rule.browserFbUserId || "", browserConsent: rule.browserConsent || false, requireAi: rule.deliveryMode === "extension" ? rule.requireAi : true, messageMode: rule.messageMode || "template" };
+  return { ...blank(), name: rule.name, enabled: rule.enabled, businessFacts: rule.businessFacts || "", draftInstruction: rule.draftInstruction || "", intentMode: rule.intentMode || "keyword", priority: rule.priority ?? 0, sourceIds: rule.sourceIds, keywords: rule.keywords, excludeKeywords: rule.excludeKeywords, keywordMode: rule.keywordMode, selectionMode: rule.selectionMode, templates: rule.templates.map(item => item.body).join("\n---\n"), startMinute: rule.startMinute, endMinute: rule.endMinute, days: rule.days, maxAgeHours: rule.maxAgeHours, areaCooldownSec: rule.areaCooldownSec, pageId: "", deliveryMode: "extension", browserDeviceId: rule.browserDeviceId || "", browserFbUserId: rule.browserFbUserId || "", browserConsent: rule.browserConsent || false, requireAi: rule.deliveryMode === "extension" ? rule.requireAi : true, messageMode: rule.messageMode || "template" };
 }
 
 export default function AutoCommentPage() {
@@ -44,15 +46,25 @@ export default function AutoCommentPage() {
   const [hourly, setHourly] = useState(5);
   const [daily, setDaily] = useState(20);
   const [acknowledged, setAcknowledged] = useState(false);
+  const reloading = useRef(false);
   const reload = useCallback(async (signal?: AbortSignal) => {
-    try { setData(await api<Dashboard>("/api/auto-comment", { signal })); }
-    catch (err) { if (!signal?.aborted) setError(err instanceof Error ? err.message : "โหลดข้อมูลไม่สำเร็จ"); }
+    if (reloading.current) return true;
+    reloading.current = true;
+    try { const result = await api<Dashboard>("/api/auto-comment", { signal }); if (!signal?.aborted) setData(result); return true; }
+    catch (err) { if (!signal?.aborted) setError(err instanceof Error ? err.message : "โหลดข้อมูลไม่สำเร็จ"); return false; }
+    finally { reloading.current = false; }
   }, []);
   useEffect(() => {
     const controller = new AbortController();
-    void reload(controller.signal);
-    const timer = setInterval(() => { void reload(controller.signal); }, 5000);
-    return () => { controller.abort(); clearInterval(timer); };
+    let timer: ReturnType<typeof setTimeout>; let delay = 5000; let stopped = false;
+    const poll = async () => {
+      if (stopped) return;
+      if (!document.hidden) delay = await reload(controller.signal) ? 5000 : Math.min(60000, delay * 2);
+      if (!stopped) timer = setTimeout(() => void poll(), document.hidden ? 15000 : delay);
+    };
+    const visible = () => { if (!document.hidden) { clearTimeout(timer); void poll(); } };
+    document.addEventListener("visibilitychange", visible); void poll();
+    return () => { stopped = true; controller.abort(); clearTimeout(timer); document.removeEventListener("visibilitychange", visible); };
   }, [reload]);
   const savedDryRun = data?.control.dryRun, savedHourly = data?.control.hourlyLimit, savedDaily = data?.control.dailyLimit;
   useEffect(() => { if (savedDryRun !== undefined && savedHourly !== undefined && savedDaily !== undefined) { setDryRun(savedDryRun); setHourly(savedHourly); setDaily(savedDaily); setAcknowledged(false); } }, [savedDryRun, savedHourly, savedDaily]);
@@ -81,10 +93,10 @@ export default function AutoCommentPage() {
     {error ? <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</p> : null}
     {notice ? <p role="status" className="text-sm text-pine">{notice}</p> : null}
     <section className="border-y border-line py-4" aria-label="สถานะระบบและคำสั่ง">
-      <div className="flex flex-wrap items-center gap-3"><strong className="text-lg">{state}</strong><span className={`rounded-full px-3 py-1 text-sm ${data?.control.dryRun !== false ? "bg-amber/40" : "bg-red-100 text-red-800"}`}>{data?.control.dryRun !== false ? "Dry Run — ไม่ส่งจริง" : "ส่งจริงผ่าน API"}</span>
+      <div className="flex flex-wrap items-center gap-3"><strong className="text-lg">{state}</strong><span className={`rounded-full px-3 py-1 text-sm ${data?.control.dryRun !== false ? "bg-amber/40" : "bg-red-100 text-red-800"}`}>{data?.control.dryRun !== false ? "Dry Run — ไม่ส่งจริง" : "ส่งจริงผ่าน Extension"}</span>
         <div className="flex flex-wrap gap-2 md:ml-auto"><Button disabled={busy || !data || data.control.emergency} onClick={() => void control({ action: "start" })}>Start · เริ่ม</Button><Button variant="outline" disabled={busy || !data} onClick={() => void control({ action: "pause" })}>Pause · พัก</Button><Button variant="outline" disabled={busy || !data} onClick={() => void control({ action: "stop" })}>Stop · หยุด</Button></div>
       </div>
-      <p className="mt-3 text-xs text-muted">Pause รักษาคิวไว้ · Stop ยกเลิกงานที่ยังไม่ส่ง · คำสั่งหยุดจะรอคำขอส่งที่เริ่มไปแล้วจบก่อนยืนยัน</p>
+      <p className="mt-3 text-xs text-muted">Pause รักษาคิวไว้ · Stop ยกเลิกงานที่ยังไม่ส่ง · หยุดการอนุญาตงานใหม่ งานที่อนุญาตแล้วอาจยังกดส่งได้ภายใน 3 วินาที</p>
       {data?.control.cooldownUntil ? <p className="mt-2 text-sm">พักตามข้อจำกัด Meta ถึง {new Date(data.control.cooldownUntil).toLocaleString("th-TH")}</p> : null}
       {data?.control.emergency ? <Button className="mt-3" variant="outline" disabled={busy} onClick={() => void control({ action: "reset" })}>ปลดหยุดฉุกเฉิน (ยังไม่ Start)</Button> : null}
     </section>
@@ -102,11 +114,15 @@ export default function AutoCommentPage() {
     </section>
     <div className="grid gap-6 lg:grid-cols-[minmax(0,1.7fr)_minmax(240px,1fr)]">
       <form onSubmit={event => void save(event)} className="space-y-4 rounded-xl border border-line bg-card p-5">
+        <Button type="button" variant="outline" onClick={() => { setEditing(null); setForm({ ...blank(), name: "แนะนำรองเท้าให้คนหาซื้อ", keywords: "รองเท้า,ร้องเท้า", excludeKeywords: "ขายแล้ว,ได้แล้ว,ไม่หาแล้ว", templates: "" }); setNotice("เตรียมกฎตัวอย่างแล้ว ใส่ข้อความและลิงก์ Shopee ของคุณ เลือกกลุ่มและอุปกรณ์ก่อน กฎยังปิดอยู่"); }}>ใช้ตัวอย่าง: คนหารองเท้า</Button>
         <h2 className="text-lg font-semibold">{editing ? "แก้ไขกฎ" : "สร้างกฎใหม่"}</h2>
         <div><Label htmlFor="rule-name">ชื่อกฎ</Label><Input id="rule-name" value={form.name} maxLength={80} required onChange={event => set("name", event.target.value)} /></div>
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.enabled} onChange={event => set("enabled", event.target.checked)} /> เปิดใช้งานกฎนี้</label>
+        <div><Label htmlFor="business-facts">ข้อมูลธุรกิจที่รับรอง (จำเป็นสำหรับ AI Draft)</Label><Textarea id="business-facts" maxLength={4000} value={form.businessFacts} onChange={event => set("businessFacts", event.target.value)} /><p className="text-xs text-muted">ระบุสินค้า ราคา และลิงก์ที่อนุญาต ห้ามใส่รหัสผ่านหรือ API key ข้อความ AI ที่หลักฐาน/ลิงก์/ตัวเลขไม่ผ่านจะไม่ส่ง</p></div>
+        <div><Label htmlFor="draft-instruction">แนวทางคำตอบ AI ของกฎนี้</Label><Textarea id="draft-instruction" maxLength={1000} value={form.draftInstruction} onChange={event => set("draftInstruction", event.target.value)} /></div>
         <div><Label htmlFor="comment-templates">ข้อความคอมเมนต์</Label><Textarea id="comment-templates" value={form.templates} required={form.messageMode === "template"} onChange={event => set("templates", event.target.value)} /><p className="mt-1 text-xs text-muted">หลายรูปแบบให้คั่นด้วยบรรทัด --- รูปแบบละไม่เกิน 2,000 ตัวอักษร สูงสุด 30 รูปแบบ โหมด AI Draft เว้นส่วนนี้ว่างได้</p></div>
         <div className="grid gap-3 sm:grid-cols-2"><div><Label htmlFor="template-order">เลือกข้อความ</Label><Select id="template-order" value={form.selectionMode} onChange={event => set("selectionMode", event.target.value)}><option value="sequential">เรียงวนตามลำดับ</option><option value="random">สุ่ม</option></Select></div><div><Label htmlFor="keyword-mode">การจับคำสำคัญ</Label><Select id="keyword-mode" value={form.keywordMode} onChange={event => set("keywordMode", event.target.value)}><option value="any">พบอย่างน้อยหนึ่งคำ</option><option value="all">พบครบทุกคำ</option></Select></div></div>
+        <div className="grid gap-3 sm:grid-cols-2"><div><Label htmlFor="intent-mode">เจตนาของโพสต์ที่ต้องการตอบ</Label><Select id="intent-mode" value={form.intentMode} onChange={event => set("intentMode", event.target.value)}><option value="buyer">คนหาซื้อ / ขอคำแนะนำ</option><option value="seller">คนเสนอขายสินค้า / บริการ</option><option value="keyword">ดูคำสำคัญอย่างเดียว (แบบเดิม)</option></Select><p className="mt-1 text-xs text-muted">โหมดเจตนาจะข้ามข้อความปฏิเสธหรือปิดการหา/ขาย ใช้ผลวิเคราะห์ AI เมื่อมี และยังไม่ตอบโพสต์ที่ถูกกรองเป็นโฆษณา</p></div><div><Label htmlFor="rule-priority">ความสำคัญ (0–100 สูงก่อน)</Label><Input id="rule-priority" type="number" min={0} max={100} value={form.priority} onChange={event => set("priority", Number(event.target.value))} /></div></div>
         <div><Label htmlFor="required-words">คำสำคัญที่ต้องพบ (คั่นด้วย , หรือบรรทัดใหม่)</Label><Textarea id="required-words" value={form.keywords} onChange={event => set("keywords", event.target.value)} /></div>
         <div><Label htmlFor="excluded-words">คำที่ต้องยกเว้น</Label><Input id="excluded-words" value={form.excludeKeywords} onChange={event => set("excludeKeywords", event.target.value)} /></div>
         <fieldset className="space-y-2"><legend className="mb-2 text-sm font-medium">Allowlist แหล่งข้อมูล</legend><div className="max-h-44 space-y-2 overflow-auto rounded-lg border border-line p-3">
@@ -131,6 +147,7 @@ export default function AutoCommentPage() {
       <aside className="space-y-3"><h2 className="text-lg font-semibold">กฎที่ตั้งไว้</h2>{data?.rules.map(rule => <article key={rule.id} className="border-b border-line pb-4"><div className="flex items-center justify-between gap-2"><h3 className="font-medium">{rule.name}</h3><span className="text-xs">{rule.enabled ? "เปิด" : "ปิด"}</span></div><p className="mt-1 text-sm text-muted">{rule.templates.length} ข้อความ · {rule.deliveryMode === "extension" ? "ส่งผ่าน Extension" : "กฎ API เดิม — ต้องเปลี่ยนเป็น Extension"}</p><p className="mt-1 text-xs text-muted">อุปกรณ์: {rule.browserDeviceId || "ยังไม่ผูก"} · Facebook: {rule.browserFbUserId || "ยังไม่ผูก"}</p>{rule.pausedReason ? <p className="mt-2 text-sm text-red-800">พักกฎ: {rule.pausedReason}</p> : null}<Button type="button" className="mt-2" size="sm" variant="outline" onClick={() => { setEditing(rule.id); setForm({ ...editForm(rule), sourceIds: rule.sourceIds.filter(id => data.sources.some(source => source.id === id)) }); }}>แก้ไข / เปิดปิดกฎ</Button></article>)}{!data?.rules.length ? <p className="text-sm text-muted">เริ่มด้วยกฎที่ปิดไว้และ Dry Run แล้วตรวจข้อความในประวัติก่อนเปิดส่งจริง</p> : null}</aside>
     </div>
     <section><h2 className="text-lg font-semibold">ประวัติงานและข้อความที่เตรียมไว้</h2><p className="mt-1 text-xs text-muted">แสดง 100 งานล่าสุด งาน “ไม่ทราบผล” จะไม่ลองส่งซ้ำอัตโนมัติ ต้องตรวจบน Facebook เอง</p><div className="mt-3 space-y-3">{data?.jobs.map(job => <article key={job.id} className="rounded-lg border border-line bg-card p-4"><div className="flex flex-wrap justify-between gap-2"><strong className="text-sm">{statuses[job.status] ?? job.status}</strong><span className="text-xs text-muted">{new Date(job.createdAt).toLocaleString("th-TH")}</span></div><p className="mt-2 whitespace-pre-wrap break-words text-sm">{job.message}</p>{job.lastError ? <p className="mt-2 text-sm text-muted">{job.lastError}</p> : null}{job.remoteCommentId ? <p className="mt-1 text-xs text-muted">Comment ID: {job.remoteCommentId}</p> : null}<div className="mt-3 flex gap-3"><Button size="sm" variant="outline" onClick={() => void navigator.clipboard.writeText(job.message).then(() => setNotice("คัดลอกข้อความแล้ว")).catch(() => setError("เบราว์เซอร์ไม่อนุญาต Clipboard ให้เลือกข้อความแล้วคัดลอกเอง"))}>คัดลอกข้อความ</Button>{facebookLink(job.externalUrl) ? <a className="self-center text-sm underline" href={facebookLink(job.externalUrl)!} target="_blank" rel="noreferrer">เปิดโพสต์</a> : null}</div></article>)}{!data?.jobs.length ? <p className="rounded-lg border border-dashed border-line p-5 text-sm text-muted">ยังไม่มีงาน เปิดกฎและ Start ใน Dry Run แล้วรอโพสต์ใหม่ ระบบจะไม่ส่งคอมเมนต์ย้อนหลังอัตโนมัติ</p> : null}</div></section>
+    <section aria-label="ผลประเมินโพสต์"><h2 className="text-lg font-semibold">ผลประเมินโพสต์รอบปัจจุบัน</h2><p className="mt-1 text-xs text-muted">50 รายการล่าสุด แยกโพสต์ที่ข้ามออกจากงานส่ง เปลี่ยนข้อความ ผล AI หรือกฎแล้วระบบจะตรวจใหม่ โดยไม่ส่งซ้ำโพสต์ที่เคยเริ่มส่ง</p><div className="mt-3 space-y-2">{data?.evaluations?.map(item => <article key={item.id} className="rounded-lg border border-line p-3"><strong className="text-sm">{({ skipped: "ไม่ผ่านเงื่อนไข", waiting_ai: "รอ AI", waiting_window: "รอเวลาทำงาน", matched: "สร้างงานแล้ว", deduplicated: "มีประวัติงานอยู่แล้ว" } as Record<string, string>)[item.state] ?? item.state}</strong><p className="mt-1 line-clamp-2 text-sm">{item.post.text}</p><details className="mt-2 text-xs text-muted"><summary>เหตุผลและเวลาประเมิน</summary><p>{new Date(item.evaluatedAt).toLocaleString("th-TH")}</p><div className="space-y-1">{evaluationReasons(item.reasonsJson, data.rules).map((reason, index) => <p key={index}>{reason}</p>)}</div></details></article>)}{!data?.evaluations?.length ? <p className="text-sm text-muted">ยังไม่มีผลประเมินในรอบนี้</p> : null}</div></section>
     <CommentRulePreview rules={data?.rules ?? []} sources={data?.sources ?? []} />
     <details><summary className="cursor-pointer font-medium">Audit Log ล่าสุด</summary><ul className="mt-3 space-y-2 text-sm">{data?.logs.map(log => <li key={log.id} className="border-b border-line pb-2"><span className="text-xs text-muted">{new Date(log.createdAt).toLocaleString("th-TH")}</span> · {statuses[log.event] ?? log.event} {log.message}</li>)}</ul></details>
   </div>;

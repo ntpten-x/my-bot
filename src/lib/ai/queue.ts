@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../prisma";
 import { getSettings } from "../settings";
@@ -14,7 +15,7 @@ import { inServiceArea } from "../service-area";
 import { scoreAd } from "../pipeline/ad-filter";
 import { ruleItem, type AiItem } from "../pipeline/classify-rules";
 import { syncDuplicateLabels } from "../smart/duplicate-labels";
-import { setOwnerExamples, setProductList } from "./prompt";
+import { promptContextVersion, setOwnerExamples, setProductList } from "./prompt";
 import { assignProducts, loadProducts } from "../products";
 import { productPrompt } from "../pipeline/products";
 import { loadGroupHints } from "../group-profiles";
@@ -68,6 +69,26 @@ export async function enqueueUnclassifiedPosts(reset = false) {
   return count;
 }
 
+/** Bounded online repair for a crash between legacy Post insertion and enqueue. */
+export async function repairMissingAiJobs(limit = 100) {
+  const rows = await prisma.post.findMany({ where: { duplicateOfId: null, OR: [{ aiProvider: null }, { aiProvider: { not: "owner" } }], aiJobs: { none: {} } }, select: { id: true }, take: limit, orderBy: { createdAt: "asc" } });
+  await enqueueAiJobs(rows.map(row => row.id));
+  return rows.length;
+}
+
+export async function claimAiJobs(claimToken: string, db: Pick<Prisma.TransactionClient, "$queryRaw"> = prisma) {
+  return db.$queryRaw<{ id: string }[]>`
+      UPDATE "AiJob" SET "status" = 'running', "updatedAt" = (clock_timestamp() AT TIME ZONE 'UTC'), "claimToken" = ${claimToken}
+      WHERE "id" IN (
+        SELECT "id" FROM "AiJob"
+        WHERE "status" = 'pending' AND "nextAttemptAt" <= (clock_timestamp() AT TIME ZONE 'UTC')
+        ORDER BY "nextAttemptAt" ASC, "id" ASC
+        LIMIT 10
+        FOR UPDATE SKIP LOCKED
+      )
+      RETURNING "id"`;
+}
+
 export async function processAiQueue(assertActive: () => Promise<void> = async () => undefined) {
   if (process.env.MYBOT_PROCESS !== "worker" || running) return 0;
   running = true;
@@ -96,19 +117,11 @@ export async function processAiQueue(assertActive: () => Promise<void> = async (
       data: { status: "skipped", claimToken: null, lastError: "เจ้าของจัดหมวดเอง ไม่เรียก AI ทับ" },
     });
     if (settings.aiProvider !== "rules") {
-      await prisma.aiJob.updateMany({ where: { status: "skipped", post: { OR: [{ aiProvider: null }, { aiProvider: { not: "owner" } }] } }, data: { status: "pending", nextAttemptAt: new Date() } });
+      await prisma.aiJob.updateMany({ where: { status: "skipped", post: { duplicateOfId: null, OR: [{ aiProvider: null }, { aiProvider: { not: "owner" } }] } }, data: { status: "pending", nextAttemptAt: new Date() } });
     }
+    await prisma.aiJob.updateMany({ where: { status: "pending", post: { duplicateOfId: { not: null } } }, data: { status: "skipped", claimToken: null, lastError: "โพสต์ซ้ำ ใช้ผลจากต้นฉบับ" } });
     // Atomic claim: two instances (local + Render) never take the same job.
-    const claimedIds = await prisma.$queryRaw<{ id: string }[]>`
-      UPDATE "AiJob" SET "status" = 'running', "updatedAt" = now(), "claimToken" = ${claimToken}
-      WHERE "id" IN (
-        SELECT "id" FROM "AiJob"
-        WHERE "status" = 'pending' AND "nextAttemptAt" <= ${new Date()}
-        ORDER BY "nextAttemptAt" ASC, "id" ASC
-        LIMIT 10
-        FOR UPDATE SKIP LOCKED
-      )
-      RETURNING "id"`;
+    const claimedIds = await claimAiJobs(claimToken);
     const jobs = claimedIds.length
       ? await prisma.aiJob.findMany({
         where: { id: { in: claimedIds.map(row => row.id) }, claimToken },
@@ -152,7 +165,7 @@ export async function processAiQueue(assertActive: () => Promise<void> = async (
           await workerLog({ level: "error", jobId: job.id, postId: job.postId, message: "OCR ล้มเหลว จะจัดหมวดต่อโดยไม่มีข้อความจากรูป" });
         }
       }
-      inputs.push({ id: job.postId, text: ocrText ? `${job.post.text}\n${ocrText}` : job.post.text, contentHash: ocrText ? `${job.post.contentHash}:ocr` : job.post.contentHash, groupHint: hints.get(job.post.sourceId) ?? null });
+      inputs.push({ id: job.postId, text: ocrText ? `${job.post.text}\n${ocrText}` : job.post.text, contentHash: `${job.post.contentHash}:${ocrText ? "ocr:" : ""}${promptContextVersion()}:${JSON.stringify(hints.get(job.post.sourceId) ?? null)}`, groupHint: hints.get(job.post.sourceId) ?? null });
     }
     const outcome = await classifyLeads(inputs, catalog, settings, {
       async get(key) {

@@ -1,5 +1,6 @@
 import os from "node:os";
 import { randomUUID } from "node:crypto";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 
 // Local MY-BOT and Render share one database. Background jobs (AI queue, alerts, summaries,
@@ -9,14 +10,14 @@ export const WORKER_LEASE = "worker";
 export const WORKER_LEASE_MS = 150_000;
 
 /** Take or renew a lease atomically. True when this instance holds it afterwards. */
-export async function acquireLease(name: string, ttlMs: number, holder = INSTANCE_ID): Promise<boolean> {
+export async function acquireLease(name: string, ttlMs: number, holder = INSTANCE_ID, db: Pick<Prisma.TransactionClient, "$queryRaw"> = prisma): Promise<boolean> {
   const seconds = Math.max(1, ttlMs / 1000);
-  const rows = await prisma.$queryRaw<{ holder: string }[]>`
+  const rows = await db.$queryRaw<{ holder: string }[]>`
     INSERT INTO "Lease" ("name", "holder", "expiresAt", "updatedAt")
-    VALUES (${name}, ${holder}, now() + make_interval(secs => ${seconds}::double precision), now())
+    VALUES (${name}, ${holder}, (clock_timestamp() AT TIME ZONE 'UTC') + make_interval(secs => ${seconds}::double precision), (clock_timestamp() AT TIME ZONE 'UTC'))
     ON CONFLICT ("name") DO UPDATE
-      SET "holder" = EXCLUDED."holder", "expiresAt" = EXCLUDED."expiresAt", "updatedAt" = now()
-      WHERE "Lease"."holder" = EXCLUDED."holder" OR "Lease"."expiresAt" < now()
+      SET "holder" = EXCLUDED."holder", "expiresAt" = EXCLUDED."expiresAt", "updatedAt" = (clock_timestamp() AT TIME ZONE 'UTC')
+      WHERE "Lease"."holder" = EXCLUDED."holder" OR "Lease"."expiresAt" < (clock_timestamp() AT TIME ZONE 'UTC')
     RETURNING "holder"`;
   return rows.length > 0 && rows[0].holder === holder;
 }
@@ -33,7 +34,7 @@ export async function currentLease(name: string) {
 /** True for exactly one caller per key. Insert-or-skip, so an expected duplicate never logs prisma:error. */
 export async function claimOnce(key: string): Promise<boolean> {
   const rows = await prisma.$queryRaw<{ key: string }[]>`
-    INSERT INTO "SentKey" ("key", "createdAt") VALUES (${key.slice(0, 190)}, ${new Date()})
+    INSERT INTO "SentKey" ("key", "createdAt") VALUES (${key.slice(0, 190)}, ${new Date().toISOString()}::timestamp)
     ON CONFLICT ("key") DO NOTHING
     RETURNING "key"`;
   return rows.length > 0;

@@ -21,7 +21,7 @@ export async function POST(request: Request) {
   try {
     const rule = await prisma.autoCommentRule.findUnique({ where: { id: input.data.ruleId }, select: {
       enabled: true, pausedReason: true, sourceIdsJson: true, keywords: true, excludeKeywords: true,
-      keywordMode: true, startMinute: true, endMinute: true, daysJson: true, maxAgeHours: true,
+      intentMode: true, keywordMode: true, startMinute: true, endMinute: true, daysJson: true, maxAgeHours: true,
     } });
     if (!rule) return json({ error: "ไม่พบกฎที่เลือก" }, 404);
     const now = new Date();

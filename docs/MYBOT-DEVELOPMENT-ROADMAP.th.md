@@ -1,5 +1,21 @@
 # แผนพัฒนา MY-BOT และผลดำเนินการ
 
+## พัฒนากฎตามเจตนาและติดตามผลประเมิน — 7 พฤศจิกายน 2026
+
+เพิ่มในโค้ดแล้ว: intent mode buyer/seller/keyword, priority, ตัวอย่างกฎรองเท้า, Preview แสดงเจตนา, Dashboard ผลประเมินพร้อมเหตุผลภาษาไทย และ durable checkpoint ที่กลับมาตรวจโพสต์หลัง AI/ข้อความ/แหล่งข้อมูล/กฎเปลี่ยน ใช้ AutoCommentJob/transport/authorization เดิม ไม่มีเครื่องยนต์ส่งซ้ำชุดใหม่ รายละเอียดและขั้นตอนติดตั้งอยู่ใน [คู่มือกฎตามเจตนา](SMART-COMMENT-SETUP.th.md)
+
+Migration additive `20261112100000_smart_comment_evaluations` เพิ่ม RLS และ Backup/Restore รองรับตารางใหม่ แต่ยังไม่ได้ apply กับ Production ไม่ได้ deploy หรือส่งคอมเมนต์จริงในรอบนี้ ส่วน receipt, read-only reconciliation และ AI Draft เฉพาะกฎแบบเต็มยังเป็นงานตามแผน
+
+Regression สำคัญ: กรณีคนหารองเท้าและลิงก์ Template ผ่าน Dry Run; โพสต์ขาย/ปิดการหาไม่ผ่าน; AI เปลี่ยนผลหลังอ่านครั้งแรกสร้างงานได้; revision เก่าห้าม authorize; uncertain ไม่ถูกนำไปส่งซ้ำ; กฎสูงที่รอ AI ไม่ถูกกฎต่ำแย่ง; 105 โพสต์ถูกตรวจครบหลาย batch และโพสต์ใหม่ไม่อดคิว; unprivileged role อ่าน/แก้ evaluation ไม่ได้; backup รวม evaluation และ restore ยังหยุด automation
+
+ผลตรวจรอบสุดท้าย: `npm test` บน PostgreSQL ทดสอบ localhost ที่ระบุผ่าน TEST_DATABASE_URL — **59 files / 501 tests ผ่าน ไม่มี skip**; `npm run test:ci` — **59 files / 501 tests ผ่าน**; `npm run lint`, `npm run build` และ `git diff --check` — **exit 0** ไม่มีการส่งจริงหรือทดสอบ production ในรอบนี้ Build มีคำเตือน Prisma config deprecation เดิม
+
+บันทึกตรวจแก้ระหว่างพัฒนา: ชุดข้อความภาษาไทยครั้งแรกไม่ผ่าน 3 กรณี เพราะ NFKC แยกสระ “ำ” ทำให้ regex “แนะนำ” ไม่ตรง และ optional “ร” ทำให้ข้อยกเว้น “หารายได้” ไม่ทำงาน แก้การอ่านรูปอักษรเฉพาะ intent matcher และทำข้อยกเว้นก่อนกินอักษรต่อไป ชุดฐานข้อมูลครั้งแรกไม่มี job เพราะ Date parameter ใน raw SQL เป็น timestamptz แต่คอลัมน์ Prisma เป็น timestamp แบบ UTC; probe บน session Asia/Bangkok พบ raw count=0 ขณะที่ Prisma count=1 จึงใช้ ISO string cast เป็น timestamp โดยตรง ไม่อาศัย timezone ของ session หลังแก้ regression ทั้งหมดข้างต้นผ่าน อีกกรณีเป็น test fixture ที่ยังไม่เลื่อน nextAttemptAt หลังรอ AI จึงปรับให้จำลองเวลาครบก่อนตรวจ ไม่ลดเงื่อนไข runtime
+
+## แบบระบบคอมเมนต์อัจฉริยะ — 7 พฤศจิกายน 2026
+
+อ่าน [ข้อกำหนดและสถาปัตยกรรมล่าสุด](SMART-COMMENT-DESIGN.th.md) สำหรับ durable evaluation, intent/negation, AI Draft ต่อกฎ, receipt, fair queue และการตรวจผลแบบไม่ส่งซ้ำ เป็นแบบสำหรับพัฒนาต่อ ยังไม่ได้ติดตั้งความสามารถเหล่านี้ใน runtime ลำดับแรกคือปิดช่องว่างการประเมินโพสต์เมื่อ AI หรือ revision เปลี่ยน แล้วปรับ observer และนโยบายกฎก่อนเปิดใช้งานกว้างขึ้น ข้อความผลทดสอบด้านล่างเป็นประวัติของแต่ละรอบ ไม่ใช่หลักฐานว่าระบบตามแบบใหม่นี้ผ่านแล้ว
+
 ## อัปเดต: ส่งคอมเมนต์ผ่าน Extension ตามคำสั่งเจ้าของ
 
 เจ้าของเปลี่ยนข้อกำหนดให้ส่งผ่านหน้าจอ Chrome แทน Graph API รอบนี้เพิ่มเส้นทางดังกล่าวอย่างอิสระ ไม่คัดลอกโค้ด BOT-W ดู [คู่มือปัจจุบัน](BROWSER-COMMENTS.th.md) แผน OAuth/ข้อจำกัดส่งกลุ่มในข้อความเดิมด้านล่างเป็นประวัติก่อนเปลี่ยนข้อกำหนด

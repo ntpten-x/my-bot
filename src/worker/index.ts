@@ -6,7 +6,7 @@ import { fetchRssPosts } from "../lib/rss";
 import { fetchWebBoardPosts } from "../lib/web-board";
 import { ingestPosts } from "../lib/ingest";
 import { maybeSendScheduledSummary } from "../lib/smart/daily";
-import { enqueueUnclassifiedPosts, processAiQueue } from "../lib/ai/queue";
+import { enqueueUnclassifiedPosts, processAiQueue, repairMissingAiJobs } from "../lib/ai/queue";
 import { maybeBackupDatabase } from "../lib/backup";
 import { backfillEmbeddings } from "../lib/smart/backfill";
 import { collapseIdenticalTexts, collapseTruncatedCaptures } from "../lib/smart/enrich";
@@ -28,20 +28,21 @@ import { autoCommentTick } from "../lib/auto-comment/poll";
 process.env.MYBOT_PROCESS = "worker";
 assertProductionConfig();
 
-process.on("uncaughtException", (error) => {
-  const message = error instanceof Error ? error.stack || error.message : String(error);
-  void workerLog({ level: "error", message: "uncaughtException", error: message.slice(0, 800) });
-});
-process.on("unhandledRejection", (error) => {
-  const message = error instanceof Error ? error.stack || error.message : String(error);
-  void workerLog({ level: "error", message: "unhandledRejection", error: message.slice(0, 800) });
-});
+let fatal = false;
+function fatalWorker(error: unknown) {
+  if (fatal) return; fatal = true;
+  const timer = setTimeout(() => process.exit(1), 1000); timer.unref();
+  void workerLog({ level: "error", message: "fatal worker error; restarting", error: error instanceof Error ? error.message : "unhandled error" }).finally(() => process.exit(1));
+}
+process.on("uncaughtException", fatalWorker);
+process.on("unhandledRejection", fatalWorker);
 
 let running = false;
 let consumerRunning = false;
 let commentRunning = false;
 let stopping = false;
 let startupDone = false;
+let consumerProgressAt = 0;
 const lease = new WorkerLease({
   acquire: () => acquireLease(WORKER_LEASE, WORKER_LEASE_MS),
   ttlMs: WORKER_LEASE_MS,
@@ -87,6 +88,7 @@ async function consume() {
     for (;;) {
       if (stopping || !lease.active()) break;
       const processed = await processAiQueue(assertActive);
+      if (Date.now() - consumerProgressAt > 30_000) { await upsertSettings({ worker_consumer_progress: new Date().toISOString() }); consumerProgressAt = Date.now(); }
       await assertActive();
       const embedded = await backfillEmbeddings(5);
       await assertActive();
@@ -108,6 +110,7 @@ async function tick() {
       return;
     }
     await upsertSettings({ worker_last_tick: new Date().toISOString(), worker_leader: INSTANCE_ID }).catch(() => undefined);
+    await repairMissingAiJobs();
     const settings = await getSettings();
     const sources = await prisma.source.findMany({
       where: { enabled: true, type: { in: ["rss", "web_board"] } },

@@ -27,6 +27,10 @@ export async function healthResponse(head = false) {
   const report = await cache(() =>
     buildHealth({
       pingDb: async () => { if (!(await schemaReadiness()).ready) throw new Error("Database schema is not ready"); },
+      workerReady: async () => {
+        const [lease, progress] = await Promise.all([prisma.lease.findUnique({ where: { name: "worker" } }), prisma.setting.findUnique({ where: { key: "worker_consumer_progress" } })]);
+        return Boolean(lease && lease.expiresAt.getTime() > Date.now() && progress && Date.parse(progress.value) > Date.now() - 180_000);
+      },
       availableAiProviders,
       extensionLastSeen,
       version: APP_VERSION,

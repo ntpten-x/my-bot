@@ -4,7 +4,7 @@ import { useState } from "react";
 import { api } from "./api";
 import { Button, Label, Select, Textarea } from "./ui";
 
-type Result = { matched: boolean; checks: { code: string; label: string; passed: boolean }[]; evaluatedAt: string };
+type Result = { intent?: { value: string; evidence: string; by: string }; matched: boolean; checks: { code: string; label: string; passed: boolean }[]; evaluatedAt: string };
 export function CommentRulePreview({ rules, sources }: {
   rules: { id: string; name: string }[];
   sources: { id: string; name: string }[];
@@ -31,7 +31,7 @@ export function CommentRulePreview({ rules, sources }: {
     <div><Label htmlFor="preview-text">ข้อความโพสต์จำลอง</Label><Textarea id="preview-text" disabled={busy} value={text} maxLength={20000} onChange={event => { setText(event.target.value); setResult(null); }} /></div>
     <Button type="button" variant="outline" disabled={busy || !ruleId || !sourceId || !text.trim()} onClick={() => void preview()}>{busy ? "กำลังทดลอง..." : "ทดลองโดยไม่สร้างงาน"}</Button>
     {error ? <p role="alert" className="text-sm text-red-800">{error}</p> : null}
-    {result ? <div role="status" className="space-y-2 text-sm"><p className="font-medium">{result.matched ? "ผ่านเงื่อนไขการจับคู่" : "ไม่ผ่านเงื่อนไขการจับคู่"} · ณ {new Date(result.evaluatedAt).toLocaleString("th-TH", { timeZone: "Asia/Bangkok" })}</p><ul className="space-y-1">{result.checks.map(check => <li key={check.code}>{check.passed ? "ผ่าน" : "ไม่ผ่าน"} · {check.label}</li>)}</ul></div> : null}
+    {result ? <div role="status" className="space-y-2 text-sm"><p className="font-medium">{result.matched ? "ผ่านเงื่อนไขการจับคู่" : "ไม่ผ่านเงื่อนไขการจับคู่"} · ณ {new Date(result.evaluatedAt).toLocaleString("th-TH", { timeZone: "Asia/Bangkok" })}</p>{result.intent ? <p>เจตนา: {({ buyer: "หาซื้อ/ขอคำแนะนำ", seller: "เสนอขาย", closed: "ปิดหรือปฏิเสธ", chat: "พูดคุย", unknown: "ยังไม่ชัดเจน", ad: "โฆษณา" } as Record<string, string>)[result.intent.value] ?? result.intent.value} {result.intent.evidence ? `· พบข้อความ “${result.intent.evidence}”` : ""}</p> : null}<ul className="space-y-1">{result.checks.map(check => <li key={check.code}>{check.passed ? "ผ่าน" : "ไม่ผ่าน"} · {check.label}</li>)}</ul></div> : null}
     <p className="text-xs text-muted">ผลทดลองไม่อนุญาตให้ส่งจริง Worker ยังต้องตรวจแหล่งข้อมูลเปิดอยู่ ข้อความตอบ โหมดระบบ สิทธิ์เพจ อายุ Token โควตา ประวัติส่งซ้ำ และสถานะโพสต์อีกครั้ง กฎที่ปิดหรือถูกพักจะไม่ผ่าน</p>
   </section>;
 }

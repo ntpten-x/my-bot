@@ -46,7 +46,9 @@ export function setProductList(list: string) {
   productList = list.slice(0, 600);
 }
 
-export const PROMPT_TEXT_LIMIT = 800;
+export const PROMPT_TEXT_LIMIT = 8000;
+export const PROMPT_VERSION = "classifier-v3";
+export function promptContextVersion() { return JSON.stringify([PROMPT_VERSION, AI_SYSTEM, ownerExamples, productList]); }
 
 export function userPrompt(posts: ClassifyInput[], catalog: CatNode[]): string {
   const corrections = ownerExamples.length
