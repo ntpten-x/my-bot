@@ -40,12 +40,13 @@ describe("scroll scrape plan (extension/scrape.js)", () => {
     expect(scrape.postKey(urls[4])).toBe("mp:555");
   });
 
-  it("clamps settings and waits 1.5–4 s between screens", () => {
+  it("clamps settings and waits 1.5–3.2 s between screens (faster when growing)", () => {
     expect(scrape.scrapeSettings({})).toEqual({ screens: 3, maxAgeMs: 24 * 3600_000, maxPosts: 200 });
     expect(scrape.scrapeSettings({ scrollScreens: 99, maxPostsPerRun: 500, maxAgeHours: 0 })).toMatchObject({ screens: 10, maxPosts: 200, maxAgeMs: 3600_000 });
     expect(scrape.scrapeSettings({ scrollScreens: 0 }).screens).toBe(0);
     expect(scrape.scrollWaitMs(() => 0)).toBe(1500);
-    expect(scrape.scrollWaitMs(() => 1)).toBe(4000);
+    expect(scrape.scrollWaitMs(() => 1)).toBe(3200);
+    expect(scrape.scrollWaitMs(() => 1, { growing: true })).toBe(2000);
   });
 
   it("opens groups chronologically and Marketplace newest first", () => {
@@ -150,6 +151,20 @@ describe("scroll scrape plan (extension/scrape.js)", () => {
   it("keeps the truncation mark when removing a trailing See more", () => {
     expect(scrape.cleanupText("หาช่างแอร์ ... ดูเพิ่มเติม")).toBe("หาช่างแอร์…");
     expect(scrape.cleanupText("สอบถามเพิ่มเติม")).toBe("สอบถามเพิ่มเติม");
+  });
+
+  it("flags shallow runs and shortens wait when the feed is growing", () => {
+    const thin = scrape.createRun({ now: NOW });
+    scrape.addStep(thin, [post(1)]);
+    thin.stoppedBy = "end";
+    expect(scrape.isShallowRun(thin)).toBe(true);
+    const full = scrape.createRun({ now: NOW });
+    scrape.addStep(full, [post(1), post(2), post(3)]);
+    full.stoppedBy = "seen";
+    expect(scrape.isShallowRun(full)).toBe(false);
+    const growing = scrape.scrollWaitMs(() => 0, { growing: true });
+    const idle = scrape.scrollWaitMs(() => 0);
+    expect(growing).toBeLessThan(idle);
   });
 
   it("scrolls without clicks, keys or Facebook APIs", () => {

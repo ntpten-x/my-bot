@@ -151,7 +151,7 @@ describe("extension safety policy", () => {
       commands: Record<string, { suggested_key?: { default?: string } }>;
       permissions: string[];
     };
-    expect(manifest.version).toBe("1.10.13");
+    expect(manifest.version).toBe("1.10.14");
     expect(manifest.permissions).not.toContain("cookies");
     expect(manifest.permissions).not.toContain("webRequest");
     expect(Object.keys(manifest.commands).sort()).toEqual(["mark-sent", "mark-skip"]);
@@ -189,13 +189,17 @@ describe("extension safety policy", () => {
     expect(src).not.toMatch(/parkOffscreen/);
   });
 
-  it("waits longer for thin background feeds and reloads shallow end runs", () => {
-    const src = code("background.js");
-    expect(src).toMatch(/90_000/);
-    expect(src).toMatch(/shallowEnd/);
-    expect(src).toMatch(/MIN_FOUND_BEFORE_END/);
+  it("fail-fasts dead feeds, wakes the tab, and reloads shallow runs", () => {
+    // Read raw: the comment-strip helper treats /* inside template strings as block comments.
+    const raw = readFileSync(path.join(ext, "background.js"), "utf8");
+    expect(raw).toMatch(/budgetMs:\s*40_000/);
+    expect(raw).toMatch(/budgetMs:\s*55_000/);
+    expect(raw).toMatch(/wakeReaderTab/);
+    expect(raw).toMatch(/PARALLEL_SCRAPE\s*=\s*2/);
+    expect(raw).toMatch(/isShallowRun/);
     expect(code("scrape.js")).toMatch(/COLD_EMPTY_STREAK/);
     expect(code("scrape.js")).toMatch(/needsCoverage/);
+    expect(code("scrape.js")).toMatch(/isShallowRun/);
   });
 
   it("background only injects for a pending request from the MY-BOT origin", () => {

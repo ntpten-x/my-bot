@@ -186,7 +186,8 @@ function withScrapeWindowLock(fn) {
   const task = scrapeWindowLock.then(fn); scrapeWindowLock = task.catch(() => undefined); return task;
 }
 // Cap true parallelism so Facebook is not hit by every due group at once (batch can still be larger).
-const PARALLEL_SCRAPE = 3;
+// Two at a time: three parallel background tabs often starve each other under Chrome throttling.
+const PARALLEL_SCRAPE = 2;
 async function mapPool(items, concurrency, worker) {
   const list = items || [];
   const results = new Array(list.length);
@@ -584,8 +585,9 @@ async function waitForGrowth(tabId, kind, before, timeoutMs) {
           observer.disconnect();
           resolve({ count: count(), grew, height: page.scrollHeight });
         };
+        // Short settle so a growing feed does not idle 700 ms after every mutation.
         const check = () => {
-          if (count() > prev || page.scrollHeight > startHeight + 200) setTimeout(() => finish(true), 700);
+          if (count() > prev || page.scrollHeight > startHeight + 200) setTimeout(() => finish(true), 350);
         };
         const observer = new MutationObserver(check);
         observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
@@ -594,6 +596,16 @@ async function waitForGrowth(tabId, kind, before, timeoutMs) {
       }),
   });
   return executed && executed.result ? executed.result : { count: 0, grew: false, height: 0 };
+}
+
+/** Briefly activate the reader tab so Chrome unthrottles timers, then restore the owner's tab. */
+async function wakeReaderTab(reader) {
+  if (!reader || reader.tabId === undefined || reader.windowId === undefined) return;
+  const prev = await chrome.tabs.query({ active: true, windowId: reader.windowId }).catch(() => []);
+  const prevId = prev && prev[0] && prev[0].id !== reader.tabId ? prev[0].id : null;
+  await chrome.tabs.update(reader.tabId, { active: true }).catch(() => undefined);
+  await sleep(450);
+  if (prevId !== null && prevId !== undefined) await chrome.tabs.update(prevId, { active: true }).catch(() => undefined);
 }
 
 // Lazy loading stalled: scroll up a little and back to the bottom so the feed asks for more (scrollTop only).
@@ -783,27 +795,27 @@ async function closeReader(reader) {
 }
 
 // Scroll and read one feed until the stop rule fires. Returns the run (see scrape.js).
-async function readFeed(reader, kind, plan, knownKeys, result) {
+// budgetMs: first pass stays short so a dead background tab can reload instead of burning ~90 s.
+async function readFeed(reader, kind, plan, knownKeys, result, options = {}) {
   const Scrape = globalThis.MyBotScrape;
   const tabId = reader.tabId;
   const run = Scrape.createRun({ knownKeys, ...plan });
-  // Background tabs hydrate slowly; give the feed more wall time before giving up.
-  const feedDeadline = Date.now() + 90_000;
+  const feedDeadline = Date.now() + Math.max(20_000, Number(options.budgetMs) || 40_000);
   const remaining = cap => Math.max(0, Math.min(cap, feedDeadline - Date.now()));
   await waitComplete(tabId).catch(() => undefined);
   await injectReaders(tabId);
-  let state = await waitForGrowth(tabId, kind, 0, remaining(12000));
+  let state = await waitForGrowth(tabId, kind, 0, remaining(8000));
   if (!state.count) {
     run.stalls += 1;
-    if (remaining(2500)) await sleep(remaining(2500));
-    state = await waitForGrowth(tabId, kind, 0, remaining(8000));
+    if (remaining(1500)) await sleep(remaining(1500));
+    state = await waitForGrowth(tabId, kind, 0, remaining(5000));
   }
   let first = await readPage(tabId, kind);
   // First paint often shows 0–1 articles. Wait once more before treating that as the whole feed.
-  if ((first.posts || []).length < 2 && remaining(5000)) {
+  if ((first.posts || []).length < 2 && remaining(4000)) {
     run.stalls += 1;
-    await sleep(remaining(2000));
-    state = await waitForGrowth(tabId, kind, state.count || 0, remaining(6000));
+    await sleep(remaining(1200));
+    state = await waitForGrowth(tabId, kind, state.count || 0, remaining(4000));
     first = await readPage(tabId, kind);
   }
   if (first.identity) await rememberIdentity(first.identity);
@@ -811,28 +823,34 @@ async function readFeed(reader, kind, plan, knownKeys, result) {
   result.sample = (first.posts || []).slice(0, 8);
   let stop = Scrape.addStep(run, first.posts);
   while (!stop && Date.now() < feedDeadline) {
+    // Dead feed: stop early so scrapeGroup can wake + reload instead of idling to the deadline.
+    if (run.stalls >= 4 && run.found < 2 && run.steps >= 3) {
+      stop = "end";
+      run.stoppedBy = "end";
+      break;
+    }
     const before = state.count;
     const previousKeys = new Set((await readPage(tabId, kind)).posts?.map(post => postKey(post.url)).filter(Boolean) || []);
     await scrollOneScreen(tabId);
-    await sleep(remaining(Scrape.scrollWaitMs()));
-    state = await waitForGrowth(tabId, kind, before, remaining(3500));
+    await sleep(remaining(Scrape.scrollWaitMs(undefined, { growing: run.found >= 3 })));
+    state = await waitForGrowth(tabId, kind, before, remaining(run.found >= 3 ? 2200 : 3000));
     const immediate = await readPage(tabId, kind);
     if ((immediate.posts || []).some(post => { const key = postKey(post.url); return key && !previousKeys.has(key); })) state.grew = true;
-    for (let retry = 0; !state.grew && retry < 2 && remaining(1) > 0; retry += 1) {
+    for (let retry = 0; !state.grew && retry < 1 && remaining(1) > 0; retry += 1) {
       run.stalls += 1;
       await nudgeScroll(tabId);
-      state = await waitForGrowth(tabId, kind, before, remaining(3500));
+      state = await waitForGrowth(tabId, kind, before, remaining(2500));
     }
     const page = await readPage(tabId, kind);
     stop = Scrape.addStep(run, page.posts);
-    // Soft end: if the cold budget fired with a thin feed and time remains, nudge and keep going once.
-    if (stop === "end" && run.found < (Scrape.MIN_FOUND_BEFORE_END || 3) && remaining(8000) > 0) {
+    // Soft end once: only when the cold budget fired and a little time remains.
+    if (stop === "end" && run.found < (Scrape.MIN_FOUND_BEFORE_END || 3) && remaining(6000) > 0 && run.stalls < 6) {
       run.stalls += 1;
       run.stoppedBy = "";
       run.emptySteps = Math.max(0, (run.emptySteps || 0) - 3);
       await nudgeScroll(tabId);
-      await sleep(remaining(2500));
-      state = await waitForGrowth(tabId, kind, state.count, remaining(5000));
+      await sleep(remaining(1500));
+      state = await waitForGrowth(tabId, kind, state.count, remaining(3500));
       const again = await readPage(tabId, kind);
       stop = Scrape.addStep(run, again.posts);
     }
@@ -860,20 +878,20 @@ async function scrapeGroup(cfg, group, remote, options) {
     reader = await openReader(url);
     const win = reader.windowId !== undefined ? await chrome.windows.get(reader.windowId).catch(() => null) : null;
     const reading = { windowState: readerWindowState(win), reloaded: false, stallsFirst: 0, stallsRetry: 0, throttled: false };
-    let run = await readFeed(reader, kind, plan, group.knownKeys || [], result);
+    // Pass 1 stays short; incomplete → wake tab (unthrottle) + reload + longer pass 2.
+    let run = await readFeed(reader, kind, plan, group.knownKeys || [], result, { budgetMs: 40_000 });
     reading.stallsFirst = run.stalls || 0;
-    // Thin / empty background feeds: reload once and read again; never focus the reader.
-    const shallowEnd = run.found > 0 && run.found <= 2 && run.stoppedBy === "end";
-    const emptyStall = run.found === 0 && run.stalls >= 2;
-    if ((emptyStall || shallowEnd) && run.stoppedBy !== "seen" && Date.now() - startedAt < 50_000) {
+    const needsRetry = Scrape.isShallowRun(run) || (run.found === 0 && run.stalls >= 2);
+    if (needsRetry && run.stoppedBy !== "seen" && run.stoppedBy !== "old") {
+      await wakeReaderTab(reader);
       await chrome.tabs.reload(reader.tabId).catch(() => undefined);
-      await sleep(3000);
+      await sleep(2800);
       reading.reloaded = true;
-      const again = await readFeed(reader, kind, plan, group.knownKeys || [], result);
+      const again = await readFeed(reader, kind, plan, group.knownKeys || [], result, { budgetMs: 55_000 });
       reading.stallsRetry = again.stalls || 0;
       again.stalls += run.stalls;
       if (again.found >= run.found) run = again;
-      if (run.found <= 2) {
+      if (Scrape.isShallowRun(run)) {
         reading.throttled = true;
         await chrome.storage.local.set({ throttledAt: Date.now() }).catch(() => undefined);
       }

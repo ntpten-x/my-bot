@@ -92,10 +92,23 @@
     return { ...base, mode: "normal" };
   }
 
-  // Random wait between screens: 1.5–4 seconds.
-  function scrollWaitMs(random) {
+  /**
+   * Wait between screens.
+   * - growing: feed is producing posts → shorter settle (0.9–2.0 s)
+   * - default: 1.5–3.2 s (slightly tighter than before to cut idle stalls)
+   */
+  function scrollWaitMs(random, opts) {
     const r = typeof random === "function" ? random() : Math.random();
-    return Math.round(1500 + r * 2500);
+    if (opts && opts.growing) return Math.round(900 + r * 1100);
+    return Math.round(1500 + r * 1700);
+  }
+
+  /** First pass looked incomplete — caller should reload and dig again. */
+  function isShallowRun(run) {
+    if (!run) return true;
+    const stop = String(run.stoppedBy || "");
+    if (stop === "seen" || stop === "old" || stop === "cap") return false;
+    return (run.found || 0) < MIN_FOUND_BEFORE_END;
   }
 
   // Marketplace results sorted newest first; group feeds in chronological order. Read-only URL changes only.
@@ -214,7 +227,7 @@
   }
 
   const api = {
-    postKey, scrapeSettings, planRun, scrollWaitMs, scrapeUrl, createRun, addStep, emptyBudget, runStats, cleanupText,
+    postKey, scrapeSettings, planRun, scrollWaitMs, scrapeUrl, createRun, addStep, emptyBudget, isShallowRun, runStats, cleanupText,
     MAX_SCROLLS, KNOWN_STREAK, DEFAULT_SCREENS, MAX_SCREENS, MAX_POSTS_PER_RUN,
     EMPTY_STREAK, COLD_EMPTY_STREAK, MIN_FOUND_BEFORE_END,
   };
