@@ -5,10 +5,11 @@
   const MAX_SCREENS = 10;
   const MAX_POSTS_PER_RUN = 200;
   const MAX_SCROLLS = 30;
-  const NORMAL_SCROLLS = 15;
+  const NORMAL_SCROLLS = 20;
   const KNOWN_STREAK = 3;
   const SWEEP_STREAK = 8;
   const OLD_STREAK = 3;
+  const EMPTY_STREAK = 5;
 
   function postKey(input) {
     const value = String(input || "").trim();
@@ -125,7 +126,7 @@
    * Feed the posts parsed after one screen, in page order. Returns the reason to stop or "".
    * - seen: knownStreak known posts in a row (a pinned/featured known post alone never stops the run)
    * - old:  OLD_STREAK dated posts in a row older than the run window (one out-of-order old post does not stop it)
-   * - end:  three screens in a row showed nothing new
+   * - end:  EMPTY_STREAK screens in a row showed nothing new
    * - cap:  the sane upper bound of fresh posts for one run
    * - limit: the scroll budget for this mode is used up (caller checks run.steps)
    */
@@ -166,7 +167,7 @@
     if (!stop) {
       if (!newly) {
         run.emptySteps += 1;
-        if (run.emptySteps >= 3) stop = "end";
+        if (run.emptySteps >= EMPTY_STREAK) stop = "end";
       } else run.emptySteps = 0;
     }
     if (!stop && run.steps > run.maxScrolls) {

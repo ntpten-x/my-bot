@@ -59,7 +59,11 @@ chrome.storage.onChanged.addListener((changes, area) => {
 chrome.permissions.onAdded.addListener(() => void syncCustomBridge());
 
 function headers(token) {
-  return { authorization: `Bearer ${token}`, "content-type": "application/json" };
+  return {
+    authorization: `Bearer ${token}`,
+    "content-type": "application/json",
+    "x-extension-version": chrome.runtime.getManifest().version,
+  };
 }
 
 function base(cfg) {
@@ -783,7 +787,7 @@ async function readFeed(reader, kind, plan, knownKeys, result) {
   const Scrape = globalThis.MyBotScrape;
   const tabId = reader.tabId;
   const run = Scrape.createRun({ knownKeys, ...plan });
-  const feedDeadline = Date.now() + 45_000;
+  const feedDeadline = Date.now() + 70_000;
   const remaining = cap => Math.max(0, Math.min(cap, feedDeadline - Date.now()));
   await waitComplete(tabId).catch(() => undefined);
   await injectReaders(tabId);
@@ -986,6 +990,11 @@ async function cycle() {
     const response = await getJson(cfg, "/api/v1/extension-config");
     if (!response.ok) return;
     const remote = await response.json();
+    if (remote.upgradeRequired || remote.scrapeAllowed === false) {
+      await setQuiet(`ต้องอัปเดตส่วนขยายเป็น ${remote.expectedVersion || "เวอร์ชันล่าสุด"}`);
+      await rememberError(remote.message || `ส่วนขยายเวอร์ชันนี้ถูกระงับการอ่าน — ใช้ ${remote.expectedVersion || "เวอร์ชันล่าสุด"}`).catch(() => undefined);
+      return;
+    }
     const reason = await quietReason(remote.quiet);
     await setQuiet(reason);
     if (reason) return;

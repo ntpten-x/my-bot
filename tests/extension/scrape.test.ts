@@ -89,7 +89,7 @@ describe("scroll scrape plan (extension/scrape.js)", () => {
     expect(scrape.runStats(capped)).toMatchObject({ hitLimit: true, reachedKnownPost: false });
   });
 
-  it("stops at the scroll budget and after three empty screens", () => {
+  it("stops at the scroll budget and after five empty screens", () => {
     const run = scrape.createRun({ maxScrolls: 2, now: NOW });
     expect(scrape.addStep(run, [post(1)])).toBe("");
     expect(scrape.addStep(run, [post(2)])).toBe("");
@@ -98,14 +98,16 @@ describe("scroll scrape plan (extension/scrape.js)", () => {
 
     const empty = scrape.createRun({ now: NOW });
     scrape.addStep(empty, [post(1)]);
-    expect(scrape.addStep(empty, [post(1)])).toBe("");
+    expect(scrape.addStep(empty, [post(1)])).toBe(""); // already seen → empty 1
+    expect(scrape.addStep(empty, [])).toBe("");
+    expect(scrape.addStep(empty, [])).toBe("");
     expect(scrape.addStep(empty, [])).toBe("");
     expect(scrape.addStep(empty, [])).toBe("end");
   });
 
   it("plans normal runs, hourly sweeps, 24 h catch-up and audits", () => {
     const recent = new Date(NOW - 10 * 60_000).toISOString();
-    expect(scrape.planRun({ now: NOW, group: { lastFetchedAt: recent, intervalMinutes: 15 }, lastSweepAt: NOW - 5 * 60_000 })).toMatchObject({ mode: "normal", knownStreak: 3, maxScrolls: 15, maxPosts: 200 });
+    expect(scrape.planRun({ now: NOW, group: { lastFetchedAt: recent, intervalMinutes: 15 }, lastSweepAt: NOW - 5 * 60_000 })).toMatchObject({ mode: "normal", knownStreak: 3, maxScrolls: 20, maxPosts: 200 });
     expect(scrape.planRun({ now: NOW, group: { lastFetchedAt: recent, intervalMinutes: 15 }, lastSweepAt: NOW - 61 * 60_000 })).toMatchObject({ mode: "sweep", maxScrolls: 30, maxAgeMs: 24 * 3600_000 });
     // Chrome was closed for 30 h: still capped at 24 h (owner rule).
     const closed = scrape.planRun({ now: NOW, group: { lastFetchedAt: new Date(NOW - 30 * 3600_000).toISOString(), lastSeenAt: new Date(NOW - 31 * 3600_000).toISOString() } });

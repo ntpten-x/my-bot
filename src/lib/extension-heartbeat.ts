@@ -4,7 +4,15 @@ import { upsertSettings } from "./settings";
 import { touchExtension } from "./extension-status";
 
 // Version this MY-BOT build expects from extension/manifest.json (tests keep the two in sync).
-export const EXPECTED_EXTENSION_VERSION = "1.10.10";
+export const EXPECTED_EXTENSION_VERSION = "1.10.11";
+
+export function isCurrentExtensionVersion(version: string | null | undefined) {
+  return String(version || "").trim() === EXPECTED_EXTENSION_VERSION;
+}
+
+export function extensionVersionFromRequest(request: Request) {
+  return String(request.headers.get("x-extension-version") || "").trim();
+}
 
 const FB_ID = /^\d{5,20}$/;
 
@@ -118,6 +126,10 @@ export async function recordHeartbeat(input: HeartbeatInput, deviceId?: string) 
   });
   // Forget installs that have been silent for 30 days.
   await prisma.extensionHeartbeat.deleteMany({ where: { lastSeenAt: { lt: new Date(Date.now() - 30 * 86400000) } } });
+  // When the current extension checks in, drop stale version rows so overview stays clean.
+  if (isCurrentExtensionVersion(row.version)) {
+    await prisma.extensionHeartbeat.deleteMany({ where: { version: { not: EXPECTED_EXTENSION_VERSION } } });
+  }
   await touchExtension();
   if (deviceId && input.runtime) await upsertSettings({ [`extension_runtime_${deviceId}`]: JSON.stringify({ ...input.runtime, fbUserId: row.fbUserId, at: now.toISOString() }) });
   return row;

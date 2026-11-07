@@ -19,5 +19,13 @@ export async function POST(request: Request) {
   if (!parsed.success) return withCors(json({ error: "รูปแบบข้อมูลไม่ถูกต้อง" }, 400));
   const deviceId = await verifyDeviceToken((request.headers.get("authorization") || "").replace(/^Bearer\s+/i, ""));
   await recordHeartbeat(parsed.data, deviceId || undefined);
-  return withCors(json({ ok: true, expectedVersion: EXPECTED_EXTENSION_VERSION }));
+  const current = parsed.data.version.trim() === EXPECTED_EXTENSION_VERSION;
+  return withCors(
+    json({
+      ok: true,
+      expectedVersion: EXPECTED_EXTENSION_VERSION,
+      scrapeAllowed: current,
+      upgradeRequired: !current,
+    }),
+  );
 }
