@@ -55,13 +55,25 @@
       if (!ownDraft && box.tagName === "TEXTAREA") {
         const setter = Object.getOwnPropertyDescriptor(view.HTMLTextAreaElement.prototype, "value")?.set;
         setter?.call(box, payload.message); box.dispatchEvent(new view.Event("input", { bubbles: true }));
-      } else if (!ownDraft && typeof doc.execCommand === "function") doc.execCommand("insertText", false, payload.message);
-      if (normalize(box.value ?? box.textContent) !== normalize(payload.message)) return { ok: false, outcome: "failed" };
+      } else if (!ownDraft && typeof doc.execCommand === "function") {
+        // A background tab can retain a selection outside the focused Lexical editor.
+        // Set the caret explicitly; never selectAll across the Facebook document.
+        const selection = doc.getSelection();
+        if (!selection) return { ok: false, outcome: "failed", reason: "selection_unavailable" };
+        const range = doc.createRange();
+        range.selectNodeContents(box); range.collapse(false);
+        selection.removeAllRanges(); selection.addRange(range);
+        try { doc.execCommand("insertText", false, payload.message); }
+        catch { return { ok: false, outcome: "failed", reason: "editor_insert_failed" }; }
+      }
+      // Let the controlled editor commit its input before inspecting the submit control.
+      if (!environment) await new Promise(resolve => setTimeout(resolve, 250));
+      if (normalize(box.value ?? box.textContent) !== normalize(payload.message)) return { ok: false, outcome: "failed", reason: "editor_text_not_accepted" };
       const buttons = Array.from(form.querySelectorAll('button,[role="button"]')).filter(el => {
         const label = normalize(el.getAttribute("aria-label") || el.textContent).toLowerCase();
         return visible(el) && !el.disabled && el.getAttribute("aria-disabled") !== "true" && /^(post a comment|post comment|comment|send|ส่ง|ส่งความคิดเห็น|แสดงความคิดเห็น)$/.test(label);
       });
-      if (buttons.length !== 1) return { ok: false, outcome: "failed" };
+      if (buttons.length !== 1) return { ok: false, outcome: "failed", reason: "submit_not_unique_or_ready" };
       memory.__mybotCommentSession = { id: payload.id, box, button: buttons[0], article, before: memory.__mybotCommentSession.before, message: payload.message, at: now(), clicked: false };
       return { ok: true };
     }

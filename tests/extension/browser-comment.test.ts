@@ -67,3 +67,20 @@ it("supports nested post dialogs sharing one composer without a permalink anchor
  expect((await action("prepare",payload,f.env)).ok).toBe(true);
  expect(f.click).not.toHaveBeenCalled(); f.dom.window.close();
 });
+
+it("places the selection inside the contenteditable before inserting text", async () => {
+  const f = fixture('<main role="main"><article role="article"><a href="/groups/12345/posts/8888/">post</a><form><div contenteditable="true" role="textbox" aria-label="Write a comment"><p><br></p></div><button type="button" aria-label="Comment">Comment</button></form></article></main>');
+  const box = f.doc.querySelector('[contenteditable]')!;
+  Object.defineProperty(f.doc, 'execCommand', { value: vi.fn((_command, _ui, text) => {
+    expect(box.contains(f.doc.getSelection()!.anchorNode)).toBe(true);
+    box.textContent = text; return true;
+  }) });
+  expect((await action('prepare', payload, f.env)).ok).toBe(true);
+  expect(f.click).not.toHaveBeenCalled(); f.dom.window.close();
+});
+it("fails without a false success when a controlled editor rejects input", async () => {
+  const f = fixture('<main><article role="article"><a href="/groups/12345/posts/8888/">post</a><form><div contenteditable="true" role="textbox" aria-label="Write a comment"></div><button aria-label="Comment">Comment</button></form></article></main>');
+  Object.defineProperty(f.doc, 'execCommand', { value: () => false });
+  expect(await action('prepare', payload, f.env)).toMatchObject({ ok: false, reason: 'editor_text_not_accepted' });
+  expect(f.click).not.toHaveBeenCalled(); f.dom.window.close();
+});
