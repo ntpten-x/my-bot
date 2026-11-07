@@ -436,6 +436,7 @@ async function readFullTexts(tabId, kind, urls) {
 
 // Wait (read-only) until the feed shows more posts or grows, using a MutationObserver in the page.
 async function waitForGrowth(tabId, kind, before, timeoutMs) {
+  if (timeoutMs <= 0) return { count: before || 0, grew: false, height: 0 };
   const [executed] = await chrome.scripting.executeScript({
     target: { tabId },
     args: [kind, before || 0, timeoutMs],
@@ -598,14 +599,15 @@ async function readFeed(reader, kind, plan, knownKeys, result) {
   const Scrape = globalThis.MyBotScrape;
   const tabId = reader.tabId;
   const run = Scrape.createRun({ knownKeys, ...plan });
-  const feedDeadline = Date.now() + 60_000;
+  const feedDeadline = Date.now() + 45_000;
+  const remaining = cap => Math.max(0, Math.min(cap, feedDeadline - Date.now()));
   await waitComplete(tabId).catch(() => undefined);
   await injectReaders(tabId);
-  let state = await waitForGrowth(tabId, kind, 0, 12000);
+  let state = await waitForGrowth(tabId, kind, 0, remaining(8000));
   if (!state.count) {
     run.stalls += 1;
-    await sleep(3000);
-    state = await waitForGrowth(tabId, kind, 0, 8000);
+    if (remaining(1500)) await sleep(remaining(1500));
+    state = await waitForGrowth(tabId, kind, 0, remaining(4000));
   }
   const first = await readPage(tabId, kind);
   if (first.identity) await rememberIdentity(first.identity);
@@ -616,14 +618,14 @@ async function readFeed(reader, kind, plan, knownKeys, result) {
     const before = state.count;
     const previousKeys = new Set((await readPage(tabId, kind)).posts?.map(post => postKey(post.url)).filter(Boolean) || []);
     await scrollOneScreen(tabId);
-    await sleep(Scrape.scrollWaitMs());
-    state = await waitForGrowth(tabId, kind, before, 6000);
+    await sleep(remaining(Scrape.scrollWaitMs()));
+    state = await waitForGrowth(tabId, kind, before, remaining(2500));
     const immediate = await readPage(tabId, kind);
     if ((immediate.posts || []).some(post => { const key = postKey(post.url); return key && !previousKeys.has(key); })) state.grew = true;
-    for (let retry = 0; !state.grew && retry < 2; retry += 1) {
+    for (let retry = 0; !state.grew && retry < 1 && remaining(1) > 0; retry += 1) {
       run.stalls += 1;
       await nudgeScroll(tabId);
-      state = await waitForGrowth(tabId, kind, before, 7000);
+      state = await waitForGrowth(tabId, kind, before, remaining(2500));
     }
     const page = await readPage(tabId, kind);
     stop = Scrape.addStep(run, page.posts);
@@ -712,6 +714,8 @@ async function scrapeGroup(cfg, group, remote, options) {
   return result;
 }
 async function processFullTextQueue(cfg, groups) {
+  const metrics = { at: Date.now(), tried: 0, succeeded: 0, failed: 0, remaining: 0, durationMs: 0 };
+  const detailDeadline = Date.now() + 60_000;
   const backlog = await loadFullTextBacklog();
   const now = Date.now();
   // Oldest due first; cap per group so a busy source cannot monopolize details.
@@ -719,7 +723,7 @@ async function processFullTextQueue(cfg, groups) {
   const due = Object.entries(backlog).filter(([, item]) => (item.after || 0) <= now)
     .sort((a, b) => (a[1].addedAt || 0) - (b[1].addedAt || 0));
   for (const [url, item] of due) {
-    if (fullTextBudget <= 0) break;
+    if (fullTextBudget <= 0 || Date.now() >= detailDeadline) break;
     const group = groups.find(g => g.id === item.groupId);
     if (!group || (used.get(group.id) || 0) >= 2) continue;
     const latest = await loadConfig(); if (latest.paused || latest.token !== cfg.token || base(latest) !== base(cfg)) break;
@@ -727,16 +731,25 @@ async function processFullTextQueue(cfg, groups) {
     let reader;
     try {
       reader = await openReader(url);
+      metrics.tried += 1;
       const read = await readFullTexts(reader.tabId, sourceKind(group), [url]);
       if (read.found.length) {
         await sendPosts(cfg, group.url, read.found.map(cleanPost));
+        metrics.succeeded += 1;
         delete backlog[url];
       } else {
+        metrics.failed += 1;
         item.tries = (item.tries || 0) + 1; item.after = Date.now() + Math.min(6 * 3600000, 60000 * 2 ** item.tries);
       }
       await saveFullTextBacklog(backlog);
+    } catch {
+      metrics.failed += 1;
+      item.tries = (item.tries || 0) + 1; item.after = Date.now() + 5 * 60_000;
+      await saveFullTextBacklog(backlog);
     } finally { await closeReader(reader); }
   }
+  metrics.remaining = Object.keys(backlog).length; metrics.durationMs = Date.now() - metrics.at;
+  await chrome.storage.local.set({ fullTextMetrics: metrics });
 }
 let cycling = false;
 const RUN_LOCK_MS = 12 * 60 * 1000;

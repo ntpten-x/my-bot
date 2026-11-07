@@ -37,3 +37,9 @@ Regression ผ่าน 61 files / 518 tests ไม่มี skip บนฐา�
 Tests ทั้งชุด 518 ผ่าน ก่อนเพิ่ม regression fairness อีกหนึ่งข้อ; regression full-text identity/fairness 2 ข้อผ่าน Lint ผ่าน การตรวจ key เป็นการปรับตัวอ่านเดิม ไม่ใช่หลักฐานว่าครอบคลุมทุก DOM Facebook ยังต้องวัด completeness และ soak test จริงหลัง deploy รอบนี้ไม่เปิดส่งจริง ไม่สร้างโพสต์ทดสอบบน Production และไม่อ้างว่าทดสอบ live comment ของรุ่นนี้แล้ว
 
 ผลตรวจสุดท้ายก่อนนำขึ้น master: `test:ci` ผ่าน 61 files / 519 tests ไม่มี skip; Lint และ Build ผ่าน ใช้ฐานทดสอบแยก ไม่มี migration ใหม่ในรอบนี้ หลัง auto-deploy ต้องดาวน์โหลด Extension ชุดใหม่และ Reload แม้ manifest ยังใช้เวอร์ชัน 1.10.0 เดิม จึงควรยึด commit ของแพ็กเกจร่วมตรวจด้วย
+
+## ปรับหลังวัดรอบ 80.7 วินาที
+
+ลดงบ feed เป็น 45 วินาทีและคำนวณเวลารอแต่ละช่วงจาก remaining budget ลด growth wait และ nudge retry เหลือหนึ่งครั้ง คิวรายละเอียดมีงบรอบแยก 60 วินาทีและ backoff เมื่อรายการหนึ่งล้มเหลว โดยไม่หยุดรายการทั้งหมด เพิ่ม fullTextMetrics (tried/succeeded/failed/remaining/durationMs) ใน popup ขีดจำกัดเป็น cooperative ระหว่าง Chrome API ไม่ใช่ hard cancellation จึงไม่รับรอง wall clock ไม่เกินตัวเลขดังกล่าวเมื่อ API ค้าง
+
+ทดสอบ 61 files / 519 tests ผ่าน ไม่มี skip; Lint ผ่าน ยังไม่ deploy หรือวัดเวลา Production ใหม่ในรอบนี้
