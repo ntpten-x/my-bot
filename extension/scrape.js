@@ -163,6 +163,29 @@
     return Number.isFinite(fallback) && fallback > 0 ? Math.floor(fallback) : 2;
   }
 
+  /** Deep / coverage recovery must unthrottle the reader tab — Facebook often paints 1 article otherwise. */
+  function shouldKeepAwake(plan, group) {
+    if (group && group.needsCoverage) return true;
+    return isDeepMode(plan && plan.mode);
+  }
+
+  /**
+   * Mid-feed pulse: while keepAwake and the feed is still thin, briefly foreground every 2 steps.
+   * Once several posts appear, stop pulsing so the owner keeps their tab.
+   */
+  function shouldPulseWake(input) {
+    const opts = input || {};
+    if (!opts.keepAwake) return false;
+    if ((opts.found || 0) >= MIN_FOUND_BEFORE_END) return false;
+    const steps = opts.steps || 0;
+    return steps > 0 && steps % 2 === 0;
+  }
+
+  /** Stable sort: needsCoverage groups first so serial cycles heal incomplete sources before healthy ones. */
+  function prioritizeCoverageDue(groups) {
+    return [...(groups || [])].sort((a, b) => Number(Boolean(b && b.needsCoverage)) - Number(Boolean(a && a.needsCoverage)));
+  }
+
   // Marketplace results sorted newest first; group feeds in chronological order. Read-only URL changes only.
   function scrapeUrl(url, kind) {
     const parsed = new URL(url);
@@ -280,7 +303,8 @@
 
   const api = {
     postKey, scrapeSettings, planRun, scrollBudget, feedBudgetMs, scrollWaitMs, scrapeUrl, createRun, addStep, emptyBudget, isShallowRun,
-    isDeepMode, shouldAbortDeadFeed, postWakeSettleMs, cycleParallel, runStats, cleanupText,
+    isDeepMode, shouldAbortDeadFeed, postWakeSettleMs, cycleParallel, shouldKeepAwake, shouldPulseWake, prioritizeCoverageDue,
+    runStats, cleanupText,
     MAX_SCROLLS, MIN_SCROLLS, KNOWN_STREAK, DEFAULT_SCREENS, MAX_SCREENS, MAX_POSTS_PER_RUN,
     EMPTY_STREAK, COLD_EMPTY_STREAK, MIN_FOUND_BEFORE_END,
   };

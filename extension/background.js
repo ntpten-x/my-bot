@@ -604,8 +604,8 @@ async function wakeReaderTab(reader, holdMs) {
   const prev = await chrome.tabs.query({ active: true, windowId: reader.windowId }).catch(() => []);
   const prevId = prev && prev[0] && prev[0].id !== reader.tabId ? prev[0].id : null;
   await chrome.tabs.update(reader.tabId, { active: true }).catch(() => undefined);
-  // Hold longer than before — Facebook needs a real foreground tick to hydrate articles.
-  await sleep(Math.max(900, Number(holdMs) || 1400));
+  // Hold long enough for Facebook to tick; mid-feed pulses may pass a shorter holdMs (~400).
+  await sleep(Math.max(350, Number(holdMs) || 1400));
   if (prevId !== null && prevId !== undefined) await chrome.tabs.update(prevId, { active: true }).catch(() => undefined);
 }
 
@@ -828,6 +828,8 @@ async function readFeed(reader, kind, plan, knownKeys, result, options = {}) {
   if (first.identity) await rememberIdentity(first.identity);
   if (first.groupId) result.groupId = first.groupId;
   result.sample = (first.posts || []).slice(0, 8);
+  const keepAwake = Boolean(options.keepAwake);
+  const pulseWake = typeof options.pulseWake === "function" ? options.pulseWake : null;
   let stop = Scrape.addStep(run, first.posts);
   while (!stop && Date.now() < feedDeadline) {
     // Dead feed: stop early so scrapeGroup can wake + reload instead of idling to the deadline.
@@ -836,6 +838,9 @@ async function readFeed(reader, kind, plan, knownKeys, result, options = {}) {
       stop = "end";
       run.stoppedBy = "end";
       break;
+    }
+    if (pulseWake && Scrape.shouldPulseWake({ keepAwake, found: run.found, steps: run.steps })) {
+      await pulseWake();
     }
     const before = state.count;
     const previousKeys = new Set((await readPage(tabId, kind)).posts?.map(post => postKey(post.url)).filter(Boolean) || []);
@@ -887,8 +892,16 @@ async function scrapeGroup(cfg, group, remote, options) {
     reader = await openReader(url);
     const win = reader.windowId !== undefined ? await chrome.windows.get(reader.windowId).catch(() => null) : null;
     const reading = { windowState: readerWindowState(win), reloaded: false, stallsFirst: 0, stallsRetry: 0, throttled: false };
+    const keepAwake = Scrape.shouldKeepAwake(plan, group);
+    const pulseWake = keepAwake ? () => wakeReaderTab(reader, 450) : null;
+    // Deep / coverage: wake before pass 1 so the first paint is not a single throttled article.
+    if (keepAwake) await wakeReaderTab(reader, 1600);
     // Pass 1 budget scales with scroll depth; incomplete/hitLimit → wake + reload + longer pass 2.
-    let run = await readFeed(reader, kind, plan, group.knownKeys || [], result, { budgetMs: Scrape.feedBudgetMs(plan, 1) });
+    let run = await readFeed(reader, kind, plan, group.knownKeys || [], result, {
+      budgetMs: Scrape.feedBudgetMs(plan, 1),
+      keepAwake,
+      pulseWake,
+    });
     reading.stallsFirst = run.stalls || 0;
     const statsProbe = Scrape.runStats(run);
     const needsRetry =
@@ -896,14 +909,18 @@ async function scrapeGroup(cfg, group, remote, options) {
       (statsProbe.hitLimit && !statsProbe.reachedKnownPost) ||
       (run.found === 0 && run.stalls >= 2);
     if (needsRetry && run.stoppedBy !== "seen" && run.stoppedBy !== "old") {
-      const deep = Scrape.isDeepMode(plan.mode);
+      const deep = Scrape.isDeepMode(plan.mode) || keepAwake;
       await wakeReaderTab(reader, deep ? 1800 : 1400);
       await chrome.tabs.reload(reader.tabId).catch(() => undefined);
       await sleep(Scrape.postWakeSettleMs(plan, 2));
       // Second short wake after reload — Chrome often re-throttles inactive tabs immediately.
       await wakeReaderTab(reader, deep ? 1600 : 1100);
       reading.reloaded = true;
-      const again = await readFeed(reader, kind, plan, group.knownKeys || [], result, { budgetMs: Scrape.feedBudgetMs(plan, 2) });
+      const again = await readFeed(reader, kind, plan, group.knownKeys || [], result, {
+        budgetMs: Scrape.feedBudgetMs(plan, 2),
+        keepAwake: true,
+        pulseWake: () => wakeReaderTab(reader, 450),
+      });
       reading.stallsRetry = again.stalls || 0;
       again.stalls += run.stalls;
       if (again.found >= run.found) run = again;
@@ -1058,14 +1075,16 @@ async function cycle() {
     const schedules = { ...cfg.schedules };
     // Local nextRunAt / in-flight lock always wins — prevents re-scraping every tick when server due is stale.
     const INFLIGHT_MS = 2 * 60 * 1000;
-    const due = (remote.groups || []).filter((group) => {
-      if (remote.serverScheduling && group.due === false) return false;
-      const until = schedules[group.id] || 0;
-      if (until > now) return false;
-      return true;
-    });
-    // Chrome throttled / coverage recovery → smaller batch + single-tab parallel. Otherwise up to PARALLEL_SCRAPE.
     const Scrape = globalThis.MyBotScrape;
+    const due = Scrape.prioritizeCoverageDue(
+      (remote.groups || []).filter((group) => {
+        if (remote.serverScheduling && group.due === false) return false;
+        const until = schedules[group.id] || 0;
+        if (until > now) return false;
+        return true;
+      }),
+    );
+    // Chrome throttled / coverage recovery → smaller batch + single-tab parallel. Otherwise up to PARALLEL_SCRAPE.
     const { throttledAt } = await chrome.storage.local.get({ throttledAt: 0 });
     const recentlyThrottled = Date.now() - throttledAt < 30 * 60 * 1000;
     const needsCoverageDue = due.some((group) => group.needsCoverage);

@@ -16,6 +16,9 @@ const scrape = require(path.resolve(__dirname, "../../extension/scrape.js")) as 
   shouldAbortDeadFeed(run: Run & { stalls?: number; steps?: number; mode?: string }): boolean;
   postWakeSettleMs(plan: { mode?: string }, pass: number): number;
   cycleParallel(input: { recentlyThrottled?: boolean; batch?: Array<{ needsCoverage?: boolean }>; defaultParallel?: number }): number;
+  shouldKeepAwake(plan: { mode?: string }, group: { needsCoverage?: boolean }): boolean;
+  shouldPulseWake(input: { keepAwake?: boolean; found?: number; steps?: number }): boolean;
+  prioritizeCoverageDue<T extends { id?: string; needsCoverage?: boolean }>(groups: T[]): T[];
   scrapeUrl(url: string, kind: string): string;
   createRun(opts: { knownKeys?: string[]; maxAgeMs?: number; maxPosts?: number; maxScrolls?: number; knownStreak?: number; mode?: string; now?: number }): Run & { stalls: number; steps: number; mode: string };
   planRun(opts: { now?: number; group?: Record<string, unknown>; lastSweepAt?: number; audit?: boolean; settings?: { screens: number; maxAgeMs: number; maxPosts: number } }): Plan;
@@ -194,6 +197,26 @@ describe("scroll scrape plan (extension/scrape.js)", () => {
     expect(scrape.cycleParallel({ recentlyThrottled: false, batch: [{ needsCoverage: false }], defaultParallel: 2 })).toBe(2);
     expect(scrape.cycleParallel({ recentlyThrottled: false, batch: [{ needsCoverage: true }, { needsCoverage: false }], defaultParallel: 2 })).toBe(1);
     expect(scrape.cycleParallel({ recentlyThrottled: true, batch: [], defaultParallel: 2 })).toBe(1);
+  });
+
+  it("keeps the reader awake for deep / needsCoverage runs and pulses while thin", () => {
+    expect(scrape.shouldKeepAwake({ mode: "catchup" }, {})).toBe(true);
+    expect(scrape.shouldKeepAwake({ mode: "normal" }, { needsCoverage: true })).toBe(true);
+    expect(scrape.shouldKeepAwake({ mode: "normal" }, {})).toBe(false);
+    expect(scrape.shouldPulseWake({ keepAwake: true, found: 1, steps: 2 })).toBe(true);
+    expect(scrape.shouldPulseWake({ keepAwake: true, found: 1, steps: 1 })).toBe(false);
+    expect(scrape.shouldPulseWake({ keepAwake: true, found: 5, steps: 4 })).toBe(false);
+    expect(scrape.shouldPulseWake({ keepAwake: false, found: 1, steps: 2 })).toBe(false);
+  });
+
+  it("orders coverage-needy groups ahead of healthy ones in a cycle", () => {
+    const ordered = scrape.prioritizeCoverageDue([
+      { id: "a", needsCoverage: false },
+      { id: "b", needsCoverage: true },
+      { id: "c", needsCoverage: false },
+      { id: "d", needsCoverage: true },
+    ]);
+    expect(ordered.map((g) => g.id)).toEqual(["b", "d", "a", "c"]);
   });
 
   it("catch-up stops on posts older than 24 h instead of reading further back", () => {
