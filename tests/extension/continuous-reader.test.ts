@@ -65,7 +65,7 @@ function harness(pages: Page[], local: Storage = {}, session: Storage = {}) {
     shouldAbortDeadFeed: scrape.shouldAbortDeadFeed, rememberIdentity: async () => {}, quietReason: async () => "",
     readerWindowState: () => "normal", openReader, loadScrapeWindow: async () => null,
     heartbeat: async () => {}, noteSweepAt: vi.fn(), updateFullTextBacklog: async (fn: (data: Storage) => void) => fn({}),
-    rememberError: async (message: string) => errors.push(message), reportRun: async () => null, countSent: async () => {},
+    rememberError: async (message: string) => errors.push(message), reportRun: vi.fn(async () => null), countSent: async () => {},
     RETRY_STATUS: new Set([408, 429, 503]),
     postJson: async (_cfg: unknown, path: string, body: Storage) => {
       if (path !== "/api/v1/ingest") return { ok: true };
@@ -78,17 +78,22 @@ function harness(pages: Page[], local: Storage = {}, session: Storage = {}) {
       return { ok: true, status: 200, json: async () => ({ batchId: body.batchId, receipts, inserted: receipts.length }) };
     },
   });
+  // Pure helpers must share the VM clock, so dated fixtures do not age with wall time.
+  vm.runInContext(readFileSync("extension/scrape.js", "utf8"), context);
+  vm.runInContext(readFileSync("extension/focus.js", "utf8"), context);
   vm.runInContext(source.slice(source.indexOf("const OUTBOX_MAX ="), source.indexOf("async function countSent")), context);
   vm.runInContext(source.slice(source.indexOf("async function closeOrphanReaders("), source.indexOf("async function openReader(")), context);
   vm.runInContext(source.slice(source.indexOf("function sameReaderUrl("), source.indexOf("// Scroll and read one feed")), context);
   vm.runInContext(source.slice(source.indexOf("async function readFeed("), source.indexOf("async function processFullTextQueue(")), context);
   return {
     local, session, tabs, accepted, sent, events, errors, openReader, reload,
+    reports: context.reportRun as ReturnType<typeof vi.fn>,
     pause: () => { paused = true; }, offline: (value: boolean) => { offline = value; }, rejectOutbox: (value: boolean) => { rejectOutbox = value; },
     slowSleep: (value = 100_000) => { sleepJump = value; },
     onReload: (value: Page[]) => { reloadPages = value; },
     now: () => now,
-    run: (target = group, options = {}) => (context.scrapeGroup as any)(cfg, target, {}, options),
+    advance: (ms: number) => { now += ms; },
+    run: (target = group, options = {freshness:false}) => (context.scrapeGroup as any)(cfg, target, {}, options),
     recover: () => (context.closeOrphanReaders as any)(),
     flush: () => (context.flushOutbox as any)(cfg),
   };
@@ -212,6 +217,65 @@ describe("continuous read-only collection", () => {
     expect(h.reload).not.toHaveBeenCalled();
   });
 
+  it("checks fresh head posts without losing the parked historical cursor", async () => {
+    const pages = Array.from({length:100}, (_, i) => ({posts:[post(i*3+1),post(i*3+2),post(i*3+3)]}));
+    const h = harness(pages);
+    await h.run(group, {freshness:true});
+    const historical = [...h.tabs.values()][0];
+    const cursor = historical.cursor;
+    pages[0] = {posts:[post(999),post(1),post(2)]};
+    h.advance(61_000);
+    const started=h.now();
+    await h.run(group, {freshness:true});
+    expect(h.now()-started).toBeLessThanOrEqual(45_000);
+    expect(h.reports).toHaveBeenCalledTimes(2); // Latest checks never replace coverage reports.
+    expect(h.accepted.has("p:999")).toBe(true);
+    expect(h.tabs.get(historical.id)?.cursor).toBeGreaterThan(cursor);
+    expect(h.openReader).toHaveBeenCalledTimes(2);
+    expect(Object.values(h.session.readers).filter((r:any)=>r.continuation)).toHaveLength(1);
+  });
+
+  it("keeps a history turn when the available deadline cannot fit both lanes", async () => {
+    const pages=Array.from({length:100},(_,i)=>({posts:[post(i*3+1),post(i*3+2),post(i*3+3)]}));
+    const h=harness(pages); await h.run(group,{freshness:true}); h.advance(61_000);
+    const tab=[...h.tabs.values()][0]; const before=tab.cursor;
+    await h.run(group,{freshness:true,deadlineMs:h.now()+25_000});
+    expect(h.openReader).toHaveBeenCalledTimes(1);
+    expect(tab.cursor).toBeGreaterThan(before);
+  });
+  it("does not reopen the latest feed on every continuation tick", async () => {
+    const h=harness(Array.from({length:100},(_,i)=>({posts:[post(i*3+1),post(i*3+2),post(i*3+3)]})));
+    await h.run(group,{freshness:true});
+    await h.run(group,{freshness:true});
+    expect(h.openReader).toHaveBeenCalledTimes(1);
+  });
+  it("preserves latest captures after failed outbox writes and a full restart", async () => {
+    const pages=Array.from({length:100},(_,i)=>({posts:[post(i*3+1),post(i*3+2),post(i*3+3)]}));
+    const h=harness(pages); await h.run(group,{freshness:true});
+    pages[0]={posts:[post(999),post(1),post(2)]}; h.advance(61_000); h.rejectOutbox(true);
+    expect((await h.run(group,{freshness:true})).ok).toBe(false);
+    expect(Object.values(h.local.headRecovery).flatMap((r:any)=>r.pending).some((p:any)=>p.url.endsWith('/999'))).toBe(true);
+    expect(Object.values(h.session.readers).filter((r:any)=>r.continuation)).toHaveLength(1);
+    const restarted=harness([{posts:[post(800),post(801),post(802)]}],h.local);
+    await restarted.run();
+    expect(restarted.accepted.has('p:999')).toBe(true);
+    expect(restarted.local.headRecovery).toEqual({});
+  });
+  it("looks past known pinned head posts to capture newly inserted posts", async () => {
+    const pages=Array.from({length:100},(_,i)=>({posts:[post(i*3+1),post(i*3+2),post(i*3+3)]}));
+    const h=harness(pages); await h.run(group,{freshness:true});
+    pages[1]={posts:[post(999),post(4),post(5)]}; h.advance(61_000);
+    await h.run({...group,knownKeys:['p:1','p:2','p:3']},{freshness:true});
+    expect(h.accepted.has('p:999')).toBe(true);
+    expect(h.sent.filter(id=>id===999)).toHaveLength(1);
+  });
+
+  it("yields discovery while a comment owns focus without reading another DOM snapshot",async()=>{
+    const h=harness([{posts:[post(1),post(2),post(3)]}]);
+    h.session.commentFocusLease={owner:'comment',until:NOW+60000};
+    const result=await h.run();
+    expect(result.stoppedBy).toBe('yield');expect(h.accepted.size).toBe(0);expect(h.events).not.toContain('scroll');
+  });
   it("honors pause before a resumed reader observes more posts", async () => {
     const h = harness(Array.from({length:50}, (_, i) => ({posts:[post(i*3+1),post(i*3+2),post(i*3+3)]})));
     await h.run(); const before = h.accepted.size;

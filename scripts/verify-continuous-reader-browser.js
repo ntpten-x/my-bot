@@ -9,12 +9,17 @@ async (page) => {
   await page.addScriptTag({ path: 'extension/background.js', type: 'text/plain' });
   const result = await page.evaluate(async () => {
     const source = document.querySelector('script[type="text/plain"]').textContent;
-    const helpers = source.slice(source.indexOf('async function waitForGrowth('), source.indexOf('/** Briefly activate'));
+    const helpers = source.slice(source.indexOf('async function waitForGrowth('), source.indexOf('/** Activate only'));
     const pageReader = source.slice(source.indexOf('async function executeReaderScript('), source.indexOf('async function scrapeSettingsFor('));
     const root = globalThis;
     // The executeScript transport runs the actual injected functions on this isolated document.
     root.chrome = { scripting: { executeScript: async ({func, args}) => [{ result: await func(...(args || [])) }] } };
-    const api = new Function(`${helpers}\n${pageReader}\nreturn {waitForGrowth,readPage,scrollOneScreen};`)();
+    const api = new Function(`
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+${helpers}
+${pageReader}
+return {waitForGrowth,readPage,scrollOneScreen};
+`)();
     const render = ids => {
       document.querySelector('#feed').innerHTML = ids.map(id => `<article role="article"><a href="https://www.facebook.com/groups/12345/posts/${id}/">2 hours ago</a><div data-ad-preview="message">SYNTHETIC ตามหาช่างซ่อมแอร์ เบอร์ตัวอย่าง ${id}</div></article>`).join('');
     };

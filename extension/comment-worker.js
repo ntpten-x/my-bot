@@ -21,17 +21,25 @@
     };
     try {
       cfg = await deps.loadConfig();
-      const local = await chrome.storage.local.get({ browserCommentsEnabled: false, commentJournal: null });
-      if (!local.browserCommentsEnabled || cfg.paused || cfg.accountPaused || !String(cfg.token).startsWith("mbd_") || local.commentJournal) return;
+      const local = await chrome.storage.local.get({ commentJournal: null });
+      if (cfg.accountPaused || !String(cfg.token).startsWith("mbd_") || local.commentJournal) return;
+      if (await root.MyBotFocus.blocked()) return;
       const fbUserId = await deps.currentFbUserId(); if (!fbUserId) return;
       job = (await request({ action: "claim", fbUserId })).job; if (!job) return;
       await chrome.storage.local.set({ commentJournal: { id: job.id, claimToken: job.claimToken, apiBase: deps.base(cfg), state: "claimed", at: Date.now() } });
+      if (!await root.MyBotFocus.take(job.id)) { await report("not_sent"); return; }
       const tab = await chrome.tabs.create({ url: job.externalUrl, active: true }); tabId = tab.id;
       await deps.waitComplete(tabId);
       if (tab.windowId !== undefined) await chrome.windows.update(tab.windowId, { focused: true });
       const execute = async (kind, payload = {}) => {
-        const result = await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, func: root.MyBotBrowserComment.action, args: [kind, { ...job, ...payload }] });
-        return result[0]?.result || { ok: false, outcome: "failed" };
+        let timer;
+        try {
+          const result = await Promise.race([
+            chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, func: root.MyBotBrowserComment.action, args: [kind, { ...job, ...payload }] }),
+            new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("comment page did not respond")), 5000); }),
+          ]);
+          return result[0]?.result || { ok: false, outcome: "failed" };
+        } finally { clearTimeout(timer); }
       };
       let prepared;
       for (let attempt = 0; attempt < 8; attempt++) {
@@ -42,16 +50,15 @@
       if (!prepared?.ok) { await report(prepared?.outcome === "blocked" ? "blocked" : "failed"); return; }
       job.baseline = prepared.baseline; job.profiles = prepared.profiles || [];
       const latest = await deps.loadConfig();
-      const enabled = await chrome.storage.local.get({ browserCommentsEnabled: false });
-      if (latest.paused || latest.accountPaused || !enabled.browserCommentsEnabled || deps.base(latest) !== deps.base(cfg) || latest.token !== cfg.token) { await report("failed"); return; }
+      if (latest.accountPaused || deps.base(latest) !== deps.base(cfg) || latest.token !== cfg.token) { await report("failed"); return; }
       // This phase cannot invoke send. Recovery can report definite non-delivery even if authorization is lost.
       const started = Date.now();
       await chrome.storage.local.set({ commentJournal: { id: job.id, claimToken: job.claimToken, apiBase: deps.base(cfg), state: "authorizing", at: started, job: { ...job, sentAt: started } } });
       authorizationRequested = true;
       const grant = (await request({ action: "authorize", id: job.id, claimToken: job.claimToken, fbUserId })).grant;
       if (!grant || Date.now() - started >= grant.ttlMs) { await report("not_sent"); return; }
-      const finalConfig = await deps.loadConfig(), finalFlags = await chrome.storage.local.get({ browserCommentsEnabled: false });
-      if (finalConfig.paused || finalConfig.accountPaused || !finalFlags.browserCommentsEnabled || finalConfig.token !== cfg.token || deps.base(finalConfig) !== deps.base(cfg)) { await report("not_sent"); return; }
+      const finalConfig = await deps.loadConfig();
+      if (finalConfig.accountPaused || finalConfig.token !== cfg.token || deps.base(finalConfig) !== deps.base(cfg)) { await report("not_sent"); return; }
       // Persist ambiguity BEFORE executing the click; after this point no automatic resend is allowed.
       await chrome.storage.local.set({ commentJournal: { id: job.id, claimToken: job.claimToken, apiBase: deps.base(cfg), state: "sending", at: started, job: { ...job, sentAt: started } } });
       sendInvoked = true;
@@ -70,6 +77,7 @@
     } finally {
       // A failed report stays durable; the next recovery retries that report, never the send.
       if (tabId !== undefined) await chrome.tabs.remove(tabId).catch(() => undefined);
+      if (job) await root.MyBotFocus.release(job.id).catch(() => undefined);
       busy = false;
     }
   }

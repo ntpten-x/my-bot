@@ -6,7 +6,7 @@ vi.mock("../../src/lib/guard", () => ({ authed: mocks.auth }));
 vi.mock("../../src/lib/auth", () => ({ requireExtensionToken: mocks.extensionAuth }));
 vi.mock("../../src/lib/scrape-runs", () => ({ buildExtensionConfig: mocks.config }));
 vi.mock("../../src/lib/ingest", () => ({ ingestPosts: mocks.ingest }));
-vi.mock("../../src/lib/extension-heartbeat", () => ({ EXPECTED_EXTENSION_VERSION: "1.11.4", extensionVersionFromRequest: () => "1.11.4", isCurrentExtensionVersion: () => true, countCapturedPosts: vi.fn(), noteBadExtensionToken: vi.fn() }));
+vi.mock("../../src/lib/extension-heartbeat", () => ({ EXPECTED_EXTENSION_VERSION: "1.11.9", extensionVersionFromRequest: () => "1.11.9", isCurrentExtensionVersion: () => true, countCapturedPosts: vi.fn(), noteBadExtensionToken: vi.fn() }));
 import { accountPresence, facebookWorkAllowed, ACCOUNT_PAUSE_PREFIX } from "../../src/lib/facebook-accounts";
 import { GET } from "../../src/app/api/facebook-accounts/route";
 import { PATCH } from "../../src/app/api/facebook-accounts/[id]/route";
@@ -63,7 +63,7 @@ it("withholds group schedules and ingest acknowledgments for a paused account", 
 it("separates online presence, owner pause, and local pause in the account list", async () => {
   const now = new Date();
   mocks.accounts.mockResolvedValue([{ id: "12345", name: "บัญชีทดสอบ", browser: "Chrome", profileLabel: "", lastSeenAt: now, firstSeenAt: now, postsCaptured: 10 }]);
-  mocks.installs.mockResolvedValue([{ id: "install1", fbUserId: "12345", fbLoggedIn: true, enabled: true, lastSeenAt: now, version: "1.11.4" }]);
+  mocks.installs.mockResolvedValue([{ id: "install1", fbUserId: "12345", fbLoggedIn: true, enabled: true, lastSeenAt: now, version: "1.11.9" }]);
   mocks.settings.mockResolvedValue([{ key: `${ACCOUNT_PAUSE_PREFIX}12345` }]);
   const response = await GET(); expect(response.headers.get("cache-control")).toBe("no-store");
   expect((await response.json()).accounts[0]).toMatchObject({ enabled: false, connected: true, status: "paused", localEnabled: true });

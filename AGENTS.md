@@ -62,6 +62,8 @@ Done when `npm run doctor` has no FAIL, `GET http://127.0.0.1:8001/api/v1/health
 | `npm run start:prod` | Production web + worker (`node scripts/start-all.mjs --prod`) |
 | `npm test` / `npm run build` | Tests, then Prisma generate and Next build |
 | `npm run doctor` | Local health report |
+| `npm run browser:desktop` | WSL virtual display; `--password` is interactive owner input, `--check` is read-only |
+| `npm run browser:bot` | Launch isolated persistent Chrome profile on the bot workstation; docs/BOT-WORKSTATION.th.md |
 | `npm run db:migrate` | `prisma migrate deploy` |
 | `npm run db:seed` | Categories, keywords, demo source (disabled) |
 | `npm run db:backfill-ai` | Enqueue posts still on rules. The worker classifies them |
@@ -108,6 +110,10 @@ Restart the app (or the Startup launcher). Then, if older posts need it: `npm ru
 
 ## Hard rules
 
+- `data/bot-desktop/` and `data/desktop-browser-profile/` contain X/VNC authority and browser credentials. Keep ignored. `browser:desktop` runs an authenticated loopback virtual desktop in WSL/Linux; never expose ports 5905/6085 beyond localhost, disable sandbox, or enable comments as part of setup. See docs/SINGLE-PC-BOT.th.md.
+
+- `data/browser-profile/` contains Chrome cookies, sessions and paired-device credentials. Keep it ignored; never print, commit or include it in general backups. `browser:bot` is a manual launcher, not a headless runtime or permission to enable comments.
+
 - Commit `.env.example` only. Leave `.env`, `data/*.db`, `data/*.log`, `data/backups/`, and `*.traineddata` untracked.
 - The extension reads posts the owner can already see and POSTs them to this app. Per the latest owner instruction, optional browser comment delivery uses visible UI only, with per-rule consent, pinned device/account, Dry Run, quotas, durable sending and no ambiguous retries. It never calls private GraphQL, bypasses CAPTCHA/checkpoints or posts outside the configured group allowlist. See docs/BROWSER-COMMENTS.th.md.
 - **Scrape scheduling (v1.11.0)** — `GET /api/v1/extension-config` (`src/lib/scrape-runs.ts`) returns enabled `facebook_group` + `facebook_marketplace` sources with due/knownKeys and scroll settings. Hints cover every due source, bounded to 300 rows/source and 4 concurrent queries. Priority defaults remain สูง/ปกติ/ต่ำ = 3/10/30 min. `max_posts_per_run` (5–200) is now a durable batch threshold, not a stop cap; transport batches stay ≤40. The extension scrolls with `scrollTop` only (no clicks or Facebook APIs), sends during discovery, checkpoints pending posts locally per server/account, and keeps the DOM cursor in a dedicated reader tab on time/scroll yield. Limit/cap/yield are incomplete and enqueue continuation in ~30 seconds, subject to quiet settings and other groups. Active reads stay ≤2, or 1 while throttled/coverage; parked cursors stay ≤20, overflow readers release their temporary tabs on yield without evicting existing cursors. MV3 restarts adopt saved readers; full Chrome restart/discard uses the durable recovery flag and pending posts. Deep catchup/sweep/audit never stop on known head posts; old boundaries require 12 ordered old dates in deep modes. No growth is verified with a wake/nudge before `exhausted`; loading/stalled remain incomplete with normal retry spacing. Group ordering interleaves normal sources and ages overdue ones. Full-text runs after discovery. Overview metrics include capture rate, incomplete/error slices, pending age and overdue sources, scoped to the expected extension version. Pure logic: `src/lib/scrape-plan.ts`, `src/lib/scrape-hints.ts`, `extension/scrape.js`; post keys must stay identical. See `docs/SCRAPE-FIXES.th.md` for verification and recovery limits.
@@ -130,3 +136,7 @@ Current runtime uses Extension v1.9.0 delivery per the owner's latest instructio
 
 
 Owner-enabled server-side Graph API comments live in `src/lib/auto-comment`, `/api/auto-comment`, and `/auto-comment`. Default is stopped with live-only delivery per the latest owner instruction. The UI and public control API cannot enable Dry Run; internal legacy simulation remains only for regression tests. Never auto-start or convert historical simulated jobs into live jobs. Only worker consumes jobs. Allow only verified Page-owned published posts through official API; groups/Marketplace remain unsupported drafts. Collector and assisted replies stay read-only; only the separately opted-in browser comment worker may click a verified comment submit button. Keep durable sending markers, global control locks, generation/revision fencing and unique live post keys; ambiguous sends must never auto-retry. Backup includes all four AutoComment tables and Restore must disable automation. See `docs/AUTO-COMMENT.th.md` for capability limits, safe rollout, rollback and validation. Tests must use mock Meta transport and disposable TEST_DATABASE_URL, never actual comment sends.
+
+## Central comment control (extension 1.11.9)
+
+Per the owner instruction, paired device tokens make the extension eligible to claim comments automatically. The obsolete local browserCommentsEnabled flag no longer gates delivery. Server control/rule consent, pinned device/account, allowlist, quotas and final authorize remain mandatory. The popup collection pause only affects collection; stop comments from /auto-comment or account pause. This change is not permission to grant Chrome host permissions silently or bypass browser/Facebook restrictions.

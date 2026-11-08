@@ -42,7 +42,7 @@ export async function automationReadiness() {
     { key: "extension", title: "จับคู่ Extension", ready: extensions.some(row => row.online), detail: "ติดตั้งส่วนขยายรุ่นที่หน้าเว็บระบุ เปิด Chrome และจับคู่กับ HTTPS ของเซิร์ฟเวอร์", href: "/settings/extension" },
     { key: "facebook", title: "Facebook บนเครื่องอ่าน", ready: extensions.some(row => row.online && row.fbUserId), detail: "ล็อกอินเองใน Chrome ข้อมูลนี้เป็น heartbeat ไม่ใช่การรับรองสิทธิ์ของกลุ่ม", href: "/overview" },
     { key: "sources", title: "กลุ่มเป้าหมาย", ready: sources.some(row => row.enabled && row.type === "facebook_group"), detail: "เลือกกลุ่มที่ได้รับอนุญาต ตั้งรอบอ่าน และตรวจผลเก็บโพสต์", href: "/sources" },
-    { key: "comments", title: "เครื่องส่งคอมเมนต์", ready: extensions.some(row => row.online && row.commentsEnabled && row.fbUserId), detail: "เปิดสวิตช์รับงานใน Extension แล้วผูกกฎกับอุปกรณ์/บัญชีนี้ ทดลอง Dry Run ก่อน", href: "/auto-comment" },
+    { key: "comments", title: "เครื่องส่งคอมเมนต์", ready: extensions.some(row => row.online && row.commentsEnabled && row.fbUserId), detail: "จับคู่ส่วนขยายรุ่นล่าสุด แล้วเลือกอุปกรณ์และบัญชีในหน้าคอมเมนต์อัตโนมัติ เปิดกฎและเริ่มส่งจริงจากหน้าเดียว", href: "/auto-comment" },
   ];
   return { generatedAt: new Date(now).toISOString(), steps, extensions, accounts: accounts.map(account => ({ ...account, enabled: map.get(`facebook_account_paused_${account.id}`) !== "1" })), control, legacySecrets,
     counts: Object.fromEntries(counts.map(row => [row.status, row._count])),

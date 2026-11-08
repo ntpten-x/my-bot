@@ -32,6 +32,13 @@ export default function GuidePage() {
           คู่มือฉบับเต็มอยู่ที่ docs/SETUP.th.md หน้านี้สรุปขั้นตอนและตรวจเครื่องที่กำลังรันอยู่ โดยไม่แสดงคีย์ลับ
         </p>
       </div>
+      <Card className="space-y-2">
+        <h2 className="font-semibold">ทำงานต่อเนื่องบนเครื่องบอท</h2>
+        <p className="text-sm text-muted">หากมีเครื่องเดียวและใช้ WSL ให้รัน <code>npm run browser:desktop</code> เพื่อเปิดเบราว์เซอร์บอทบนจอเสมือน ควบคุมได้ที่ localhost:6085 แล้วปิดหรือย่อ viewer ได้โดยให้โปรเซส WSL ทำงานต่อ ต้องตั้งรหัส viewer ล็อกอิน Facebook และจับคู่ส่วนขยายครั้งแรก ดู docs/SINGLE-PC-BOT.th.md</p>
+        <p className="text-sm text-muted">เพื่อความเสถียร ให้ Chrome และส่วนขยายทำงานบนเครื่องเฉพาะที่เปิดเดสก์ท็อปและหน้าต่างบอทค้างไว้ ส่วนคุณใช้ MY-BOT จากเครื่องส่วนตัว การย่อ Chrome เครื่องส่วนตัวจึงไม่กระทบเครื่องบอท หากใช้ VM ต้องตรวจว่าการโหลด Facebook ยังคืบหน้าเมื่อย่อหรือออกจากหน้าจอควบคุม</p>
+        <p className="text-sm text-muted">บนเครื่องบอท รัน <code>npm run browser:bot</code> เพื่อเปิดโปรไฟล์เฉพาะ แล้วล็อกอิน Facebook โหลดส่วนขยายและจับคู่อุปกรณ์ใหม่ หากเว็บอยู่คนละเครื่อง ต้องใช้ URL HTTPS ที่เครื่องบอทเข้าถึงได้ ดูขั้นตอนใน docs/BOT-WORKSTATION.th.md</p>
+        <p className="text-sm text-muted">โปรไฟล์แยกบนเครื่องเดิมยังไม่แยกหน้าจอ และไม่แก้ข้อจำกัดเมื่อย่อหน้าต่าง การเตรียมนี้ไม่เปิดกฎส่งคอมเมนต์ให้อัตโนมัติ</p>
+      </Card>
       <Card>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="font-semibold">ตรวจระบบบนเครื่องนี้</h2>

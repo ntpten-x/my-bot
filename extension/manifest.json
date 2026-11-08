@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MY-BOT Lead Radar",
-  "version": "1.11.4",
+  "version": "1.11.9",
   "description": "อ่านโพสต์กลุ่มและ Marketplace ส่งเข้า MY-BOT และคอมเมนต์ผ่านหน้าจอ Facebook เฉพาะกฎที่เจ้าของเปิดและอุปกรณ์ที่อนุญาต ค่าเริ่มต้นไม่ส่ง รองรับโควตา และหยุดเมื่อพบข้อจำกัด ไม่ใช้ private API",
   "permissions": [
     "storage",

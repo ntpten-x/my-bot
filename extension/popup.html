@@ -32,10 +32,12 @@
       <input id="enabled" type="checkbox" style="width:auto" />
       <label for="enabled" style="margin:0">ดึงข้อมูลอัตโนมัติเบื้องหลัง (ติ๊กออก = พัก)</label>
     </div>
-    <p style="margin-top:6px;font-size:12px">จับคู่แล้วเปิด facebook.com ค้างไว้ใน Chrome โปรไฟล์นั้น — ระบบอ่านจากหน้าต่าง Facebook ที่เชื่อมไว้ (แท็บพื้นหลัง สูงสุด 2 พร้อมกัน) ไม่เปิดหน้าต่างใหม่ ไม่แย่งแท็บที่คุณกำลังดู อย่าย่อหน้าต่างทั้งบาน</p>
+    <p style="margin-top:6px;font-size:12px">จับคู่แล้วเปิด facebook.com ค้างไว้ใน Chrome โปรไฟล์นั้น — ระบบเปิดหน้าต่างอ่านข้อมูลแยกโดยไม่ดึงโฟกัส (สูงสุด 2 แท็บทำงานพร้อมกัน) คุณใช้ MY-BOT ต่อได้ ตรวจโพสต์ล่าสุดสลับกับอ่านย้อนหลัง ไม่ยืมแท็บส่วนตัว อย่าย่อหน้าต่างบอททั้งบาน หากย่อหรือ Facebook โหลดช้า ระบบจะอ่านต่อรอบถัดไปโดยไม่แย่งหน้าจอ</p>
+    <div class="row"><input id="dedicatedReaderDesktop" type="checkbox" style="width:auto" /><label for="dedicatedReaderDesktop" style="margin:0">ใช้จอเฉพาะสำหรับบอท</label></div>
+    <p style="font-size:12px">เปิดเฉพาะในจอเสมือนหรือเครื่องบอท ระบบจะโฟกัสหน้าต่างอ่านเพื่อให้ Facebook โหลดต่อได้ หากเปิดใน Chrome ส่วนตัวอาจรบกวนหน้าจอ ค่าเริ่มต้นปิด ไม่เกี่ยวกับสิทธิ์ส่งคอมเมนต์</p>
     <button id="save" class="ghost">บันทึก</button>
-    <div class="row"><input id="browserComments" type="checkbox" style="width:auto" /><label for="browserComments" style="margin:0">อนุญาตรับงานคอมเมนต์อัตโนมัติบนเครื่องนี้</label></div>
-    <p style="font-size:12px">ค่าเริ่มต้นปิด ต้องเปิดกฎและปิด Dry Run บนเว็บด้วย พบ Checkpoint หรือผลไม่ชัดเจนจะหยุด ไม่ส่งซ้ำอัตโนมัติ ปิดสวิตช์นี้เพื่อหยุดรับงานใหม่</p>
+    <p style="font-size:12px">จับคู่แล้วพร้อมรับงานคอมเมนต์ตามที่เปิดในเว็บ จัดการกฎ ข้อความ บัญชี อุปกรณ์ โควตา และหยุดส่งที่หน้าคอมเมนต์อัตโนมัติของ MY-BOT</p>
+    <p style="font-size:12px">ค่าเริ่มต้นปิด ต้องเปิดกฎและเลือกอุปกรณ์นี้บนเว็บด้วย พบ Checkpoint หรือผลไม่ชัดเจนจะหยุด ไม่ส่งซ้ำอัตโนมัติ ปิดสวิตช์นี้เพื่อหยุดรับงานใหม่</p>
     <button id="clearCommentJournal" class="ghost">ปลดล็อกบนเครื่องหลังตรวจผลเองแล้ว</button>
     <details>
       <summary>โทเคนแบบเดิม (ใช้ได้เฉพาะแอปบนเครื่อง localhost)</summary>

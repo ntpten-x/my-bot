@@ -151,7 +151,7 @@ describe("extension safety policy", () => {
       commands: Record<string, { suggested_key?: { default?: string } }>;
       permissions: string[];
     };
-    expect(manifest.version).toBe("1.11.4");
+    expect(manifest.version).toBe("1.11.9");
     expect(manifest.permissions).not.toContain("cookies");
     expect(manifest.permissions).not.toContain("webRequest");
     expect(Object.keys(manifest.commands).sort()).toEqual(["mark-sent", "mark-skip"]);
@@ -176,10 +176,10 @@ describe("extension safety policy", () => {
     expect(src).toMatch(/await injectReaders\(tabId\)/);
   });
 
-  it("reads inside the connected Facebook Chrome window without a second popup", () => {
+  it("isolates collection in an unfocused normal Chrome window", () => {
     const src = code("background.js");
     expect(src).toMatch(/findOwnerWindowId/);
-    expect(src).toMatch(/host:\s*["']owner["']/);
+    expect(src).toMatch(/host:\s*["']reader["']/);
     expect(src).toMatch(/previousUrl/);
     expect(src).toMatch(/isFacebookTab\(tab\)/);
     expect(src).toMatch(/active:\s*false/);

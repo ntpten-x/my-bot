@@ -64,3 +64,10 @@ agent-tools/
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Dedicated bot browser: cookies, sessions and paired device credentials
+/data/browser-profile/
+
+# Isolated virtual desktop: X authority, VNC password, Chrome sessions
+/data/bot-desktop/
+/data/desktop-browser-profile/

@@ -4,7 +4,7 @@ import { expect, it } from "vitest";
 it("never relabels an unrelated article as the requested full-text post", async () => {
  const source=readFileSync("extension/background.js","utf8");
  const context=vm.createContext({Date,fullTextBudget:10,FULL_TEXT_BUDGET_MS:30000,chrome:{tabs:{update:async()=>{}},scripting:{executeScript:async()=>{}}},waitComplete:async()=>{},sleep:async()=>{},injectReaders:async()=>{},readPage:async()=>({posts:[{url:"other",text:"very long unrelated post",truncated:false}]}),postKey:(url:string)=>url});
- vm.runInContext(source.slice(source.indexOf("async function readFullTexts("),source.indexOf("// Wait (read-only)")),context);
+ vm.runInContext(source.slice(source.indexOf("async function readFullTexts("),source.indexOf("async function waitForGrowth(")),context);
  const result=await vm.runInContext('readFullTexts(1,"group",["target"])',context);
  expect(result.found).toHaveLength(0);expect(result.failed).toEqual(["target"]);
 });
@@ -52,7 +52,7 @@ it("discovers every due group with bounded parallelism then drains detail work o
 it("waits for delayed exact-target content rather than failing after navigation", async () => {
  const source=readFileSync("extension/background.js","utf8"); let reads=0;
  const context=vm.createContext({Date,Math,fullTextBudget:10,FULL_TEXT_BUDGET_MS:30000,chrome:{tabs:{update:async()=>{}},scripting:{executeScript:async()=>{}}},waitComplete:async()=>{},sleep:async()=>{},injectReaders:async()=>{},readPage:async()=>({posts:++reads<3?[]:[{url:"target",text:"complete target",truncated:false}]}),postKey:(u:string)=>u});
- vm.runInContext(source.slice(source.indexOf("async function readFullTexts("),source.indexOf("// Wait (read-only)")),context);
+ vm.runInContext(source.slice(source.indexOf("async function readFullTexts("),source.indexOf("async function waitForGrowth(")),context);
  const result=await vm.runInContext('readFullTexts(1,"group",["target"])',context);
  expect(reads).toBe(3);expect(result.found).toHaveLength(1);expect(result.failed).toHaveLength(0);
 });

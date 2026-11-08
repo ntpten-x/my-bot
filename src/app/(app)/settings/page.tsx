@@ -250,7 +250,7 @@ export default function SettingsPage() {
         </Card>
         <Card className="space-y-3">
           <h2 className="font-semibold">ดึงข้อมูลเบื้องหลัง (โหมดเงียบ)</h2>
-          <p className="text-sm text-muted">เมื่อจับคู่ส่วนขยายแล้ว เปิด facebook.com ค้างใน Chrome โปรไฟล์นั้น — ระบบอ่านจากหน้าต่าง Facebook ที่เชื่อมไว้ (ใช้แท็บเฟสที่ว่างก่อน หรือแท็บพื้นหลัง) ไม่เปิดหน้าต่างใหม่ ไม่แย่งแท็บที่คุณกำลังดู พักได้จากป๊อปอัปส่วนขยาย</p>
+          <p className="text-sm text-muted">เมื่อจับคู่ส่วนขยายแล้ว เปิด facebook.com ค้างใน Chrome โปรไฟล์นั้น — ระบบเปิดหน้าต่างอ่านข้อมูลแยกโดยไม่ดึงโฟกัส คุณใช้ MY-BOT ต่อได้ ตรวจโพสต์ล่าสุดสลับกับอ่านย้อนหลัง ไม่ยืมแท็บส่วนตัว กรุณาอย่าย่อหน้าต่างบอททั้งบาน พักได้จากป๊อปอัปส่วนขยาย การส่งคอมเมนต์จริงยังอาจต้องโฟกัสหน้า Facebook</p>
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={settings.quietPauseOnFacebook ?? true} onChange={(event) => setSettings({ ...settings, quietPauseOnFacebook: event.target.checked })} />
             พักเมื่อคุณกำลังดูฟีด / ข้อความ / Watch — ไม่พักเมื่อเปิดแท็บกลุ่มหรือ Marketplace ค้างไว้ (ใช้เป็นหน้าต่างอ่าน)

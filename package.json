@@ -9,6 +9,8 @@
     "dev": "node scripts/start-all.mjs",
     "start:all": "node scripts/start-all.mjs",
     "dev:web": "next dev -p 8001",
+    "browser:bot": "node scripts/start-bot-browser.mjs",
+    "browser:desktop": "bash scripts/start-bot-desktop.sh",
     "db:renormalize": "tsx scripts/renormalize-posts.ts",
     "db:backfill-embeddings": "tsx scripts/backfill-embeddings.ts",
     "db:backfill-ai": "tsx scripts/backfill-ai.ts",
