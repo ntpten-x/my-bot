@@ -44,7 +44,7 @@ export async function automationReadiness() {
     { key: "sources", title: "กลุ่มเป้าหมาย", ready: sources.some(row => row.enabled && row.type === "facebook_group"), detail: "เลือกกลุ่มที่ได้รับอนุญาต ตั้งรอบอ่าน และตรวจผลเก็บโพสต์", href: "/sources" },
     { key: "comments", title: "เครื่องส่งคอมเมนต์", ready: extensions.some(row => row.online && row.commentsEnabled && row.fbUserId), detail: "เปิดสวิตช์รับงานใน Extension แล้วผูกกฎกับอุปกรณ์/บัญชีนี้ ทดลอง Dry Run ก่อน", href: "/auto-comment" },
   ];
-  return { generatedAt: new Date(now).toISOString(), steps, extensions, accounts, control, legacySecrets,
+  return { generatedAt: new Date(now).toISOString(), steps, extensions, accounts: accounts.map(account => ({ ...account, enabled: map.get(`facebook_account_paused_${account.id}`) !== "1" })), control, legacySecrets,
     counts: Object.fromEntries(counts.map(row => [row.status, row._count])),
     sources: sources.map(source => ({ id: source.id, name: source.name, enabled: source.enabled, found: source.lastRunFound, inserted: source.lastRunNew, lastRunAt: source.lastRunAt, nextRunAt: source.nextRunAt, coverage: coverage.get(source.id) ?? null })),
   };

@@ -1,3 +1,4 @@
+import { facebookWorkAllowed } from "@/lib/facebook-accounts";
 import { createHash } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import { normalizeUrl } from "@/lib/pipeline/normalize";
@@ -41,6 +42,7 @@ export async function POST(request: Request) {
   if (!parsed.success) return withCors(json({ error: "รูปแบบข้อมูลไม่ถูกต้อง" }, 400));
   try {
     const { fbUserId, batchId, ...data } = parsed.data;
+    if (!(await facebookWorkAllowed(request, fbUserId))) return withCors(json({ error: "บัญชีถูกหยุดงาน ข้อมูลยังอยู่ในคิวของส่วนขยาย", code: "ACCOUNT_PAUSED" }, 423));
     const itemIds = data.posts.map(post => post.itemId);
     if (batchId && (itemIds.some(id => !id) || new Set(itemIds).size !== itemIds.length)) return withCors(json({ error: "รายการต้องมี itemId ไม่ซ้ำ" }, 400));
     const result = await ingestPosts({ ...data, actor: "extension" });

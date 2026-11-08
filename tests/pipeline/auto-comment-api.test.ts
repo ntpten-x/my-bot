@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({ authed: vi.fn(), update: vi.fn(), save: vi.fn(), dashboard: vi.fn() }));
+vi.mock("../../src/lib/schema-readiness", () => ({ schemaReadiness: async () => ({ ready: true }) }));
 vi.mock("../../src/lib/guard", () => ({ authed: mocks.authed }));
 vi.mock("../../src/lib/auto-comment/control", () => ({ updateCommentControl: mocks.update }));
-vi.mock("../../src/lib/auto-comment/admin", () => ({ saveCommentRule: mocks.save }));
+vi.mock("../../src/lib/auto-comment/admin", async importOriginal => ({ ...await importOriginal<typeof import("../../src/lib/auto-comment/admin")>(), saveCommentRule: mocks.save }));
 vi.mock("../../src/lib/auto-comment/engine", () => ({ autoCommentDashboard: mocks.dashboard }));
 import { GET, PUT } from "../../src/app/api/auto-comment/route";
 import { POST } from "../../src/app/api/auto-comment/rules/route";
@@ -31,6 +32,24 @@ describe("auto comment authenticated control API", () => {
   });
   it("passes valid Stop commands to serialized controller", async () => {
     mocks.update.mockResolvedValue({ state: "stopped" }); const result = await PUT(request({ action: "stop" }));
-    expect(result.status).toBe(200); expect(mocks.update).toHaveBeenCalledWith({ action: "stop" });
+    expect(result.status).toBe(200); expect(mocks.update).toHaveBeenCalledWith({ action: "stop", dryRun: false, liveAcknowledged: true, liveOnly: true });
   });
+});
+
+it("rejects simulation requests and starts only the live workflow", async () => {
+  expect((await PUT(request({ dryRun: true }))).status).toBe(400);
+  expect(mocks.update).not.toHaveBeenCalled();
+  mocks.update.mockResolvedValue({ state: "running", dryRun: false });
+  expect((await PUT(request({ action: "start" }))).status).toBe(200);
+  expect(mocks.update).toHaveBeenCalledWith({ action: "start", dryRun: false, liveAcknowledged: true, liveOnly: true });
+});
+
+it("presents legacy simulated runs as stopped without changing stored state or starting work", async () => {
+  const legacy = { control: { state: "running", dryRun: true }, rules: [] };
+  mocks.dashboard.mockResolvedValue(legacy);
+  const result = await GET();
+  expect(result.status).toBe(200);
+  expect((await result.json()).control).toMatchObject({ state: "stopped", dryRun: false });
+  expect(legacy.control).toEqual({ state: "running", dryRun: true });
+  expect(mocks.update).not.toHaveBeenCalled();
 });

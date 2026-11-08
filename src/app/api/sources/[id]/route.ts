@@ -1,3 +1,4 @@
+import { resolveSourceScope } from "@/lib/source-scope";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { authed } from "@/lib/guard";
@@ -23,15 +24,20 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   const parsed = patchSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return json({ error: "ข้อมูลไม่ถูกต้อง" }, 400);
   const { priority, intervalMinutes, boundCategorySlug, defaultProductId, ...rest } = parsed.data;
-  if (boundCategorySlug && !(await prisma.category.findFirst({ where: { slug: boundCategorySlug, parentId: null } }))) return json({ error: "ไม่พบหมวดนี้" }, 400);
-  if (defaultProductId && !(await prisma.product.findUnique({ where: { id: defaultProductId } }))) return json({ error: "ไม่พบเกม/สินค้านี้" }, 400);
+  let scope: { boundCategorySlug: string; defaultProductId: string | null } | undefined;
+  if (boundCategorySlug !== undefined || defaultProductId !== undefined) {
+    const current = await prisma.source.findUnique({ where: { id }, select: { boundCategorySlug: true, defaultProductId: true } });
+    if (!current) return json({ error: "ไม่พบกลุ่มนี้" }, 404);
+    const resolved = await resolveSourceScope({ boundCategorySlug, defaultProductId }, current);
+    if (resolved.error) return json({ error: resolved.error }, 400);
+    scope = resolved.scope;
+  }
   // Choosing a priority without an explicit interval applies that priority's default (3/10/30 minutes).
   const interval = intervalMinutes ?? (priority ? PRIORITY_INTERVAL[priority] : undefined);
   const data = {
     ...rest,
     ...(priority ? { priority } : {}),
-    ...(boundCategorySlug !== undefined ? { boundCategorySlug } : {}),
-    ...(defaultProductId !== undefined ? { defaultProductId } : {}),
+    ...scope,
     // A new interval restarts the adaptive schedule from it.
     ...(interval ? { intervalMinutes: interval, currentIntervalMinutes: interval, nextRunAt: null } : {}),
   };

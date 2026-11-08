@@ -1,3 +1,4 @@
+import { facebookWorkAllowed } from "@/lib/facebook-accounts";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { requireExtensionToken } from "@/lib/auth";
@@ -15,6 +16,7 @@ export async function GET(request: Request) {
   if (!(await requireExtensionToken(request.headers.get("authorization"), request))) {
     return withCors(json({ error: "โทเคนไม่ถูกต้อง" }, 401));
   }
+  if (!(await facebookWorkAllowed(request))) return withCors(json({ tasks: [], accountPaused: true }));
   await touchExtension();
   const staleBefore = new Date(Date.now() - 10 * 60 * 1000);
   await prisma.fetchTask.updateMany({

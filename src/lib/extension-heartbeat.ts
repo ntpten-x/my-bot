@@ -4,7 +4,7 @@ import { upsertSettings } from "./settings";
 import { touchExtension } from "./extension-status";
 
 // Version this MY-BOT build expects from extension/manifest.json (tests keep the two in sync).
-export const EXPECTED_EXTENSION_VERSION = "1.11.2";
+export const EXPECTED_EXTENSION_VERSION = "1.11.4";
 
 export function isCurrentExtensionVersion(version: string | null | undefined) {
   return String(version || "").trim() === EXPECTED_EXTENSION_VERSION;
@@ -151,8 +151,8 @@ export async function recordHeartbeat(input: HeartbeatInput, deviceId?: string) 
     await prisma.extensionHeartbeat.deleteMany({ where: { version: { not: EXPECTED_EXTENSION_VERSION } } });
   }
   await touchExtension();
-  if (deviceId && input.runtime) {
-    await upsertSettings({ [`extension_runtime_${deviceId}`]: JSON.stringify({ ...input.runtime, fbUserId: row.fbUserId, at: now.toISOString() }) });
+  if (deviceId) {
+    await upsertSettings({ [`extension_runtime_${deviceId}`]: JSON.stringify({ ...(input.runtime ?? {}), fbUserId: row.fbUserId, at: now.toISOString() }) });
   }
   // Single-owner overview: mirror the live "currently reading" status for the dashboard.
   if (input.runtime && "reading" in input.runtime) {

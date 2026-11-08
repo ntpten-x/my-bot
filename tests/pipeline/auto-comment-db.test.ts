@@ -22,7 +22,7 @@ let serial = 0;
 async function setup(live = true) {
   const input = autoCommentRuleSchema.parse({ name: "กฎทดสอบ", enabled: true, pageId: "12345", templates: ["ทดสอบหนึ่ง", "ทดสอบสอง"], pageToken: "synthetic-page", managerToken: "synthetic-manager" });
   const ruleId = await saveCommentRule(input);
-  if (live) await updateCommentControl({ dryRun: false, liveAcknowledged: true });
+  await updateCommentControl({ dryRun: !live, liveAcknowledged: true });
   await updateCommentControl({ action: "start" });
   const source = await prisma.source.findUniqueOrThrow({ where: { url: "https://www.facebook.com/12345" } });
   return { ruleId, input, source };
@@ -48,14 +48,14 @@ afterAll(async () => { if (fixture.enabled) await fixture.drop(prisma, fixture.s
 describe.skipIf(!fixture.enabled)("auto comment isolated Postgres queue and migration", () => {
   it("renders an empty dashboard before the first Start using a database-supported default date", async () => {
     const dashboard = await autoCommentDashboard();
-    expect(dashboard.control).toMatchObject({ state: "stopped", dryRun: true });
+    expect(dashboard.control).toMatchObject({ state: "stopped", dryRun: false });
     expect(dashboard.observed).toBe(0); expect(dashboard.matched).toBe(0);
   });
   it("safely normalizes a previously stored maximum-JavaScript-date sentinel", async () => {
     const control = await readCommentControl();
     await prisma.setting.create({ data: { key: "auto_comment_control", value: JSON.stringify({ ...control, startedAt: new Date(8640000000000000).toISOString() }) } });
     const dashboard = await autoCommentDashboard();
-    expect(dashboard.control).toMatchObject({ state: "stopped", dryRun: true });
+    expect(dashboard.control).toMatchObject({ state: "stopped", dryRun: false });
     expect(Date.parse(dashboard.control.startedAt)).toBeLessThanOrEqual(Date.parse("9999-12-31T23:59:59.999Z"));
     expect(dashboard.observed).toBe(0);
   });
@@ -77,9 +77,9 @@ describe.skipIf(!fixture.enabled)("auto comment isolated Postgres queue and migr
       await tx.$executeRawUnsafe("RESET ROLE"); await tx.$executeRawUnsafe(`DROP OWNED BY "${role}"`); await tx.$executeRawUnsafe(`DROP ROLE "${role}"`);
     });
   });
-  it("starts stopped, requires live acknowledgement and never sends a Dry Run", async () => {
+  it("starts stopped in live mode and never dispatches legacy simulated jobs", async () => {
     expect((await readCommentControl()).state).toBe("stopped");
-    await expect(updateCommentControl({ dryRun: false })).rejects.toThrow(/ยืนยัน/);
+    expect((await readCommentControl()).dryRun).toBe(false);
     const { source } = await setup(false); await addPost(source.id);
     expect(await scanAutoCommentPosts()).toBe(1);
     const api = gateway(); expect(await processAutoCommentQueue({ gateway: api })).toBe(0);
@@ -221,7 +221,7 @@ describe.skipIf(!fixture.enabled)("auto comment isolated Postgres queue and migr
     await queued(); const dashboard = JSON.stringify(await autoCommentDashboard());
     expect(dashboard).not.toContain("synthetic-page"); expect(dashboard).not.toContain("synthetic-manager"); expect(dashboard).not.toContain("pageTokenEnc");
     const snapshot = JSON.parse(JSON.stringify(await snapshotDatabase(prisma))); await restoreDatabase(prisma, snapshot);
-    expect(await readCommentControl()).toMatchObject({ state: "stopped", dryRun: true, emergency: true });
+    expect(await readCommentControl()).toMatchObject({ state: "stopped", dryRun: false, emergency: true });
     expect((await prisma.autoCommentJob.findFirstOrThrow()).status).toBe("cancelled");
   });
 });

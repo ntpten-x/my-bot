@@ -1,3 +1,4 @@
+import { resolveSourceScope } from "@/lib/source-scope";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { authed } from "@/lib/guard";
@@ -11,7 +12,9 @@ export const dynamic = "force-dynamic";
 
 const createSchema = z.object({
   urls: z.string().min(1),
-  name: z.string().optional(),
+  name: z.string().trim().max(120).optional(),
+  boundCategorySlug: z.string().max(60).optional(),
+  defaultProductId: z.string().min(1).nullable().optional(),
   type: z.enum(["facebook_group", "facebook_marketplace", "rss", "web_board", "auto"]).optional(),
   priority: z.enum(["high", "normal", "low"]).optional(),
 });
@@ -34,6 +37,8 @@ export async function GET() {
       name: source.name,
       url: source.url,
       enabled: source.enabled,
+      boundCategorySlug: source.boundCategorySlug,
+      defaultProductId: source.defaultProductId,
       lastFetchedAt: source.lastFetchedAt?.toISOString() ?? null,
       lastExtensionAt: source.lastExtensionAt?.toISOString() ?? null,
       lastError: source.lastError,
@@ -65,6 +70,8 @@ export async function POST(request: Request) {
   if (error) return error;
   const parsed = createSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return json({ error: "วางลิงก์แหล่งข้อมูลก่อน" }, 400);
+  const resolved = await resolveSourceScope(parsed.data);
+  if (resolved.error) return json({ error: resolved.error }, 400);
   const settings = await getSettings();
   const lines = parsed.data.urls
     .split(/\r?\n/)
@@ -88,7 +95,7 @@ export async function POST(request: Request) {
       continue;
     }
     const type = !parsed.data.type || parsed.data.type === "auto" ? detectSourceType(line) : parsed.data.type;
-    if (type === "facebook_group" && !/facebook\.com\/groups\//i.test(line)) {
+    if (type === "facebook_group" && (!/^(www\.|m\.|web\.)?facebook\.com$/i.test(parsedUrl.hostname) || !/^\/groups\/[^/]+/i.test(parsedUrl.pathname) || parsedUrl.username || parsedUrl.password)) {
       skipped.push(line);
       continue;
     }
@@ -107,6 +114,7 @@ export async function POST(request: Request) {
           intervalMinutes: interval,
           currentIntervalMinutes: interval,
           priority,
+          ...resolved.scope,
         },
       });
       created.push(source.id);

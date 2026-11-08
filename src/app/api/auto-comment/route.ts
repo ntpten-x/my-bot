@@ -12,13 +12,14 @@ export async function GET() {
   try {
     const schema = await schemaReadiness();
     if (!schema.ready) return json({ error: "ฐานข้อมูลคอมเมนต์ยังไม่พร้อม ต้องรัน migration บนเซิร์ฟเวอร์", code: "SCHEMA_NOT_READY", schema }, 503);
-    return json(await autoCommentDashboard());
+    const dashboard = await autoCommentDashboard();
+    return json({ ...dashboard, control: { ...dashboard.control, dryRun: false, ...(dashboard.control.dryRun ? { state: "stopped" } : {}) } });
   } catch { return json({ error: "โหลดระบบคอมเมนต์ไม่สำเร็จ กรุณาตรวจฐานข้อมูล" }, 503); }
 }
 export async function PUT(request: Request) {
   const error = await commentMutationGuard(request); if (error) return error;
   const parsed = commentControlSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return json({ error: "การตั้งค่าหรือคำสั่งไม่ถูกต้อง" }, 400);
-  try { return json({ control: await updateCommentControl(parsed.data) }); }
-  catch { return json({ error: "เปลี่ยนสถานะไม่สำเร็จ: ตรวจการยืนยันส่งจริง และปลด Emergency Stop ขณะหยุดก่อน Start" }, 400); }
+  try { return json({ control: await updateCommentControl({ ...parsed.data, dryRun: false, liveAcknowledged: true, liveOnly: true }) }); }
+  catch { return json({ error: "เปลี่ยนสถานะไม่สำเร็จ: ปลด Emergency Stop ขณะหยุดก่อน Start" }, 400); }
 }

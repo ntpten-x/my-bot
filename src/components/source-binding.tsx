@@ -35,14 +35,14 @@ export function SourceBinding({
   return (
     <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
       <span className="text-muted">หมวดกลุ่ม</span>
-      <Select className="w-auto" aria-label="หมวดของกลุ่ม" value={binding.boundCategorySlug} onChange={(event) => onSave({ boundCategorySlug: event.target.value })}>
+      <Select className="w-auto" aria-label="หมวดของกลุ่ม" value={binding.boundCategorySlug} onChange={(event) => onSave({ boundCategorySlug: event.target.value, defaultProductId: null })}>
         <option value="">อัตโนมัติ ({autoCat})</option>
         {parents.map((item) => (
           <option key={item.id} value={item.slug}>{item.name}</option>
         ))}
       </Select>
       <span className="text-muted">เกม/สินค้าหลัก</span>
-      <Select className="w-auto" aria-label="เกม/สินค้าหลักของกลุ่ม" value={binding.defaultProductId ?? ""} onChange={(event) => onSave({ defaultProductId: event.target.value || null })}>
+      <Select className="w-auto" aria-label="เกม/สินค้าหลักของกลุ่ม" value={binding.defaultProductId ?? ""} onChange={(event) => onSave({ defaultProductId: event.target.value || null, ...(event.target.value ? { boundCategorySlug: products.find(item => item.id === event.target.value)?.categorySlug ?? category } : {}) })}>
         <option value="">อัตโนมัติ ({autoProduct})</option>
         {choices.map((item) => (
           <option key={item.id} value={item.id}>{item.name}</option>

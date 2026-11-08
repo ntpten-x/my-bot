@@ -9,7 +9,7 @@ export type CommentControl = {
   cooldownUntil: string | null;
 };
 export const defaultControl: CommentControl = {
-  state: "stopped", dryRun: true, emergency: false, hourlyLimit: 5, dailyLimit: 20,
+  state: "stopped", dryRun: false, emergency: false, hourlyLimit: 50, dailyLimit: 200,
   generation: "disabled", startedAt: "9999-12-31T23:59:59.999Z", cooldownUntil: null,
 };
 export function parseControl(value?: string | null): CommentControl {
@@ -36,7 +36,7 @@ export async function storeCommentControl(tx: Prisma.TransactionClient, control:
 }
 export async function updateCommentControl(input: {
   action?: "start" | "pause" | "stop" | "emergency" | "reset";
-  dryRun?: boolean; hourlyLimit?: number; dailyLimit?: number; liveAcknowledged?: boolean;
+  dryRun?: boolean; hourlyLimit?: number; dailyLimit?: number; liveAcknowledged?: boolean; liveOnly?: boolean;
 }) {
   return prisma.$transaction(async tx => {
     const old = await lockCommentControl(tx);
@@ -53,12 +53,18 @@ export async function updateCommentControl(input: {
       ...(input.action === "start" ? { state: "running" as const } : {}),
       ...(input.action === "pause" ? { state: "paused" as const } : {}),
       ...(input.action === "stop" || input.action === "emergency" || invalidate ? { state: "stopped" as const } : {}),
+      ...(input.liveOnly && input.action === "start" ? { state: "running" as const } : {}),
       ...(input.action === "emergency" ? { emergency: true } : {}),
       ...(input.action === "reset" ? { emergency: false } : {}),
       ...(invalidate || fresh ? { generation: randomUUID(), startedAt: new Date().toISOString() } : {}),
     };
     await storeCommentControl(tx, next);
     if (invalidate) await tx.autoCommentJob.updateMany({ where: { status: { in: ["pending", "pending_ai", "browser_ready", "claimed"] } }, data: { status: "cancelled", claimToken: null, claimUntil: null, lastError: "เจ้าของหยุดระบบหรือเปลี่ยนโหมด" } });
+    if ((input.hourlyLimit !== undefined && input.hourlyLimit !== old.hourlyLimit)
+      || (input.dailyLimit !== undefined && input.dailyLimit !== old.dailyLimit)) {
+      // A deliberate quota change must not leave eligible work asleep until the old reset time.
+      await tx.autoCommentJob.updateMany({ where: { deliveryMode: "extension", status: "browser_ready", generation: next.generation }, data: { nextAttemptAt: new Date(), lastError: "" } });
+    }
     await tx.autoCommentLog.create({ data: { event: input.action || "settings", message: next.dryRun ? "Dry Run" : "ส่งจริงตามกฎ" } });
     return next;
   }, { timeout: 20_000, maxWait: 20_000 });

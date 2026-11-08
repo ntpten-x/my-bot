@@ -32,7 +32,7 @@ async function setup(options: { dry?: boolean; requireAi?: boolean; aiDraft?: bo
   const source = await prisma.source.create({ data: { name: "synthetic group", type: "facebook_group", url: "https://www.facebook.com/groups/12345" } });
   const input = autoCommentRuleSchema.parse({ name: "ทดสอบ", enabled: true, deliveryMode: "extension", sourceIds: [source.id], templates: options.aiDraft ? [] : ["ข้อความทดสอบ"], keywords: "หาช่าง", browserDeviceId: device.id, browserFbUserId: "99887766", browserConsent: true, requireAi: options.requireAi ?? false, messageMode: options.aiDraft ? "ai_draft" : "template" });
   const ruleId = await saveCommentRule(input);
-  if (!options.dry) await updateCommentControl({ dryRun: false, liveAcknowledged: true });
+  await updateCommentControl({ dryRun: options.dry ?? false, liveAcknowledged: true });
   await updateCommentControl({ action: "start" });
   await prisma.lease.create({ data: { name: "worker", holder: "synthetic", expiresAt: new Date(Date.now() + 150000) } });
   const post = await prisma.post.create({ data: { sourceId: source.id, externalUrl: "https://www.facebook.com/groups/12345/posts/8888/", text: "หาช่างแอร์", normalizedText: "หาช่างแอร์", contentHash: `post-${++serial}` } });
@@ -207,7 +207,9 @@ describe.skipIf(!fixture.enabled)("browser comment durable workflow on disposabl
     const s = await setup(), c = (await claim(s.device.id))!; await permit(s.device.id, c);
     expect(await reportBrowserComment(s.device.id, c.id, c.claimToken, "observed", "https://www.facebook.com/groups/12345/posts/8888/?comment_id=777")).toBe(true);
     expect((await prisma.autoCommentJob.findFirstOrThrow()).status).toBe("browser_observed");
-    expect(await reportBrowserComment(s.device.id, c.id, c.claimToken, "uncertain")).toBe(false);
+    expect(await reportBrowserComment(s.device.id, c.id, c.claimToken, "uncertain")).toBe(true);
+    expect((await prisma.autoCommentJob.findFirstOrThrow()).status).toBe("browser_observed");
+    expect(await prisma.autoCommentLog.count({ where: { jobId: c.id, event: "browser_observed" } })).toBe(1);
   });
   it("pauses on checkpoint or uncertain result without retry", async () => {
     const s = await setup(), c = (await claim(s.device.id))!; await permit(s.device.id, c);
@@ -220,7 +222,9 @@ describe.skipIf(!fixture.enabled)("browser comment durable workflow on disposabl
     await reportBrowserComment(s.device.id, c.id, c.claimToken, "observed", "https://www.facebook.com/groups/12345/posts/8888/?comment_id=777");
     await prisma.post.create({ data: { sourceId: s.source.id, externalUrl: "https://www.facebook.com/groups/12345/posts/9999/", text: "หาช่างด่วน", normalizedText: "หาช่างด่วน", contentHash: `post-${++serial}` } });
     await scanBrowserComments(active); await prepareBrowserComments(active); const next = (await claim(s.device.id))!;
-    expect(next).not.toBeNull(); expect(await permit(s.device.id, next)).toBeNull(); expect(await prisma.autoCommentLog.count({ where: { event: "dispatch" } })).toBe(1);
+    expect(next).toBeNull();
+    expect(await prisma.autoCommentJob.findFirst({ where: { postId: { not: s.post.id } } })).toMatchObject({ status: "browser_ready", lastError: "รอโควตารายชั่วโมง" });
+    expect(await prisma.autoCommentLog.count({ where: { event: "dispatch" } })).toBe(1);
   });
   it("runtime tick does not call Facebook Graph even for old Page rules", async () => {
     const s = await setup(); await prisma.autoCommentRule.update({ where: { id: s.ruleId }, data: { deliveryMode: "official", pageId: "12345" } });
@@ -234,7 +238,108 @@ describe.skipIf(!fixture.enabled)("browser comment durable workflow on disposabl
     const snapshot = JSON.parse(JSON.stringify(await snapshotDatabase(prisma)));
     await expect(restoreDatabase(prisma, snapshot)).rejects.toThrow(/Stop all/);
     await prisma.lease.deleteMany(); await restoreDatabase(prisma, snapshot);
-    expect(await readCommentControl()).toMatchObject({ state: "stopped", dryRun: true, emergency: true });
+    expect(await readCommentControl()).toMatchObject({ state: "stopped", dryRun: false, emergency: true });
     expect((await prisma.autoCommentJob.findFirstOrThrow()).status).toBe("uncertain");
+  });
+});
+
+describe.skipIf(!fixture.enabled)("live-only owner workflow", () => {
+  it("changes legacy simulation to a fresh live run only after explicit Start, cancelling old pending jobs", async () => {
+    const s = await setup({ dry: true });
+    await prisma.autoCommentJob.update({ where: { id: s.job.id }, data: { status: "pending_ai" } });
+    const before = await readCommentControl();
+    const next = await updateCommentControl({ action: "start", dryRun: false, liveAcknowledged: true, liveOnly: true });
+    expect(next).toMatchObject({ state: "running", dryRun: false }); expect(next.generation).not.toBe(before.generation);
+    const oldJob = await prisma.autoCommentJob.findUniqueOrThrow({ where: { id: s.job.id } });
+    expect(oldJob).toMatchObject({ status: "cancelled", dryRun: true });
+    expect(await prisma.autoCommentLog.count({ where: { event: "dispatch" } })).toBe(0);
+  });
+  it("does not consume legacy simulated runs during normal worker ticks", async () => {
+    const s = await setup({ dry: true });
+    await prisma.post.create({ data: { sourceId: s.source.id, externalUrl: "https://www.facebook.com/groups/12345/posts/112233/", text: "หาช่างแอร์", normalizedText: "หาช่างแอร์", contentHash: "legacy-simulation-inert" } });
+    const before = await prisma.autoCommentJob.count();
+    await autoCommentTick(active);
+    expect(await prisma.autoCommentJob.count()).toBe(before);
+    expect((await readCommentControl()).dryRun).toBe(true);
+  });
+  it("saving live quotas while stopped does not start work", async () => {
+    const next = await updateCommentControl({ dryRun: false, liveAcknowledged: true, liveOnly: true, hourlyLimit: 6 });
+    expect(next).toMatchObject({ state: "stopped", dryRun: false, hourlyLimit: 6 });
+    expect(await prisma.autoCommentJob.count()).toBe(0);
+  });
+});
+
+describe.skipIf(!fixture.enabled)("comment queue efficiency", () => {
+  it("checks group cooldown before claiming and defers only the remaining interval", async () => {
+    const s = await setup(); const now = Date.now();
+    await prisma.autoCommentLog.create({ data: { event: "dispatch", pageId: s.job.pageId, jobId: s.job.id, ruleId: s.ruleId, createdAt: new Date(now - 30000) } });
+    expect(await claim(s.device.id)).toBeNull();
+    const row = await prisma.autoCommentJob.findUniqueOrThrow({ where: { id: s.job.id } });
+    expect(row.status).toBe("browser_ready"); expect(row.claimToken).toBeNull();
+    expect(row.nextAttemptAt.getTime()).toBeGreaterThan(now + 28000);
+    expect(row.nextAttemptAt.getTime()).toBeLessThan(now + 35000);
+  });
+  it("does not evaluate unrelated or expired posts", async () => {
+    const s = await setup({ dry: true });
+    const other = await prisma.source.create({ data: { name: "unrelated", type: "facebook_group", url: "https://www.facebook.com/groups/998899" } });
+    const unrelated = await prisma.post.create({ data: { sourceId: other.id, externalUrl: "https://www.facebook.com/groups/998899/posts/77/", text: "หาช่างแอร์", normalizedText: "หาช่างแอร์", contentHash: "unrelated-test" } });
+    const expired = await prisma.post.create({ data: { sourceId: s.source.id, externalUrl: "https://www.facebook.com/groups/12345/posts/78/", text: "หาช่างแอร์", normalizedText: "หาช่างแอร์", contentHash: "expired-test", postedAt: new Date(Date.now() - 25 * 3600000) } });
+    await scanBrowserComments(active);
+    expect(await prisma.autoCommentEvaluation.count({ where: { postId: { in: [unrelated.id, expired.id] } } })).toBe(0);
+  });
+});
+
+describe.skipIf(!fixture.enabled)("efficient browser delivery failure handling", () => {
+  it("records definite non-delivery without pausing or rearming a dispatched key", async () => {
+    const s = await setup(), c = (await claim(s.device.id))!;
+    await permit(s.device.id, c);
+    expect(await reportBrowserComment(s.device.id, c.id, c.claimToken, "not_sent")).toBe(true);
+    const job = await prisma.autoCommentJob.findUniqueOrThrow({ where: { id: c.id } });
+    expect(job).toMatchObject({ status: "not_sent", attempts: 1 }); expect(job.dispatchedAt).not.toBeNull();
+    expect((await readCommentControl()).state).toBe("running");
+    expect((await prisma.autoCommentRule.findUniqueOrThrow({ where: { id: s.ruleId } })).pausedReason).toBe("");
+    await prisma.post.update({ where: { id: s.post.id }, data: { textRevision: { increment: 1 } } });
+    await scanBrowserComments(active); await prepareBrowserComments(active);
+    expect((await prisma.autoCommentJob.findUniqueOrThrow({ where: { id: c.id } })).status).toBe("not_sent");
+    expect(await reportBrowserComment(s.device.id, c.id, c.claimToken, "not_sent")).toBe(true);
+    expect(await prisma.autoCommentLog.count({ where: { event: "not_sent", jobId: c.id } })).toBe(1);
+    expect(await reportBrowserComment("other-device", c.id, c.claimToken, "not_sent")).toBe(false);
+  });
+  it("continues past a group on cooldown to another eligible group", async () => {
+    const s = await setup();
+    const other = await prisma.source.create({ data: { name: "eligible group", type: "facebook_group", url: "https://www.facebook.com/groups/67890" } });
+    await saveCommentRule({ ...s.input, sourceIds: [s.source.id, other.id] }, s.ruleId);
+    const post = await prisma.post.create({ data: { sourceId: other.id, externalUrl: "https://www.facebook.com/groups/67890/posts/1111/", text: "หาช่างแอร์", normalizedText: "หาช่างแอร์", contentHash: "eligible-group" } });
+    await scanBrowserComments(active); await prepareBrowserComments(active);
+    await prisma.autoCommentLog.create({ data: { event: "dispatch", pageId: s.job.pageId, jobId: s.job.id, ruleId: s.ruleId, createdAt: new Date(Date.now() - 30000) } });
+    const claimed = await claim(s.device.id); expect(claimed?.externalUrl).toContain("/67890/");
+    expect(await prisma.autoCommentJob.findFirst({ where: { postId: post.id } })).toMatchObject({ status: "claimed" });
+  });
+  it("rechecks quota after claim and acknowledges a known deferral without cancelling it", async () => {
+    const s = await setup(); await updateCommentControl({ hourlyLimit: 1 });
+    const c = (await claim(s.device.id))!;
+    await prisma.autoCommentLog.create({ data: { event: "dispatch", pageId: "other-group", createdAt: new Date() } });
+    expect(await permit(s.device.id, c)).toBeNull();
+    expect(await reportBrowserComment(s.device.id, c.id, c.claimToken, "not_sent")).toBe(true);
+    expect(await prisma.autoCommentJob.findUniqueOrThrow({ where: { id: c.id } })).toMatchObject({ status: "browser_ready", attempts: 0, claimToken: null });
+    expect((await readCommentControl()).state).toBe("running");
+  });
+  it("skips scan SQL when no enabled bound rule can receive work", async () => {
+    const s = await setup(); await prisma.autoCommentRule.update({ where: { id: s.ruleId }, data: { enabled: false } });
+    const query = vi.spyOn(prisma, "$queryRaw");
+    try { await scanBrowserComments(active); expect(query).not.toHaveBeenCalled(); } finally { query.mockRestore(); }
+  });
+});
+
+describe.skipIf(!fixture.enabled)("quota changes wake deferred work", () => {
+  it("rechecks a job immediately after the owner raises its quota", async () => {
+    const s = await setup(); await updateCommentControl({ hourlyLimit: 1 });
+    await prisma.autoCommentLog.create({ data: { event: "dispatch", pageId: "other", createdAt: new Date() } });
+    expect(await claim(s.device.id)).toBeNull();
+    expect((await prisma.autoCommentJob.findUniqueOrThrow({ where: { id: s.job.id } })).nextAttemptAt.getTime()).toBeGreaterThan(Date.now() + 3000000);
+    const before = await readCommentControl();
+    await updateCommentControl({ hourlyLimit: 2 });
+    const after = await readCommentControl(); expect(after.state).toBe(before.state); expect(after.generation).toBe(before.generation);
+    expect(await claim(s.device.id)).not.toBeNull();
   });
 });

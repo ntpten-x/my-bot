@@ -1,18 +1,20 @@
+import { globalDispatchDelay, groupDispatchDelay, combineDispatchDelays, type DispatchDelay } from "./dispatch-budget";
+import { commentTypeAllowed } from "./type-setup";
 import { draftStillValid, draftKey, generateCommentDraft } from "./draft";
 import { createHash, randomUUID } from "node:crypto";
 import { Prisma, type AutoCommentJob } from "@prisma/client";
 import { prisma } from "../prisma";
-import { explainCommentRule, matchesCommentRule, templateIndex } from "./matching";
+import { explainCommentRule, matchesCommentRule, templateIndex, jsonList } from "./matching";
 import { lockCommentControl, mayRun, readCommentControl, storeCommentControl, type CommentControl } from "./control";
 
 export const BROWSER_GRANT_MS = 3000;
 const ruleQuery = {
-  where: { enabled: true, pausedReason: "", deliveryMode: "extension", browserConsent: true },
+  where: { enabled: true, pausedReason: "", deliveryMode: "extension", browserConsent: true, browserDeviceId: { not: "" }, browserFbUserId: { not: "" } },
   include: { templates: { orderBy: { sortOrder: "asc" as const } } },
   orderBy: [{ priority: "desc" as const }, { createdAt: "asc" as const }, { id: "asc" as const }],
 };
 // Only fields used by matching/delivery invalidate a checkpoint, never read/fetch timestamps.
-const inputKeySql = Prisma.sql`md5(jsonb_build_array(p."textRevision",p."truncated",p."text",p."intent",p."isAd",p."forbiddenHit",p."duplicateOfId",p."dismissed",p."aiProvider",p."suggestedReply",p."postedAt",p."externalUrl",s."enabled",s."url",s."type")::text)`;
+const inputKeySql = Prisma.sql`md5(jsonb_build_array(p."textRevision",p."truncated",p."text",p."intent",p."isAd",p."forbiddenHit",p."duplicateOfId",p."dismissed",p."aiProvider",p."suggestedReply",p."postedAt",p."externalUrl",s."enabled",s."url",s."type",s."boundCategorySlug",s."defaultProductId")::text)`;
 const fingerprint = (rules: { id: string; revision: number }[]) => createHash("sha256")
   .update(JSON.stringify(rules.map(rule => [rule.id, rule.revision]))).digest("hex");
 export function browserTarget(url: string, sourceUrl: string, sourceType: string) {
@@ -44,6 +46,7 @@ async function valid(tx: Prisma.TransactionClient, job: AutoCommentJob, control:
     || rule.browserDeviceId !== job.browserDeviceId || rule.browserFbUserId !== job.browserFbUserId || !post.source.enabled
     || post.textRevision !== job.textRevision || !matchesCommentRule(rule, post)
     || browserTarget(post.externalUrl, post.source.url, post.source.type)?.key !== job.postKey) return null;
+  if (!await commentTypeAllowed(tx, rule.id, post.source)) return null;
   if (!await tx.extensionDevice.findFirst({ where: { id: job.browserDeviceId, revokedAt: null } })) return null;
   return { rule, post };
 }
@@ -57,14 +60,21 @@ async function aiReady(tx: Prisma.TransactionClient, post: { id: string; aiProvi
 export async function scanBrowserComments(assertActive: () => Promise<void>) {
   if (process.env.MYBOT_PROCESS !== "worker") return;
   const initial = await readCommentControl(); if (!mayRun(initial)) return;
-  const rulesFingerprint = fingerprint(await prisma.autoCommentRule.findMany(ruleQuery));
+  const initialRules = await prisma.autoCommentRule.findMany(ruleQuery);
+  if (!initialRules.length) return;
+  const sourceIds = [...new Set(initialRules.flatMap(rule => jsonList<string>(rule.sourceIdsJson)).filter(id => typeof id === "string" && id))];
+  if (!sourceIds.length) return;
+  const oldestEligibleAt = new Date(Date.now() - Math.max(...initialRules.map(rule => rule.maxAgeHours)) * 3600000).toISOString();
+  const rulesFingerprint = fingerprint(initialRules);
   // Anti-join repairs checkpoints after AI/owner/source updates even when createdAt stays fixed.
   // Dates are ISO strings cast to timestamp: Prisma stores UTC without timezone;
   // binding Date as timestamptz would shift comparisons on Asia/Bangkok sessions.
   const posts = await prisma.$queryRaw<{ id: string; inputFingerprint: string }[]>(Prisma.sql`
     SELECT p."id", ${inputKeySql} AS "inputFingerprint" FROM "Post" p JOIN "Source" s ON s."id"=p."sourceId"
     LEFT JOIN "AutoCommentEvaluation" e ON e."postId"=p."id" AND e."generation"=${initial.generation}
-    WHERE p."createdAt">=${initial.startedAt}::timestamp AND (
+    WHERE p."createdAt">=${initial.startedAt}::timestamp
+      AND p."sourceId" IN (${Prisma.join(sourceIds)})
+      AND COALESCE(p."postedAt",p."createdAt")>=${oldestEligibleAt}::timestamp AND (
       e."id" IS NULL OR e."inputFingerprint"<>${inputKeySql}
       OR e."rulesFingerprint"<>${rulesFingerprint} OR e."nextEvaluateAt"<=${new Date().toISOString()}::timestamp
     ) ORDER BY e."evaluatedAt" ASC NULLS FIRST,p."createdAt" ASC,p."id" ASC LIMIT 100
@@ -85,13 +95,15 @@ export async function scanBrowserComments(assertActive: () => Promise<void>) {
         const result = explainCommentRule(rule, post, now);
         const codes = result.checks.filter(check => !check.passed).map(check => check.code);
         if (!post.source.enabled) codes.push("source_disabled");
+        if (!codes.includes("source") && !await commentTypeAllowed(tx, rule.id, post.source)) codes.push("type_scope");
         if (rule.messageMode !== "ai_draft" && !rule.templates.length) codes.push("no_template");
         if (post.postedAt && post.postedAt < new Date(control.startedAt)) codes.push("before_start");
         const target = browserTarget(post.externalUrl, post.source.url, post.source.type);
         if (!target) codes.push("unsupported_target");
         const deadline = (post.postedAt ?? post.createdAt).getTime() + rule.maxAgeHours * 3600_000;
+        if (codes.includes("type_scope") && deadline > now.getTime()) nextEvaluateAt = new Date(Math.min(deadline + 1, now.getTime() + 60_000));
         // Keep a durable wait even if pre-AI labels initially reject the post.
-        if (post.truncated && deadline > now.getTime() && !codes.some(code => ["source", "source_disabled", "before_start", "age", "unsupported_target"].includes(code))) {
+        if (post.truncated && deadline > now.getTime() && !codes.some(code => ["source", "source_disabled", "type_scope", "before_start", "age", "unsupported_target"].includes(code))) {
           evaluationState = "waiting_full_text";
           nextEvaluateAt = new Date(Math.min(deadline + 1, now.getTime() + 60_000));
           reasons.push({ ruleId: rule.id, codes: ["full_text"] });
@@ -218,14 +230,39 @@ export async function claimBrowserComment(deviceId: string, fbUserId: string) {
     const control = await lockCommentControl(tx);
     if (!mayRun(control) || control.dryRun) return null;
     if (await tx.autoCommentJob.findFirst({ where: { deliveryMode: "extension", browserDeviceId: deviceId, status: { in: ["claimed", "sending"] } } })) return null;
-    const job = await tx.autoCommentJob.findFirst({ where: { deliveryMode: "extension", browserDeviceId: deviceId, browserFbUserId: fbUserId,
-      status: "browser_ready", generation: control.generation, dryRun: false, nextAttemptAt: { lte: new Date() } }, orderBy: { createdAt: "asc" } });
-    if (!job) return null;
-    if (!await valid(tx, job, control)) { await cancelBeforeSend(tx, job); return null; }
-    const claimToken = randomUUID(), claimUntil = new Date(Date.now() + 120_000);
-    await tx.autoCommentJob.update({ where: { id: job.id }, data: { status: "claimed", claimToken, claimUntil } });
-    return { id: job.id, claimToken, externalUrl: job.externalUrl, message: job.message, fbUserId: job.browserFbUserId, claimUntil: claimUntil.toISOString() };
-  });
+    const now = new Date();
+    const where = { deliveryMode: "extension", browserDeviceId: deviceId, browserFbUserId: fbUserId,
+      status: "browser_ready", generation: control.generation, dryRun: false, nextAttemptAt: { lte: now } };
+    const globalDelay = await globalDispatchDelay(tx, control, now);
+    if (globalDelay) {
+      await tx.autoCommentJob.updateMany({ where, data: { nextAttemptAt: globalDelay.retryAt, lastError: globalDelay.reason } });
+      return null;
+    }
+    const jobs = await tx.autoCommentJob.findMany({ where, include: { rule: { select: { areaCooldownSec: true } } }, orderBy: { createdAt: "asc" }, take: 30 });
+    const groupDelays = new Map<string, DispatchDelay | null>();
+    const postponed = new Map<string, { ids: string[]; delay: DispatchDelay }>();
+    const storeDeferrals = async () => {
+      for (const entry of postponed.values()) await tx.autoCommentJob.updateMany({ where: { id: { in: entry.ids }, status: "browser_ready" }, data: { nextAttemptAt: entry.delay.retryAt, lastError: entry.delay.reason } });
+    };
+    for (const job of jobs) {
+      const key = `${job.pageId}:${job.rule.areaCooldownSec}`;
+      if (!groupDelays.has(key)) groupDelays.set(key, await groupDispatchDelay(tx, job.pageId, job.rule.areaCooldownSec, now));
+      const delay = groupDelays.get(key);
+      if (delay) {
+        const entry = postponed.get(key) ?? { ids: [], delay };
+        entry.ids.push(job.id); postponed.set(key, entry);
+        continue;
+      }
+      const state = await valid(tx, job, control);
+      if (!state) { await cancelBeforeSend(tx, job); continue; }
+      await storeDeferrals();
+      const claimToken = randomUUID(), claimUntil = new Date(Date.now() + 120000);
+      await tx.autoCommentJob.update({ where: { id: job.id }, data: { status: "claimed", claimToken, claimUntil, lastError: "" } });
+      return { id: job.id, claimToken, externalUrl: job.externalUrl, message: job.message, fbUserId: job.browserFbUserId, claimUntil: claimUntil.toISOString() };
+    }
+    await storeDeferrals();
+    return null;
+  }, { timeout: 10000, maxWait: 3000 });
 }
 
 /** Durable sending marker before returning a very short lived single-use click grant. */
@@ -235,36 +272,41 @@ export async function authorizeBrowserComment(deviceId: string, id: string, toke
     const job = await tx.autoCommentJob.findFirst({ where: { id, browserDeviceId: deviceId, browserFbUserId: fbUserId, deliveryMode: "extension", status: "claimed", claimToken: token, claimUntil: { gt: new Date() } } });
     if (!job || control.dryRun || job.dryRun) return null;
     const state = await valid(tx, job, control); if (!state) { await cancelBeforeSend(tx, job); return null; }
+    const defer = async (delay: DispatchDelay) => {
+      await tx.autoCommentJob.update({ where: { id }, data: { status: "browser_ready", claimToken: null, claimUntil: null, nextAttemptAt: delay.retryAt, lastError: delay.reason } });
+      return null;
+    };
     const worker = await tx.$queryRaw<{ name: string }[]>`SELECT "name" FROM "Lease" WHERE "name"='worker' AND "expiresAt">(clock_timestamp() AT TIME ZONE 'UTC') + interval '5 seconds'`;
-    if (!worker.length) return null;
-    if (state.rule.requireAi && !await aiReady(tx, state.post)) return null;
-    if (state.rule.messageMode === "ai_draft" && !draftStillValid(job, state.rule, state.post)) return null;
-    const defer = () => tx.autoCommentJob.update({ where: { id }, data: { status: "browser_ready", claimToken: null, claimUntil: null, nextAttemptAt: new Date(Date.now() + 60000) } });
-    if (await tx.autoCommentJob.findFirst({ where: { deliveryMode: "extension", status: "sending", claimUntil: { gt: new Date() } } })) { await defer(); return null; }
-    const now = new Date(), local = new Date(now.getTime() + 7 * 3600_000);
-    const dayStart = new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate()) - 7 * 3600_000);
-    const [hour, day, previous] = await Promise.all([
-      tx.autoCommentLog.count({ where: { event: "dispatch", createdAt: { gte: new Date(now.getTime() - 3600_000) } } }),
-      tx.autoCommentLog.count({ where: { event: "dispatch", createdAt: { gte: dayStart } } }),
-      tx.autoCommentLog.findFirst({ where: { event: "dispatch", pageId: job.pageId }, orderBy: { createdAt: "desc" }, include: { job: { include: { rule: true } } } }),
-    ]);
-    if (hour >= control.hourlyLimit || day >= control.dailyLimit || (previous && now.getTime() - previous.createdAt.getTime() < Math.max(state.rule.areaCooldownSec, previous.job?.rule.areaCooldownSec ?? 0) * 1000)) { await defer(); return null; }
+    if (!worker.length) return defer({ retryAt: new Date(Date.now() + 30000), reason: "รอ Worker พร้อม" });
+    if (state.rule.requireAi && !await aiReady(tx, state.post)) return defer({ retryAt: new Date(Date.now() + 30000), reason: "รอ AI" });
+    if (state.rule.messageMode === "ai_draft" && !draftStillValid(job, state.rule, state.post)) { await cancelBeforeSend(tx, job); return null; }
+    const now = new Date();
+    const delay = combineDispatchDelays(await Promise.all([
+      globalDispatchDelay(tx, control, now), groupDispatchDelay(tx, job.pageId, state.rule.areaCooldownSec, now),
+    ]));
+    if (delay) return defer(delay);
     await tx.autoCommentJob.update({ where: { id }, data: { status: "sending", attempts: { increment: 1 }, dispatchedAt: now, claimUntil: new Date(now.getTime() + 120_000) } });
     await log(tx, job, "dispatch", "อนุญาต Extension กดส่งหนึ่งครั้ง ผลไม่ชัดเจนต้องตรวจเอง");
     return { ttlMs: BROWSER_GRANT_MS, issuedAt: now.toISOString() };
   });
 }
 
-export async function reportBrowserComment(deviceId: string, id: string, token: string, outcome: "observed" | "uncertain" | "blocked" | "failed", commentUrl?: string) {
+export async function reportBrowserComment(deviceId: string, id: string, token: string, outcome: "observed" | "uncertain" | "blocked" | "failed" | "not_sent", commentUrl?: string) {
   return prisma.$transaction(async tx => {
     const control = await lockCommentControl(tx);
     const job = await tx.autoCommentJob.findFirst({ where: { id, browserDeviceId: deviceId, deliveryMode: "extension", claimToken: token, status: { in: ["claimed", "sending"] } } });
-    if (!job) return false;
+    if (!job) {
+      // A lost report response can be retried without changing a terminal result.
+      const handled = await tx.autoCommentJob.findFirst({ where: { id, browserDeviceId: deviceId, deliveryMode: "extension" } });
+      return Boolean(handled && (["browser_observed", "uncertain", "cancelled", "not_sent"].includes(handled.status)
+        || (handled.status === "browser_ready" && !handled.claimToken)));
+    }
     let observed = false;
     try { const url = new URL(commentUrl || ""); observed = browserTarget(url.origin + url.pathname, job.externalUrl.replace(/\/(?:posts|permalink)\/\d+\/?$/, ""), "facebook_group")?.key === job.postKey && /^\d+$/.test(url.searchParams.get("comment_id") || ""); } catch { /* no identifiable comment */ }
-    const status = job.status === "sending" ? outcome === "observed" && observed ? "browser_observed" : "uncertain" : "cancelled";
-    await tx.autoCommentJob.update({ where: { id }, data: { status, claimToken: null, claimUntil: null, lastError: status === "browser_observed" ? "พบคอมเมนต์ในหน้าจอ ไม่ใช่การยืนยันจาก API" : "หยุดงาน ไม่ส่งซ้ำอัตโนมัติ" } });
-    await log(tx, job, status, status === "browser_observed" ? "Extension พบคอมเมนต์และลิงก์ใหม่ในหน้าจอ" : "ต้องตรวจผลบน Facebook ด้วยตนเอง");
+    const status = outcome === "not_sent" ? "not_sent"
+      : job.status === "sending" ? outcome === "observed" && observed ? "browser_observed" : "uncertain" : "cancelled";
+    await tx.autoCommentJob.update({ where: { id }, data: { status, claimToken: null, claimUntil: null, lastError: status === "not_sent" ? "ส่วนขยายยืนยันว่าไม่ได้เรียกปุ่มส่ง เก็บประวัติไว้และไม่ส่งซ้ำอัตโนมัติ" : status === "browser_observed" ? "พบคอมเมนต์ในหน้าจอ ไม่ใช่การยืนยันจาก API" : "หยุดงาน ไม่ส่งซ้ำอัตโนมัติ" } });
+    await log(tx, job, status, status === "not_sent" ? "สิ้นสุดก่อนเรียกปุ่มส่ง ไม่พักระบบส่วนกลาง" : status === "browser_observed" ? "Extension พบคอมเมนต์และลิงก์ใหม่ในหน้าจอ" : "ต้องตรวจผลบน Facebook ด้วยตนเอง");
     if (outcome === "blocked" || status === "uncertain") {
       await tx.autoCommentRule.update({ where: { id: job.ruleId }, data: { pausedReason: "Extension พบข้อจำกัดหรือผลไม่ชัดเจน ตรวจ Facebook ก่อนเปิดใหม่" } });
       if (control.state === "running") await storeCommentControl(tx, { ...control, state: "paused" });

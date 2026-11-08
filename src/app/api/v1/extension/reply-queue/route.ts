@@ -1,3 +1,4 @@
+import { facebookWorkAllowed } from "@/lib/facebook-accounts";
 import { requireExtensionToken } from "@/lib/auth";
 import { corsPreflight, json, withCors } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
@@ -22,6 +23,7 @@ export async function POST(request: Request) {
   try {
     if (body.op === "status") return withCors(json({ advance: await replyAdvanceInfo() }));
     if (body.op === "next") {
+      if (!(await facebookWorkAllowed(request))) return withCors(json({ item: null, accountPaused: true }));
       const { item, ...advance } = await openNextReplyItem();
       return withCors(json({ item, advance }));
     }

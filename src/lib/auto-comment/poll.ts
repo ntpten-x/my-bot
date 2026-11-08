@@ -11,6 +11,8 @@ export async function autoCommentTick(assertActive: () => Promise<void>, options
   if (running || process.env.MYBOT_PROCESS !== "worker") return;
   running = true;
   try {
+    // Legacy simulations stay inert until the owner explicitly starts the live-only workflow.
+    if (!options.gateway && (await readCommentControl()).dryRun) return;
     await prepareBrowserComments(assertActive);
     // Runtime uses browser delivery only. The injected legacy gateway is retained
     // for isolated regression tests of previously stored jobs; no runtime caller supplies it.

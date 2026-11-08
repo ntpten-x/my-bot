@@ -1,3 +1,4 @@
+import { commentTypeAllowed, TYPE_SETUP_PREFIX } from "@/lib/auto-comment/type-setup";
 import { z } from "zod";
 import { commentMutationGuard } from "@/lib/auto-comment/api-guard";
 import { explainCommentRule } from "@/lib/auto-comment/matching";
@@ -29,6 +30,13 @@ export async function POST(request: Request) {
       ...input.data, createdAt: now, postedAt: input.data.postedAt ? new Date(input.data.postedAt) : null,
       duplicateOfId: input.data.duplicate ? "synthetic-duplicate" : null,
     }, now);
+    const typeSetup = await prisma.setting.findUnique({ where: { key: `${TYPE_SETUP_PREFIX}${input.data.ruleId}` } });
+    if (typeSetup) {
+      const source = await prisma.source.findUnique({ where: { id: input.data.sourceId }, select: { defaultProductId: true, boundCategorySlug: true } });
+      const passed = Boolean(source && await commentTypeAllowed(prisma, input.data.ruleId, source));
+      result.checks.push({ code: "type_scope", label: "กลุ่มยังอยู่ในประเภทที่กฎกำหนด", passed });
+      result.matched &&= passed;
+    }
     const response = json({ ...result, evaluatedAt: now.toISOString(), dispatchAuthorized: false });
     response.headers.set("Cache-Control", "no-store");
     return response;

@@ -6,7 +6,7 @@ import { json } from "@/lib/http";
 export const dynamic = "force-dynamic";
 
 const patchSchema = z.object({
-  name: z.string().min(1).max(80).optional(),
+  name: z.string().trim().min(1).max(80).optional(),
   matchWords: z.string().max(500).optional(),
 });
 
@@ -34,12 +34,26 @@ export async function DELETE(_request: Request, context: { params: Promise<{ id:
   const { error } = await authed();
   if (error) return error;
   const { id } = await context.params;
-  const children = await prisma.category.count({ where: { parentId: id } });
-  if (children) return json({ error: "ลบหมวดย่อยก่อน" }, 400);
   try {
-    await prisma.category.delete({ where: { id } });
+    const result = await prisma.$transaction(async (tx) => {
+      const category = await tx.category.findUnique({ where: { id } });
+      if (!category) return { error: "ไม่พบหมวดหมู่นี้", status: 404 };
+      if (await tx.category.count({ where: { parentId: id } })) {
+        return { error: "หมวดหมู่นี้มีหมวดย่อย กรุณาย้ายหรือลบหมวดย่อยในหน้า หมวดและคีย์เวิร์ด ก่อน", status: 400 };
+      }
+      if (await tx.product.count({ where: { categorySlug: category.slug } })) {
+        return { error: "หมวดหมู่นี้มีประเภท กรุณาลบประเภทภายใต้หมวดหมู่ก่อน", status: 400 };
+      }
+      if (await tx.replyTemplate.count({ where: { categoryId: id } })) {
+        return { error: "หมวดหมู่นี้มีชุดข้อความ กรุณาย้ายหรือลบข้อความในหน้า จัดการข้อความ ก่อน", status: 400 };
+      }
+      await tx.source.updateMany({ where: { boundCategorySlug: category.slug }, data: { boundCategorySlug: "" } });
+      await tx.category.delete({ where: { id } });
+      return null;
+    });
+    if (result) return json({ error: result.error }, result.status);
   } catch {
-    return json({ error: "ลบหมวดนี้ไม่ได้" }, 400);
+    return json({ error: "ลบหมวดหมู่นี้ไม่ได้ กรุณาลองอีกครั้ง" }, 400);
   }
   return json({ ok: true });
 }

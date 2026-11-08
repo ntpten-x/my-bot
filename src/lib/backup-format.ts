@@ -114,7 +114,7 @@ export async function restoreDatabase(db: PrismaClient, input: unknown, allowLeg
         if (name === "Setting" && copy.key === "auto_comment_control") {
           let old = {};
           try { old = JSON.parse(String(copy.value)); } catch { /* fall back to disabled */ }
-          copy.value = JSON.stringify({ ...old, state: "stopped", dryRun: true, emergency: true, generation: "restored-disabled", startedAt: new Date().toISOString() });
+          copy.value = JSON.stringify({ ...old, state: "stopped", dryRun: false, emergency: true, generation: "restored-disabled", startedAt: new Date().toISOString() });
         }
         return copy;
       });

@@ -1,3 +1,4 @@
+import { templateScopeError } from "@/lib/template-scope";
 import { prisma } from "@/lib/prisma";
 import { authed } from "@/lib/guard";
 import { json } from "@/lib/http";
@@ -18,6 +19,12 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   }
   const parsed = patchSchema.safeParse(raw);
   if (!parsed.success) return json({ error: "ข้อมูลไม่ถูกต้อง" }, 400);
+  if (parsed.data.categoryId !== undefined || parsed.data.productId !== undefined) {
+    const current = await prisma.replyTemplate.findUnique({ where: { id }, select: { categoryId: true, productId: true } });
+    if (!current) return json({ error: "ไม่พบข้อความ" }, 404);
+    const scopeError = await templateScopeError(parsed.data.categoryId === undefined ? current.categoryId : parsed.data.categoryId, parsed.data.productId === undefined ? current.productId : parsed.data.productId);
+    if (scopeError) return json({ error: scopeError }, 400);
+  }
   const { sourceIds, ...rest } = parsed.data;
   const data = {
     ...rest,

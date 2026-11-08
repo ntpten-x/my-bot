@@ -1,3 +1,4 @@
+import { facebookWorkAllowed } from "@/lib/facebook-accounts";
 import { z } from "zod";
 import { requireExtensionToken } from "@/lib/auth";
 import { saveParseSample, touchExtension } from "@/lib/extension-status";
@@ -21,6 +22,7 @@ export async function POST(request: Request) {
   }
   const parsed = bodySchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return withCors(json({ error: "ข้อมูลไม่ถูกต้อง" }, 400));
+  if (!(await facebookWorkAllowed(request))) return withCors(json({ error: "บัญชีถูกหยุดงาน", code: "ACCOUNT_PAUSED" }, 423));
   await saveParseSample(parsed.data.sourceUrl, parsed.data.posts);
   const source = await findSourceByUrl(parsed.data.sourceUrl).catch(() => null);
   await touchExtension(source?.id);

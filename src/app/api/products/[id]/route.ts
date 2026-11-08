@@ -34,3 +34,23 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     return json({ error: "ไม่พบเกม/สินค้านี้" }, 404);
   }
 }
+
+export async function DELETE(_request: Request, context: { params: Promise<{ id: string }> }) {
+  const { error } = await authed();
+  if (error) return error;
+  const { id } = await context.params;
+  try {
+    const result = await prisma.$transaction(async tx => {
+      if (!(await tx.product.findUnique({ where: { id } }))) return { error: "ไม่พบประเภทนี้", status: 404 };
+      if (await tx.replyTemplate.count({ where: { productId: id } })) return { error: "ประเภทนี้มีชุดข้อความ กรุณาย้ายหรือลบข้อความก่อน", status: 400 };
+      await tx.source.updateMany({ where: { defaultProductId: id }, data: { defaultProductId: null } });
+      await tx.product.delete({ where: { id } });
+      return null;
+    });
+    if (result) return json({ error: result.error }, result.status);
+    clearProductCache();
+    return json({ ok: true });
+  } catch {
+    return json({ error: "ลบประเภทไม่ได้ กรุณาลองอีกครั้ง" }, 400);
+  }
+}

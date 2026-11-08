@@ -4,10 +4,12 @@ const labels: Record<string, string> = {
   not_forbidden: "พบคำต้องห้าม", not_duplicate: "โพสต์ซ้ำ", not_dismissed: "เจ้าของข้ามโพสต์แล้ว",
   open_intent: "ปิดการหา/ขาย หรือมีข้อความปฏิเสธ", intent: "เจตนาไม่ตรงกฎ",
   source: "กลุ่มไม่อยู่ในกฎ", source_disabled: "แหล่งข้อมูลปิดอยู่", window: "ยังไม่ถึงเวลาทำงาน",
+  type_scope: "กลุ่มไม่ได้อยู่ในประเภทที่กฎกำหนด หรือประเภทปิดใช้งาน",
   age: "อายุโพสต์ไม่อยู่ในช่วงที่กำหนด", excluded: "พบคำยกเว้น", keywords: "คำสำคัญไม่ครบตามกฎ",
   no_template: "ยังไม่มีข้อความตอบ", before_start: "โพสต์ก่อนเริ่มรอบนี้", unsupported_target: "ลิงก์โพสต์ไม่รองรับ",
   waiting_ai: "รอผล AI", existing_delivery: "มีงานหรือประวัติส่งอยู่แล้ว",
   pending_ai: "งานรอ AI/ตรวจความพร้อม", browser_ready: "งานรอ Extension", claimed: "อุปกรณ์รับงานแล้ว",
+  not_sent: "สิ้นสุดก่อนเรียกปุ่มส่ง",
   sending: "เริ่มการส่งแล้ว", uncertain: "ต้องตรวจผล ห้ามส่งซ้ำ", browser_observed: "พบคอมเมนต์แล้ว",
   dry_run: "จำลองแล้ว", cancelled: "งานเดิมยกเลิกแล้ว",
 };

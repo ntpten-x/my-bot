@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { explainCommentRule, matchesCommentRule, type MatchPost, type MatchRule } from "../../src/lib/auto-comment/matching";
 
-const mocks = vi.hoisted(() => ({ authed: vi.fn(), findUnique: vi.fn() }));
+const mocks = vi.hoisted(() => ({ authed: vi.fn(), findUnique: vi.fn(), setting: vi.fn() }));
 vi.mock("../../src/lib/guard", () => ({ authed: mocks.authed }));
-vi.mock("../../src/lib/prisma", () => ({ prisma: { autoCommentRule: { findUnique: mocks.findUnique } } }));
+vi.mock("../../src/lib/prisma", () => ({ prisma: { setting: { findUnique: mocks.setting }, autoCommentRule: { findUnique: mocks.findUnique } } }));
 import { POST } from "../../src/app/api/auto-comment/preview/route";
 
 const now = new Date("2026-11-02T03:00:00Z"); // Monday 10:00 Bangkok
@@ -11,7 +11,7 @@ const rule: MatchRule = { enabled: true, pausedReason: "", sourceIdsJson: '["gro
 const post: MatchPost = { text: "หาช่างแอร์", sourceId: "group", createdAt: now, postedAt: null, isAd: false, forbiddenHit: false, duplicateOfId: null, dismissed: false };
 const request = (data: unknown, headers = {}) => new Request("http://localhost:8001/api/auto-comment/preview", { method: "POST", headers: { origin: "http://localhost:8001", "content-type": "application/json", ...headers }, body: JSON.stringify(data) });
 const input = { ruleId: "rule", sourceId: "group", text: "หาช่างแอร์" };
-beforeEach(() => { vi.clearAllMocks(); mocks.authed.mockResolvedValue({ error: null }); mocks.findUnique.mockResolvedValue(rule); });
+beforeEach(() => { vi.clearAllMocks(); mocks.authed.mockResolvedValue({ error: null }); mocks.findUnique.mockResolvedValue(rule); mocks.setting.mockResolvedValue(null); });
 
 describe("shared rule explanations", () => {
   it("reports every failure without hiding keyword and exclusion evidence", () => {

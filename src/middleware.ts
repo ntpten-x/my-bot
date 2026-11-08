@@ -9,7 +9,7 @@ function applyCors(request: NextRequest, response: NextResponse) {
   response.headers.set("Vary", "Origin");
   if (!origin) return response;
   response.headers.set("Access-Control-Allow-Origin", origin);
-  response.headers.set("Access-Control-Allow-Headers", "Authorization, Content-Type");
+  response.headers.set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Extension-Version, X-Facebook-User-Id");
   response.headers.set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
   response.headers.set("Access-Control-Max-Age", "600");
   return response;

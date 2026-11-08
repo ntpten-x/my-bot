@@ -25,9 +25,12 @@ function validApiBase(value) {
 }
 
 async function loadConfig() {
-  const stored = await chrome.storage.local.get(DEFAULTS);
+  const stored = await chrome.storage.local.get({ ...DEFAULTS, serverAccountControl: null, fbIdentity: null });
   const cfg = { ...DEFAULTS, ...stored, schedules: stored.schedules || {} };
   if (!validApiBase(cfg.apiBase)) return { ...cfg, apiBase: DEFAULTS.apiBase, token: "" };
+  const control = stored.serverAccountControl;
+  const identity = stored.fbIdentity;
+  cfg.accountPaused = Boolean(control?.paused && control.apiBase === base(cfg) && control.fbUserId === identity?.id);
   return cfg;
 }
 
@@ -133,13 +136,13 @@ async function fetchRetry(url, options = {}, { timeoutMs = 45000, retries = 2 } 
 async function postJson(cfg, path, body, opts) {
   return fetchRetry(`${base(cfg)}${path}`, {
     method: "POST",
-    headers: headers(cfg.token),
+    headers: { ...headers(cfg.token), "x-facebook-user-id": await currentFbUserId() },
     body: JSON.stringify(body),
   }, opts);
 }
 
 async function getJson(cfg, path, opts = { timeoutMs: 30000, retries: 1 }) {
-  return fetchRetry(`${base(cfg)}${path}`, { headers: headers(cfg.token) }, opts);
+  return fetchRetry(`${base(cfg)}${path}`, { headers: { ...headers(cfg.token), "x-facebook-user-id": await currentFbUserId() } }, opts);
 }
 
 // ---- Status for the "ภาพรวมระบบ" page (read-only facts about this browser) ----
@@ -235,7 +238,7 @@ async function queueOutbox(item) {
 }
 let flushing = false;
 async function flushOutbox(cfg, options = {}) {
-  if (flushing || cfg.paused || !cfg.token) return;
+  if (flushing || cfg.paused || cfg.accountPaused || !cfg.token) return;
   flushing = true;
   const results = {};
   const deadline = Math.min(Date.now() + 20_000, options.deadlineMs || Infinity);
@@ -249,6 +252,7 @@ async function flushOutbox(cfg, options = {}) {
       }
       const response = await postJson(cfg, "/api/v1/ingest", { ...(item.batchId ? { batchId: item.batchId } : {}), sourceUrl: item.sourceUrl, posts: item.posts, fbUserId: item.fbUserId || undefined }, { timeoutMs: Math.max(1, Math.min(15000, deadline - Date.now())), retries: 0 }).catch(() => null);
       if (!response || RETRY_STATUS.has(response.status) || response.status >= 500) break;
+      if (response.status === 423) break; // Account paused: retain the complete batch for resume.
       if ([401, 403].includes(response.status)) { await rememberError("การเชื่อมต่อหมดสิทธิ์ ข้อมูลยังอยู่ในคิว กรุณาจับคู่ Extension ใหม่"); break; }
       const data = response.json ? await response.json().catch(() => ({})) : {};
       const ack = new Set(response.ok && data.batchId === item.batchId ? (data.receipts || []).filter(r => ["accepted", "skipped"].includes(r.outcome)).map(r => r.itemId) : []);
@@ -431,7 +435,12 @@ async function heartbeat() {
       },
     }, { timeoutMs: 30000, retries: 1 });
     await chrome.storage.local.set({ lastHeartbeat: { at: Date.now(), status: response.status } });
-    if (response.ok && outbox.length) await flushOutbox(cfg);
+    if (response.ok) {
+      const status = await response.json().catch(() => ({}));
+      await chrome.storage.local.set({ serverAccountControl: { apiBase: base(cfg), fbUserId: fb.id || "", paused: Boolean(status.accountPaused), at: Date.now() } });
+      if (status.accountPaused) await setQuiet("บัญชีนี้ถูกหยุดงานจากหน้าจัดการบัญชี");
+      if (!status.accountPaused && outbox.length) await flushOutbox(await loadConfig());
+    }
   } catch {
     await chrome.storage.local.set({ lastHeartbeat: { at: Date.now(), status: 0 } });
   } finally {
@@ -1187,7 +1196,7 @@ async function scrapeGroup(cfg, group, remote, options) {
     const canRead = async () => {
       const latest = await loadConfig();
       const blocked = await chrome.storage.local.get({ outboxBlocked: false });
-      if (latest.paused || latest.token !== cfg.token || base(latest) !== base(cfg) || blocked.outboxBlocked) return "paused";
+      if (latest.paused || latest.accountPaused || latest.token !== cfg.token || base(latest) !== base(cfg) || blocked.outboxBlocked) return "paused";
       return quietReason(remote?.quiet);
     };
     const runPass = (pass, hold, current) => {
@@ -1245,7 +1254,7 @@ async function scrapeGroup(cfg, group, remote, options) {
     result.stoppedBy = run.stoppedBy || "end";
     result.postsFound = observed.size || Math.max(0, run.found - startCounters.found);
     const latest = await loadConfig();
-    const flushed = !latest.paused && latest.token === cfg.token && base(latest) === base(cfg) ? await flushOutbox(latest, { deadlineMs: deadlineMs - 5000 }) : {};
+    const flushed = !latest.paused && !latest.accountPaused && latest.token === cfg.token && base(latest) === base(cfg) ? await flushOutbox(latest, { deadlineMs: deadlineMs - 5000 }) : {};
     result.newPosts = batchIds.reduce((sum, id) => sum + (Number(flushed?.[id]?.inserted) || 0), 0);
     retain = run.hitLimit || ["limit", "cap", "yield", "stalled", "loading"].includes(run.stoppedBy);
     if (!retain && ["end", "exhausted", "seen", "old"].includes(run.stoppedBy)) {
@@ -1302,7 +1311,7 @@ async function processFullTextQueue(cfg, groups, options = {}) {
     if (fullTextBudget <= 0 || metrics.tried >= (options.maxItems || 10) || Date.now() >= detailDeadline) break;
     const group = groups.find(g => g.id === item.groupId);
     if (!group || (used.get(group.id) || 0) >= 2) continue;
-    const latest = await loadConfig(); if (latest.paused || latest.token !== cfg.token || base(latest) !== base(cfg)) break;
+    const latest = await loadConfig(); if (latest.paused || latest.accountPaused || latest.token !== cfg.token || base(latest) !== base(cfg)) break;
     used.set(group.id, (used.get(group.id) || 0) + 1);
     let reader;
     try {
@@ -1369,7 +1378,7 @@ async function releaseRunLock() {
 async function cycle() {
   if (cycling) return;
   const cfg = await loadConfig();
-  if (cfg.paused || !cfg.token) return;
+  if (cfg.paused || cfg.accountPaused || !cfg.token) return;
   if ((await chrome.storage.local.get({ outboxBlocked: false })).outboxBlocked) {
     await flushOutbox(cfg);
     if ((await chrome.storage.local.get({ outboxBlocked: false })).outboxBlocked) return;
@@ -1385,6 +1394,11 @@ async function cycle() {
     const response = await getJson(cfg, "/api/v1/extension-config");
     if (!response.ok) return;
     const remote = await response.json();
+    if (remote.accountPaused) {
+      await chrome.storage.local.set({ serverAccountControl: { apiBase: base(cfg), fbUserId: await currentFbUserId(), paused: true, at: Date.now() } });
+      await setQuiet(remote.message || "บัญชีนี้ถูกหยุดงานจากหน้าจัดการบัญชี");
+      return;
+    }
     if (remote.upgradeRequired || remote.scrapeAllowed === false) {
       await setQuiet(`ต้องอัปเดตส่วนขยายเป็น ${remote.expectedVersion || "เวอร์ชันล่าสุด"}`);
       await rememberError(remote.message || `ส่วนขยายเวอร์ชันนี้ถูกระงับการอ่าน — ใช้ ${remote.expectedVersion || "เวอร์ชันล่าสุด"}`).catch(() => undefined);
@@ -1541,7 +1555,7 @@ async function forwardManual(message, sender) {
   // Pages opened by the background scrape report through scrapeGroup, not here.
   if (sender && sender.tab && (scrapingTabs.has(sender.tab.id) || isScrapeWindowTab(sender.tab))) return;
   const cfg = await loadConfig();
-  if (cfg.paused || !cfg.token) return;
+  if (cfg.paused || cfg.accountPaused || !cfg.token) return;
   const key = message.sourceUrl;
   const last = recentManual.get(key) || 0;
   if (Date.now() - last < 20000) return;
@@ -1557,7 +1571,7 @@ async function forwardManual(message, sender) {
 async function pollTasks() {
   if (cycling) return;
   const cfg = await loadConfig();
-  if (cfg.paused || !cfg.token) return;
+  if (cfg.paused || cfg.accountPaused || !cfg.token) return;
   if (!(await takeRunLock("tasks"))) return;
   try {
     const response = await getJson(cfg, "/api/v1/extension/tasks", { timeoutMs: 20000, retries: 0 });

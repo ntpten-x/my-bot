@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Activity, Bell, BookOpen, Bookmark, Bug, LayoutDashboard, Lightbulb, LogOut, MessageSquareText, Radar, Rss, Settings, Sun, Tags, Workflow } from "lucide-react";
+import { Activity, Bell, BookOpen, Bookmark, Bug, LayoutDashboard, Lightbulb, LogOut, MessageSquareText, Radar, Rss, Settings, Sun, Tags, Users, Workflow } from "lucide-react";
 import { api } from "./api";
 import { cn } from "@/lib/utils";
 
@@ -13,9 +13,12 @@ const NAV = [
   { href: "/dashboard", label: "แดชบอร์ด", icon: LayoutDashboard },
   { href: "/feed", label: "ฟีดลีด", icon: Radar },
   { href: "/pipeline", label: "ไปป์ไลน์", icon: Bookmark },
+  { href: "/messages", label: "จัดการข้อความ", icon: MessageSquareText },
   { href: "/templates", label: "ข้อความสำเร็จรูป", icon: MessageSquareText },
   { href: "/automation", label: "กฎและพื้นที่", icon: Workflow },
   { href: "/auto-comment", label: "คอมเมนต์อัตโนมัติ", icon: MessageSquareText },
+  { href: "/accounts", label: "จัดการบัญชี", icon: Users },
+  { href: "/groups", label: "จัดการกลุ่ม", icon: Users },
   { href: "/sources", label: "แหล่งข้อมูล", icon: Rss },
   { href: "/parser", label: "ทดสอบตัวอ่าน", icon: Bug },
   { href: "/categories", label: "หมวดและคีย์เวิร์ด", icon: Tags },

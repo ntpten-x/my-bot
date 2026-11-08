@@ -3,30 +3,36 @@
   let busy = false;
   async function run(deps) {
     if (busy) return; busy = true;
-    let tabId, job, cfg, authorized = false;
+    let tabId, job, cfg, authorizationRequested = false, sendInvoked = false, reportAttempted = false;
     const request = async body => {
       const response = await deps.postJson(cfg, "/api/v1/extension/comments", body, { retries: 0, timeoutMs: 15000 });
       if (!response.ok) throw new Error("comment request rejected");
       return response.json();
     };
-    const report = async (outcome, commentUrl) => request({ action: "report", id: job.id, claimToken: job.claimToken, outcome, ...(commentUrl ? { commentUrl } : {}) });
+    const report = async (outcome, commentUrl) => {
+      reportAttempted = true;
+      const stored = await chrome.storage.local.get({ commentJournal: null });
+      const pendingReport = { outcome, ...(commentUrl ? { commentUrl } : {}) };
+      const journal = stored.commentJournal || { id: job.id, claimToken: job.claimToken, apiBase: deps.base(cfg), state: sendInvoked ? "sending" : authorizationRequested ? "authorizing" : "claimed", at: Date.now() };
+      await chrome.storage.local.set({ commentJournal: { ...journal, pendingReport } });
+      const result = await request({ action: "report", id: job.id, claimToken: job.claimToken, ...pendingReport });
+      if (result.ok !== true) throw new Error("report not acknowledged");
+      await chrome.storage.local.remove("commentJournal");
+    };
     try {
       cfg = await deps.loadConfig();
       const local = await chrome.storage.local.get({ browserCommentsEnabled: false, commentJournal: null });
-      if (!local.browserCommentsEnabled || cfg.paused || !String(cfg.token).startsWith("mbd_") || local.commentJournal) return;
+      if (!local.browserCommentsEnabled || cfg.paused || cfg.accountPaused || !String(cfg.token).startsWith("mbd_") || local.commentJournal) return;
       const fbUserId = await deps.currentFbUserId(); if (!fbUserId) return;
       job = (await request({ action: "claim", fbUserId })).job; if (!job) return;
-      // Persist before opening a tab. A service-worker restart must never re-run this job.
       await chrome.storage.local.set({ commentJournal: { id: job.id, claimToken: job.claimToken, apiBase: deps.base(cfg), state: "claimed", at: Date.now() } });
       const tab = await chrome.tabs.create({ url: job.externalUrl, active: true }); tabId = tab.id;
       await deps.waitComplete(tabId);
-      // Controlled editors require the document to own focus; do not fake input in a background tab.
       if (tab.windowId !== undefined) await chrome.windows.update(tab.windowId, { focused: true });
       const execute = async (kind, payload = {}) => {
         const result = await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, func: root.MyBotBrowserComment.action, args: [kind, { ...job, ...payload }] });
         return result[0]?.result || { ok: false, outcome: "failed" };
       };
-      // Retry only finding/loading the composer, never the send action.
       let prepared;
       for (let attempt = 0; attempt < 8; attempt++) {
         prepared = await execute("prepare");
@@ -37,15 +43,18 @@
       job.baseline = prepared.baseline; job.profiles = prepared.profiles || [];
       const latest = await deps.loadConfig();
       const enabled = await chrome.storage.local.get({ browserCommentsEnabled: false });
-      if (latest.paused || !enabled.browserCommentsEnabled || deps.base(latest) !== deps.base(cfg) || latest.token !== cfg.token) { await report("failed"); return; }
-      // Mark locally before asking. Losing the authorization response is an ambiguous dispatch too.
-      await chrome.storage.local.set({ commentJournal: { id: job.id, claimToken: job.claimToken, apiBase: deps.base(cfg), state: "sending", at: Date.now(), job: { ...job, sentAt: Date.now() } } });
-      authorized = true;
+      if (latest.paused || latest.accountPaused || !enabled.browserCommentsEnabled || deps.base(latest) !== deps.base(cfg) || latest.token !== cfg.token) { await report("failed"); return; }
+      // This phase cannot invoke send. Recovery can report definite non-delivery even if authorization is lost.
       const started = Date.now();
+      await chrome.storage.local.set({ commentJournal: { id: job.id, claimToken: job.claimToken, apiBase: deps.base(cfg), state: "authorizing", at: started, job: { ...job, sentAt: started } } });
+      authorizationRequested = true;
       const grant = (await request({ action: "authorize", id: job.id, claimToken: job.claimToken, fbUserId })).grant;
-      if (!grant || Date.now() - started >= grant.ttlMs) { await report("uncertain"); return; }
+      if (!grant || Date.now() - started >= grant.ttlMs) { await report("not_sent"); return; }
       const finalConfig = await deps.loadConfig(), finalFlags = await chrome.storage.local.get({ browserCommentsEnabled: false });
-      if (finalConfig.paused || !finalFlags.browserCommentsEnabled || finalConfig.token !== cfg.token || deps.base(finalConfig) !== deps.base(cfg)) { await report("uncertain"); return; }
+      if (finalConfig.paused || finalConfig.accountPaused || !finalFlags.browserCommentsEnabled || finalConfig.token !== cfg.token || deps.base(finalConfig) !== deps.base(cfg)) { await report("not_sent"); return; }
+      // Persist ambiguity BEFORE executing the click; after this point no automatic resend is allowed.
+      await chrome.storage.local.set({ commentJournal: { id: job.id, claimToken: job.claimToken, apiBase: deps.base(cfg), state: "sending", at: started, job: { ...job, sentAt: started } } });
+      sendInvoked = true;
       const sent = await execute("send", { permitUntil: started + Math.min(3000, grant.ttlMs) });
       if (!sent.ok) { await report(sent.outcome === "blocked" ? "blocked" : "uncertain"); return; }
       let observed;
@@ -53,21 +62,13 @@
         await deps.sleep(1000); observed = await execute("observe");
         if (observed.ok || observed.outcome === "blocked") break;
       }
-      if (!observed?.ok && observed?.outcome !== "blocked") {
-        observed = await execute("reconcile", { baseline: job.baseline, profiles: job.profiles, sentAt: started });
-      }
+      if (!observed?.ok && observed?.outcome !== "blocked") observed = await execute("reconcile", { baseline: job.baseline, profiles: job.profiles, sentAt: started });
       await report(observed?.outcome || "uncertain", observed?.commentUrl);
     } catch {
-      if (job) await report(authorized ? "uncertain" : "failed").catch(() => undefined);
-      await deps.rememberError("งานคอมเมนต์ Extension หยุด กรุณาตรวจประวัติและ Facebook ก่อนเริ่มใหม่").catch(() => undefined);
+      if (job && !reportAttempted) await report(sendInvoked ? "uncertain" : authorizationRequested ? "not_sent" : "failed").catch(() => undefined);
+      await deps.rememberError("งานคอมเมนต์หยุดหรือรอรายงานผล ตรวจประวัติก่อนเริ่มใหม่").catch(() => undefined);
     } finally {
-      // Retain an unresolved journal if reporting failed; recovery reports only, never sends.
-      if (job) {
-        try {
-          await report(authorized ? "uncertain" : "failed");
-          await chrome.storage.local.remove("commentJournal");
-        } catch { /* recovered on the next alarm */ }
-      }
+      // A failed report stays durable; the next recovery retries that report, never the send.
       if (tabId !== undefined) await chrome.tabs.remove(tabId).catch(() => undefined);
       busy = false;
     }
@@ -78,17 +79,22 @@
     if (!journal) return;
     const cfg = await deps.loadConfig(); if (deps.base(cfg) !== journal.apiBase) return;
     try {
-      let observed = null;
-      if (journal.state === "sending" && journal.job && Date.now() - journal.at < 10 * 60_000) {
-        const tabs = await chrome.tabs.query({ url: ["https://www.facebook.com/groups/*", "https://web.facebook.com/groups/*"] });
-        const tab = tabs.find(tab => tab.url?.split("?")[0].replace(/\/$/, "") === journal.job.externalUrl.replace(/\/$/, ""));
-        if (tab?.id !== undefined) {
-          const results = await chrome.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] }, func: root.MyBotBrowserComment.action, args: ["reconcile", journal.job] });
-          observed = results[0]?.result;
+      let pendingReport = journal.pendingReport;
+      if (!pendingReport) {
+        let observed = null;
+        if (journal.state === "sending" && journal.job && Date.now() - journal.at < 10 * 60000) {
+          const tabs = await chrome.tabs.query({ url: ["https://www.facebook.com/groups/*", "https://web.facebook.com/groups/*"] });
+          const tab = tabs.find(tab => tab.url?.split("?")[0].replace(/\/$/, "") === journal.job.externalUrl.replace(/\/$/, ""));
+          if (tab?.id !== undefined) {
+            const results = await chrome.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] }, func: root.MyBotBrowserComment.action, args: ["reconcile", journal.job] });
+            observed = results[0]?.result;
+          }
         }
+        pendingReport = { outcome: observed?.ok ? "observed" : journal.state === "sending" ? "uncertain" : journal.state === "authorizing" ? "not_sent" : "failed", ...(observed?.commentUrl ? { commentUrl: observed.commentUrl } : {}) };
+        await chrome.storage.local.set({ commentJournal: { ...journal, pendingReport } });
       }
-      const response = await deps.postJson(cfg, "/api/v1/extension/comments", { action: "report", id: journal.id, claimToken: journal.claimToken, outcome: observed?.ok ? "observed" : journal.state === "sending" ? "uncertain" : "failed", ...(observed?.commentUrl ? { commentUrl: observed.commentUrl } : {}) }, { retries: 0, timeoutMs: 15000 });
-      if (response.ok) await chrome.storage.local.remove("commentJournal");
+      const response = await deps.postJson(cfg, "/api/v1/extension/comments", { action: "report", id: journal.id, claimToken: journal.claimToken, ...pendingReport }, { retries: 0, timeoutMs: 15000 });
+      if (response.ok && (await response.json()).ok === true) await chrome.storage.local.remove("commentJournal");
     } catch { /* no retry of sending */ }
   }
   root.MyBotCommentWorker = { run, recover };

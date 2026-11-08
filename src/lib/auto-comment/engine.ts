@@ -1,3 +1,5 @@
+import { RULE_ARCHIVE_PREFIX } from "./rule-archive";
+import { TYPE_SETUP_PREFIX, readTypeSetup } from "./type-setup";
 import { randomUUID } from "node:crypto";
 import type { AutoCommentJob, AutoCommentRule, Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
@@ -194,7 +196,7 @@ export async function processAutoCommentQueue(options: { gateway?: CommentGatewa
 
 export async function autoCommentDashboard() {
   const control = await readCommentControl();
-  const [rules, sources, jobs, counts, observed, matched, logs, evaluations] = await Promise.all([
+  const [rules, sources, jobs, counts, observed, matched, logs, evaluations, typeSetups, products, categories] = await Promise.all([
     prisma.autoCommentRule.findMany({ orderBy: { createdAt: "asc" }, include: { templates: { orderBy: { sortOrder: "asc" } } } }),
     prisma.source.findMany({ select: { id: true, name: true, type: true, enabled: true }, orderBy: { name: "asc" } }),
     prisma.autoCommentJob.findMany({ orderBy: { createdAt: "desc" }, take: 100 }),
@@ -205,10 +207,17 @@ export async function autoCommentDashboard() {
     prisma.autoCommentEvaluation.findMany({ where: { generation: control.generation },
       orderBy: { evaluatedAt: "desc" }, take: 50,
       include: { post: { select: { text: true, externalUrl: true } } } }),
+    prisma.setting.findMany({ where: { OR: [{ key: { startsWith: TYPE_SETUP_PREFIX } }, { key: { startsWith: RULE_ARCHIVE_PREFIX } }] }, select: { key: true, value: true } }),
+    prisma.product.findMany({ select: { id: true, name: true, categorySlug: true } }),
+    prisma.category.findMany({ where: { parentId: null }, select: { slug: true, name: true } }),
   ]);
+  const archivedIds = new Set(typeSetups.filter(row => row.key.startsWith(RULE_ARCHIVE_PREFIX) && row.value === "1").map(row => row.key.slice(RULE_ARCHIVE_PREFIX.length)));
+  const setupOf = new Map(typeSetups.filter(row => row.key.startsWith(TYPE_SETUP_PREFIX)).map(row => [row.key.slice(TYPE_SETUP_PREFIX.length), readTypeSetup(row.value)]));
+  const productOf = new Map(products.map(row => [row.id, row]));
+  const categoryOf = new Map(categories.map(row => [row.slug, row.name]));
   return {
     control, sources, logs, evaluations, jobs: jobs.map(job => ({ ...job, claimToken: undefined })),
     counts: Object.fromEntries(counts.map(row => [row.status, row._count])), observed, matched,
-    rules: rules.map(({ pageTokenEnc, managerTokenEnc, ...rule }) => ({ ...rule, hasPageToken: Boolean(pageTokenEnc), hasManagerToken: Boolean(managerTokenEnc), sourceIds: jsonList<string>(rule.sourceIdsJson), days: jsonList<number>(rule.daysJson) })),
+    rules: rules.filter(rule => !archivedIds.has(rule.id)).map(({ pageTokenEnc, managerTokenEnc, ...rule }) => ({ ...rule, typeInfo: (() => { const product = productOf.get(setupOf.get(rule.id)?.productId ?? ""); return product ? { id: product.id, name: product.name, categoryName: categoryOf.get(product.categorySlug) ?? product.categorySlug } : null; })(), hasPageToken: Boolean(pageTokenEnc), hasManagerToken: Boolean(managerTokenEnc), sourceIds: jsonList<string>(rule.sourceIdsJson), days: jsonList<number>(rule.daysJson) })),
   };
 }

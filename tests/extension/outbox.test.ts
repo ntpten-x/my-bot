@@ -16,7 +16,12 @@ function harness(status: number) {
   vm.runInContext(source.slice(source.indexOf("const OUTBOX_MAX ="), source.indexOf("async function countSent")), context);
   return { stored, postJson, flush: () => vm.runInContext('flushOutbox({ token: "synthetic", apiBase: "https://owner.example" })', context) as Promise<void> };
 }
-it.each([401, 403, 429, 503])("retains unsent posts for HTTP %i", async status => {
+it.each([401, 403, 423, 429, 503])("retains unsent posts for HTTP %i", async status => {
   const h = harness(status); await h.flush(); expect(h.stored.outbox).toHaveLength(1);
 });
 it("removes acknowledged posts", async () => { const h = harness(200); await h.flush(); expect(h.stored.outbox).toEqual([]); });
+
+it("does not mark a paused account's queued batch as permanently rejected", async () => {
+  const h = harness(423); await h.flush();
+  expect((h.stored.outbox as { problem?: string }[])[0].problem).toBeUndefined();
+});

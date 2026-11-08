@@ -1,7 +1,7 @@
 type Device = { id: string; name: string; online: boolean; fbUserId: string; commentsEnabled?: boolean; commentPending?: boolean };
 type Rule = { id: string; name: string; enabled: boolean; browserDeviceId: string; browserFbUserId: string; browserConsent: boolean; pausedReason: string; deliveryMode: string; requireAi: boolean; messageMode: string };
 
-export type CommentReadiness = { extensions: Device[]; accounts: { id: string; name: string }[]; steps?: { key: string; ready: boolean }[] };
+export type CommentReadiness = { extensions: Device[]; accounts: { id: string; name: string; enabled?: boolean }[]; steps?: { key: string; ready: boolean }[] };
 
 export function CommentReadinessPanel({ control, rules, readiness }: {
   control: { state: string; dryRun: boolean; emergency: boolean };
@@ -12,10 +12,10 @@ export function CommentReadinessPanel({ control, rules, readiness }: {
   const worker = readiness?.steps?.find(step => step.key === "worker");
   return <section aria-label="ความพร้อมส่งคอมเมนต์" className="rounded-xl border border-line bg-card p-4">
     <h2 className="font-semibold">ตรวจเส้นทางส่งคอมเมนต์</h2>
-    <p className="mt-1 text-sm text-muted">เริ่มทำงานในโหมดจำลองจะตรวจจับคู่เท่านั้น การส่งจริงต้องเปิดรับงานที่ Extension และบันทึกโหมดส่งจริงแยกกัน</p>
+    <p className="mt-1 text-sm text-muted">เมื่อกดเริ่ม ระบบจะส่งคอมเมนต์จริงตามกฎที่เปิดไว้ ต้องเปิดรับงานที่ Extension ด้วย</p>
     <ul className="mt-3 space-y-2 text-sm">
       <li>{control.emergency ? "หยุดฉุกเฉินอยู่ — ต้องปลดขณะหยุดก่อนเริ่ม" : control.state === "running" ? "บอทกำลังทำงาน" : "บอทยังไม่ทำงาน — กดเริ่มเมื่อพร้อม"}</li>
-      <li className={control.dryRun ? "font-medium text-amber-900" : "font-medium text-pine"}>{control.dryRun ? "ยังไม่ส่งจริง: Dry Run เปิดอยู่" : "เลือกโหมดส่งจริงแล้ว"}</li>
+      <li className="font-medium text-pine">ส่งคอมเมนต์จริงตามกฎที่เปิดไว้</li>
       {worker ? <li>{worker.ready ? "Worker พร้อมประเมินโพสต์และเตรียมคิว" : "Worker ไม่พร้อม — ตรวจภาพรวมระบบ"}</li> : null}
       {!enabled.length ? <li>ยังไม่มีกฎเปิดใช้งาน — สร้างหรือเปิดกฎก่อน</li> : null}
       {!readiness ? <li>ยังตรวจอุปกรณ์ไม่ได้ กรุณาตรวจการเชื่อมต่อแล้วลองอีกครั้ง</li> : enabled.map(rule => {
@@ -23,6 +23,7 @@ export function CommentReadinessPanel({ control, rules, readiness }: {
         const issue = rule.pausedReason ? `กฎถูกพัก: ${rule.pausedReason}`
           : rule.deliveryMode !== "extension" ? "ยังไม่ใช้ช่องทาง Extension"
           : !rule.browserConsent ? "ยังไม่ยืนยันการใช้บัญชีในกลุ่มที่เลือก"
+          : readiness.accounts.find(account => account.id === rule.browserFbUserId)?.enabled === false ? "บัญชีนี้ถูกหยุดงานในหน้าจัดการบัญชี"
           : !device?.online ? "อุปกรณ์ที่ผูกไว้ไม่ออนไลน์ เปิด Chrome และตรวจการจับคู่"
           : !rule.browserFbUserId || device.fbUserId !== rule.browserFbUserId ? "บัญชี Facebook ไม่ตรงกฎ ตรวจบัญชีที่ล็อกอิน"
           : device.commentPending ? "มีงานค้างบนเครื่อง ต้องตรวจผลเดิมก่อน ไม่ส่งซ้ำ"
