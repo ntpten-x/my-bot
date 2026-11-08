@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { classificationMetrics } from "../../src/lib/pipeline/evaluate";
-import { percentiles } from "../../src/lib/metrics";
+import { percentiles, recordTiming, requestMetrics } from "../../src/lib/metrics";
 
 it("reports buyer false positives/negatives and leaves undefined metrics empty", () => {
   const metrics = classificationMetrics([
@@ -12,4 +12,9 @@ it("reports buyer false positives/negatives and leaves undefined metrics empty",
   expect(metrics.byIntent.ad.precision).toBeNull();
   expect(percentiles([])).toEqual({ count: 0, p50: null, p95: null });
   expect(percentiles([100, 1, 2, 3, 4])).toEqual({ count: 5, p50: 3, p95: 100 });
+});
+
+it("bounds comment timing samples to the latest 200 measurements", () => {
+  for (let i = 0; i < 250; i++) recordTiming("comment_scan_lock", i);
+  expect(requestMetrics().comment_scan_lock).toEqual({ count: 200, p50: 149, p95: 239 });
 });

@@ -18,7 +18,8 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="th">
+    // The installed extension marks this element before hydration; child content must still match.
+    <html lang="th" suppressHydrationWarning>
       <body className={`${sans.variable} font-sans antialiased`}>
         <ServiceWorkerRegister />
         {children}

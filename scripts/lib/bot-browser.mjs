@@ -24,7 +24,7 @@ export function browserPlan({ root, url = 'http://localhost:8001', platform = pr
     throw new Error('Use HTTPS for a remote app, or HTTP on localhost.');
   }
   if (platform === 'linux' && !env.DISPLAY && !env.WAYLAND_DISPLAY) throw new Error('A graphical desktop is required. Run this command on the bot workstation or inside its desktop VM.');
-  const profile = path.join(root, 'data', 'browser-profile');
+  const profile = (platform === 'win32' ? path.win32 : path.posix).join(root, 'data', 'browser-profile');
   return {
     profile, origin: target.origin,
     args: [`--user-data-dir=${profile}`, '--no-first-run', '--new-window', '--start-maximized', target.href, 'https://www.facebook.com/'],

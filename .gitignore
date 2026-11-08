@@ -71,3 +71,7 @@ next-env.d.ts
 # Isolated virtual desktop: X authority, VNC password, Chrome sessions
 /data/bot-desktop/
 /data/desktop-browser-profile/
+
+# Disposable local integration database and observation samples
+/data/audit-test-postgres/
+/data/automation-observation*.jsonl

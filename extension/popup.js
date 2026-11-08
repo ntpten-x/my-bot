@@ -2,6 +2,12 @@ const DEFAULT_BASE = "https://my-bot-e6bt.onrender.com";
 const apiBase = document.getElementById("apiBase");
 const token = document.getElementById("token");
 const code = document.getElementById("code");
+document.getElementById("connectAuto").addEventListener("click", () => {
+  chrome.runtime.sendMessage({ type: "extension-connect-open" }, result => {
+    void chrome.runtime.lastError;
+    if (!result?.ok) status.textContent = "เปิด MY-BOT ไม่สำเร็จ ลอง Reload ส่วนขยายแล้วเปิดใหม่";
+  });
+});
 const enabled = document.getElementById("enabled");
 document.getElementById("clearCommentJournal").addEventListener("click", async () => {
   if (!confirm("ตรวจผลบน Facebook และประวัติงานแล้วใช่ไหม? งานเดิมจะไม่ส่งซ้ำ ปุ่มนี้ล้างเฉพาะตัวล็อกบนเครื่อง ไม่ล้างประวัติเซิร์ฟเวอร์")) return;
@@ -53,14 +59,18 @@ chrome.storage.local.get({ apiBase: DEFAULT_BASE, token: "", paused: false, quie
   showPairState(cfg);
   if (cfg.quiet && cfg.quiet.reason && Date.now() - cfg.quiet.at < 5 * 60 * 1000) status.textContent = "พักชั่วคราว: " + cfg.quiet.reason;
 });
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || (!changes.token && !changes.apiBase)) return;
+  chrome.storage.local.get({ apiBase: DEFAULT_BASE, token: "", paused: false }, cfg => {
+    apiBase.value = cfg.apiBase;
+    enabled.checked = !cfg.paused;
+    showPairState(cfg);
+  });
+});
 
 async function ensurePermission(base) {
   if (!needsOptionalPermission(base)) return true;
   const allowed = await chrome.permissions.request({ origins: [base + "/*"] });
-  if (allowed) {
-    await chrome.scripting.unregisterContentScripts({ ids: ["mybot-owner-server"] }).catch(() => undefined);
-    await chrome.scripting.registerContentScripts([{ id: "mybot-owner-server", matches: [base + "/*"], js: ["bridge.js"], runAt: "document_start" }]);
-  }
   return allowed;
 }
 

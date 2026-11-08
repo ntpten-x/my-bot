@@ -7,7 +7,9 @@ if (!valid) {
   console.error("FAIL: TEST_DATABASE_URL must explicitly name a dedicated test database (value hidden)");
   process.exitCode = 1;
 } else {
-  const child = spawn(process.execPath, ["node_modules/vitest/vitest.mjs", "run"], {
+  // Prisma migrations share a database-wide advisory lock even for different test schemas.
+  // Bound parallel suites so Windows/remote Postgres do not exhaust its 10-second lock wait.
+  const child = spawn(process.execPath, ["node_modules/vitest/vitest.mjs", "run", "--maxWorkers=4"], {
     stdio: "inherit", env: { ...process.env, MYBOT_REQUIRE_TEST_DB: "1" },
   });
   child.on("error", () => { console.error("FAIL: test runner could not start"); process.exitCode = 1; });

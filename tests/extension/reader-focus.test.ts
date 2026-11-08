@@ -18,16 +18,21 @@ function harness() {
     storage: { local: {get: async (defaults:any)=>({...defaults,...local})}, session: { get: async (defaults: any) => ({...defaults,...session}), set: async (v: any) => Object.assign(session,v), remove: async (key: string) => {delete session[key];} } },
     tabs: { query: async (q: any) => [...windows.values()].flatMap(w=>w.tabs).filter(t=>(q.windowId === undefined || t.windowId===q.windowId) && (!q.active || t.active) && (!q.url || /facebook/.test(t.url))),
       get: async (id: number) => [...windows.values()].flatMap(w=>w.tabs).find(t=>t.id===id), update: updates,
+      remove: vi.fn(async (id: number) => { for (const win of windows.values()) win.tabs = win.tabs.filter((tab: { id: number }) => tab.id !== id); }),
       create: async (v: any) => { const tab={id:100+[...windows.values()].flatMap(w=>w.tabs).length,...v}; windows.get(v.windowId).tabs.push(tab); return tab; } },
     windows: { WINDOW_ID_NONE: -1, get: async (id: number) => {if(!windows.has(id)) throw Error('missing'); return windows.get(id);},
       create: vi.fn(async (v: any) => { const win={id:2,type:'normal',state:'normal',focused:false,tabs:[{id:20,windowId:2,url:v.url,active:true}]}; windows.set(2,win); return win; }),
       update: vi.fn(async (id: number, v: any) => Object.assign(windows.get(id),v)), onRemoved:{addListener:()=>{}},onFocusChanged:{addListener:()=>{}} },
   };
-  const context = vm.createContext({chrome,Date,Math,URL,Set,Promise,scrapingTabs:new Set(),sleep:async()=>{},withScrapeWindowLock:async(fn:any)=>fn()});
+  const context = vm.createContext({chrome,Date,Math,URL,Set,Promise,scrapingTabs:new Set(),activeReaderTabs:new Set(),cycling:false,
+    loadConfig:async()=>({apiBase:'https://owner.example'}),base:(cfg:{apiBase:string})=>cfg.apiBase,currentFbUserId:async()=>'12345',
+    sleep:async()=>{},withScrapeWindowLock:async(fn:any)=>fn()});
   vm.runInContext(readFileSync('extension/focus.js','utf8'),context);
   vm.runInContext(source.slice(source.indexOf('/** Activate only'),source.indexOf('// Lazy loading stalled')),context);
   vm.runInContext(source.slice(source.indexOf('const BOOT_ID ='),source.indexOf('async function closeOrphanReaders(')),context);
   vm.runInContext(source.slice(source.indexOf('async function openReader('),source.indexOf('function sameReaderUrl(')),context);
+  vm.runInContext(source.slice(source.indexOf('async function closeOrphanReaders('),source.indexOf('async function openReader(')),context);
+  vm.runInContext(source.slice(source.indexOf('function sameReaderUrl('),source.indexOf('// Scroll and read one feed')),context);
   vm.runInContext(source.slice(source.indexOf('function isFacebookTab('),source.indexOf('async function quietReason(')),context);
   return { owner, windows, session, local, chrome, updates, context, open:()=> (context.openReader as any)('https://www.facebook.com/groups/123',true) };
 }
@@ -39,6 +44,69 @@ it('keeps MY-BOT selected during deep collection and wake pulses',async()=>{
   expect(reader.windowId).not.toBe(1);
   expect(h.chrome.windows.create).toHaveBeenCalledWith(expect.objectContaining({focused:false,type:'normal'}));
   expect(h.updates.mock.calls.some(([id,v])=> v.active && [10,11].includes(id))).toBe(false);
+});
+
+it('closes the unused reader and blank container without touching personal tabs',async()=>{
+  const h=harness();const reader=await h.open();
+  await h.context.closeReader(reader);
+  expect(h.chrome.tabs.remove).toHaveBeenCalledWith(reader.tabId);
+  expect(h.chrome.tabs.remove).toHaveBeenCalledWith(20);
+  expect(h.session.scrapeWindow).toBeUndefined();
+  expect(h.owner.tabs.map((tab:{id:number})=>tab.id)).toEqual([10,11]);
+});
+
+it('keeps the container while another reader still needs it',async()=>{
+  const h=harness();const first=await h.open();const second=await h.open();
+  await h.context.closeReader(first);
+  expect(h.chrome.tabs.remove).not.toHaveBeenCalledWith(20);
+  expect(h.session.readers[String(second.tabId)]).toBeDefined();
+});
+
+it('preserves personal tabs moved into the collector window when work finishes',async()=>{
+  const h=harness();const reader=await h.open();
+  h.windows.get(2).tabs.push({id:99,windowId:2,url:'https://example.com',active:true});
+  await h.context.closeReader(reader);
+  expect(h.windows.get(2).tabs.map((tab:{id:number})=>tab.id)).toEqual([99]);
+  expect(h.chrome.tabs.remove).not.toHaveBeenCalledWith(99);
+});
+
+it('retries a failed close on the next cleanup rather than forgetting the tab',async()=>{
+  const h=harness();const reader=await h.open();
+  h.chrome.tabs.remove.mockRejectedValueOnce(new Error('temporary browser error'));
+  await h.context.closeReader(reader);
+  expect(h.session.readers[String(reader.tabId)]).toMatchObject({closing:true});
+  await h.context.closeOrphanReaders();
+  expect(h.session.readers[String(reader.tabId)]).toBeUndefined();
+  expect(h.chrome.tabs.remove).toHaveBeenCalledWith(20);
+});
+
+it('preserves a reader tab navigated by the owner and removes only the empty container',async()=>{
+  const h=harness();const reader=await h.open();
+  await h.chrome.tabs.update(reader.tabId,{url:'https://example.com/owner-page'});
+  await h.context.closeReader(reader);
+  expect(h.chrome.tabs.remove).not.toHaveBeenCalledWith(reader.tabId);
+  expect(h.chrome.tabs.remove).toHaveBeenCalledWith(20);
+  expect(h.session.readers[String(reader.tabId)]).toBeUndefined();
+});
+
+it('keeps a parked continuation and an active reader during heartbeat cleanup',async()=>{
+  const h=harness();const reader=await h.open();const active=await h.open();
+  h.session.readers[String(reader.tabId)].continuation={url:reader.url,apiBase:'https://owner.example',fbUserId:'12345'};
+  h.session.readers[String(active.tabId)].at=Date.now()-3*3600000;
+  h.context.activeReaderTabs.add(active.tabId);
+  await h.context.closeOrphanReaders();
+  expect(h.chrome.tabs.remove).not.toHaveBeenCalled();
+  expect(Object.keys(h.session.readers)).toHaveLength(2);
+});
+
+it('releases paused parked tabs without deleting their durable pending recovery',async()=>{
+  const h=harness();const reader=await h.open();
+  h.session.readers[String(reader.tabId)].continuation={url:reader.url,apiBase:'https://owner.example',fbUserId:'12345'};
+  h.local.coverageRecovery={pending:{posts:['synthetic']}};
+  h.context.loadConfig=async()=>({apiBase:'https://owner.example',paused:true});
+  await h.context.closeOrphanReaders();
+  expect(h.chrome.tabs.remove).toHaveBeenCalledWith(reader.tabId);
+  expect(h.local.coverageRecovery).toEqual({pending:{posts:['synthetic']}});
 });
 it('reuses its own window and replaces a closed one',async()=>{
   const h=harness(); await h.open(); await h.open(); expect(h.chrome.windows.create).toHaveBeenCalledTimes(1);

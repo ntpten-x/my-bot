@@ -23,10 +23,24 @@ export default function ExtensionPage() {
   const [code, setCode] = useState<{ code: string; expiresAt: string } | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [error, setError] = useState("");
-  const origin = typeof window === "undefined" ? "" : window.location.origin;
+  const [connection, setConnection] = useState("");
+  const [origin, setOrigin] = useState("");
+  useEffect(() => setOrigin(window.location.origin), []);
 
   const load = useCallback(() => api<Data>("/api/extension-devices").then(setData).catch((e: Error) => setError(e.message)), []);
   useEffect(() => void load(), [load]);
+  useEffect(() => {
+    const receive = (event: MessageEvent) => {
+      if (event.source !== window || event.origin !== window.location.origin || event.data?.source !== "mybot-ext" || event.data?.type !== "extension-connect-status") return;
+      const state = String(event.data.state || "");
+      setConnection(state);
+      if (state === "connected") { setError(""); void load(); }
+      else if (event.data.error) setError(String(event.data.error).slice(0, 200));
+    };
+    window.addEventListener("message", receive);
+    window.postMessage({ source: "mybot-app", type: "extension-connect" }, window.location.origin);
+    return () => window.removeEventListener("message", receive);
+  }, [load]);
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
@@ -44,7 +58,7 @@ export default function ExtensionPage() {
       <div>
         <Link href="/settings" className="text-sm text-muted">← ตั้งค่า</Link>
         <h1 className="text-2xl font-semibold">ส่วนขยาย Chrome</h1>
-        <p className="mt-1 max-w-2xl text-sm text-muted">ส่วนขยายอ่านโพสต์และส่งเข้า MY-BOT การคอมเมนต์ผ่านหน้าจอต้องเปิดสวิตช์รับงานบนเครื่องนี้และกฎบนเว็บก่อน ค่าเริ่มต้นไม่ส่ง</p>
+        <p className="mt-1 max-w-2xl text-sm text-muted">ติดตั้งแล้วเชื่อมต่อกับ MY-BOT ให้อัตโนมัติ ไม่ต้องกรอกที่อยู่เซิร์ฟเวอร์หรือรหัสจับคู่ การส่งคอมเมนต์ยังต้องเลือกอุปกรณ์ในกฎและกดเริ่มส่งจริงบนเว็บเอง</p>
       </div>
       {error && <p className="text-sm text-red-700">{error}</p>}
       {outdated && (
@@ -59,6 +73,7 @@ export default function ExtensionPage() {
           {data?.installedVersion && <>ติดตั้งล่าสุดที่เห็น: <Badge tone={outdated ? "amber" : "pine"}>v{data.installedVersion}</Badge> ({when(data.installedSeenAt)})</>}
         </p>
         <a href="/api/extension-download" className="inline-block rounded-xl bg-[#c24e1d] px-4 py-2 text-sm font-semibold text-white">ดาวน์โหลดไฟล์ .zip</a>
+        <p className="text-sm text-muted">ไฟล์นี้ตั้งค่าให้เชื่อมกับ MY-BOT ที่คุณเปิดอยู่นี้แล้ว</p>
       </Card>
       <Card className="space-y-2">
         <h2 className="font-semibold">2. ติดตั้งใน Chrome</h2>
@@ -72,8 +87,13 @@ export default function ExtensionPage() {
         </ol>
       </Card>
       <Card className="space-y-3">
-        <h2 className="font-semibold">3. จับคู่อุปกรณ์</h2>
-        <p className="text-sm">กดปุ่มด้านล่าง แล้วเปิดไอคอน MY-BOT ใส่ที่อยู่เซิร์ฟเวอร์ <code className="break-all">{origin}</code> และรหัส แล้วกด “จับคู่อุปกรณ์นี้” รหัสใช้ได้ครั้งเดียว หมดอายุใน 10 นาที</p>
+        <h2 className="font-semibold">3. เชื่อมต่ออัตโนมัติ</h2>
+        <p className="text-sm">หลังติดตั้ง ส่วนขยายจะเปิด MY-BOT ให้เอง หากยังไม่ได้เข้าสู่ระบบ ให้ล็อกอินครั้งเดียว ระบบจะลงทะเบียนอุปกรณ์ให้โดยไม่ต้องคัดลอกค่าใด ๆ จากนั้นเปิด Facebook และล็อกอินบัญชีที่ต้องการใช้</p>
+        <p className="text-sm" role="status">{connection === "connected" ? "ส่วนขยายบันทึกการเชื่อมต่อแล้ว ตรวจสถานะอุปกรณ์ในรายการด้านล่าง" : connection === "connecting" ? "กำลังเชื่อมต่ออุปกรณ์นี้…" : "รอสัญญาณจากส่วนขยายที่ติดตั้งใน Chrome โปรไฟล์นี้"}</p>
+        <Button type="button" variant="outline" onClick={() => window.postMessage({ source: "mybot-app", type: "extension-connect" }, window.location.origin)}>ตรวจการเชื่อมต่ออีกครั้ง</Button>
+        <details>
+        <summary className="cursor-pointer text-sm text-muted">วิธีจับคู่ด้วยรหัส สำหรับส่วนขยายรุ่นเก่า</summary>
+        <p className="mt-2 text-sm">กรณีใช้วิธีเดิม: เปิดไอคอน MY-BOT ใส่ <code className="break-all">{origin}</code> และรหัสด้านล่าง รหัสใช้ได้ครั้งเดียวภายใน 10 นาที</p>
         {code && left > 0 ? (
           <div className="rounded-xl bg-paper p-3">
             <p className="font-mono text-3xl tracking-[0.3em]">{code.code}</p>
@@ -88,6 +108,7 @@ export default function ExtensionPage() {
             setError((e as Error).message);
           }
         }}>{code && left > 0 ? "สร้างรหัสใหม่" : "สร้างรหัสจับคู่"}</Button>
+        </details>
       </Card>
       <Card className="space-y-3">
         <div className="flex items-center justify-between">

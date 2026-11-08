@@ -1,4 +1,4 @@
-import path from 'node:path';
+import { posix as path } from 'node:path';
 import { browserPlan } from './bot-browser.mjs';
 
 export function desktopPlan(root, url = 'http://localhost:8001') {

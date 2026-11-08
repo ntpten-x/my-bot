@@ -1,5 +1,6 @@
 importScripts("assist.js", "identity.js", "scrape.js", "quiet.js");
 importScripts("focus.js", "browser-comment.js", "comment-worker.js");
+importScripts("connect.js");
 
 const DEFAULTS = {
   apiBase: "https://my-bot-e6bt.onrender.com",
@@ -38,6 +39,7 @@ async function loadConfig() {
 // The MY-BOT page bridge for a custom HTTPS server the owner granted in the popup (*.onrender.com is in the manifest).
 const CUSTOM_BRIDGE_ID = "mybot-bridge-custom";
 async function syncCustomBridge() {
+  await chrome.scripting.unregisterContentScripts({ ids: ["mybot-owner-server"] }).catch(() => undefined);
   try {
     await chrome.scripting.unregisterContentScripts({ ids: [CUSTOM_BRIDGE_ID] });
   } catch {
@@ -50,11 +52,12 @@ async function syncCustomBridge() {
   } catch {
     return;
   }
-  if (url.protocol !== "https:" || /\.onrender\.com$/i.test(url.hostname)) return;
+  if (url.protocol !== "https:") return;
   const pattern = `${url.origin}/*`;
+  if (chrome.runtime.getManifest().content_scripts?.some(script => script.js.includes("bridge.js") && script.matches.includes(pattern))) return;
   if (!(await chrome.permissions.contains({ origins: [pattern] }))) return;
   await chrome.scripting
-    .registerContentScripts([{ id: CUSTOM_BRIDGE_ID, matches: [pattern], js: ["bridge.js"], runAt: "document_start" }])
+    .registerContentScripts([{ id: CUSTOM_BRIDGE_ID, matches: [pattern], js: ["bridge.js", "connect-page.js"], runAt: "document_start" }])
     .catch(() => undefined);
 }
 chrome.storage.onChanged.addListener((changes, area) => {
@@ -234,7 +237,7 @@ async function queueOutbox(item) {
       throw new Error("outbox full");
     }
     const queued = { ...item, batchId: outboxId(), posts: item.posts.map(post => ({ ...post, itemId: outboxId() })), at: Date.now() };
-    outbox.push(queued); await chrome.storage.local.set({ outbox, outboxBlocked: false }); return queued;
+    outbox.push(queued); await chrome.storage.local.set({ outbox, outboxBlocked: outbox.length >= OUTBOX_MAX }); return queued;
   });
 }
 let flushing = false;
@@ -245,10 +248,15 @@ async function flushOutbox(cfg, options = {}) {
   const deadline = Math.min(Date.now() + 20_000, options.deadlineMs || Infinity);
   try {
     for (let sent = 0; sent < 10 && Date.now() < deadline; sent++) {
-      const item = (await loadOutbox()).find(entry => !entry.problem);
-      if (!item || (item.apiBase && item.apiBase !== base(cfg))) break;
+      const item = await withOutboxLock(async () => {
+        const outbox = await loadOutbox();
+        // Keep the total storage cap, but drain this server even if another server owns the head.
+        await chrome.storage.local.set({ outboxBlocked: outbox.length >= OUTBOX_MAX });
+        return outbox.find(entry => !entry.problem && (!entry.apiBase || entry.apiBase === base(cfg)));
+      });
+      if (!item) break;
       if (Date.now() - item.at >= OUTBOX_MAX_AGE_MS) {
-        await withOutboxLock(async () => { const entries = await loadOutbox(); const match = entries.find(e => item.batchId ? e.batchId === item.batchId : e.at === item.at && e.sourceUrl === item.sourceUrl); if (match) match.problem = "expired"; await chrome.storage.local.set({ outbox: entries }); });
+        await withOutboxLock(async () => { const entries = await loadOutbox(); const match = entries.find(e => item.batchId ? e.batchId === item.batchId : e.at === item.at && e.sourceUrl === item.sourceUrl && e.apiBase === item.apiBase); if (match) match.problem = "expired"; await chrome.storage.local.set({ outbox: entries }); });
         await rememberError("ข้อมูลค้างเกิน 72 ชั่วโมง เก็บไว้ให้ตรวจเอง ไม่ลบทิ้งเงียบ ๆ"); continue;
       }
       const response = await postJson(cfg, "/api/v1/ingest", { ...(item.batchId ? { batchId: item.batchId } : {}), sourceUrl: item.sourceUrl, posts: item.posts, fbUserId: item.fbUserId || undefined }, { timeoutMs: Math.max(1, Math.min(15000, deadline - Date.now())), retries: 0 }).catch(() => null);
@@ -260,7 +268,7 @@ async function flushOutbox(cfg, options = {}) {
       if (response.ok && item.batchId && !ack.size) break; // old server: retain until upgraded
       await withOutboxLock(async () => {
         const entries = await loadOutbox();
-        const index = entries.findIndex(entry => item.batchId ? entry.batchId === item.batchId : entry.at === item.at && entry.sourceUrl === item.sourceUrl);
+        const index = entries.findIndex(entry => item.batchId ? entry.batchId === item.batchId : entry.at === item.at && entry.sourceUrl === item.sourceUrl && entry.apiBase === item.apiBase);
         if (index < 0) return;
         if (!response.ok) entries[index].problem = `http_${response.status}`;
         else if (item.batchId) { entries[index].posts = entries[index].posts.filter(post => !ack.has(post.itemId)); if (!entries[index].posts.length) entries.splice(index, 1); }
@@ -836,25 +844,23 @@ async function closeOrphanReaders() {
     if (activeReaderTabs.has(reader.tabId)) continue;
     const saved = reader.continuation;
     // MV3 can restart while a feed is parked. Adopt the saved tab instead of closing it.
-    if (saved && saved.apiBase === base(cfg) && saved.fbUserId === fbUserId && Date.now() - reader.at < 2 * 3600_000) {
+    if (!reader.closing && !cfg.paused && !cfg.accountPaused && saved && saved.apiBase === base(cfg) && saved.fbUserId === fbUserId && Date.now() - reader.at < 2 * 3600_000) {
       const tab = await chrome.tabs.get(reader.tabId).catch(() => null);
       if (tab && sameReaderUrl(tab.url, saved.url)) {
         scrapingTabs.add(reader.tabId);
         continue;
       }
     }
-    const orphan = reader.boot !== BOOT_ID || (!cycling && Date.now() - (reader.at || 0) > READER_MAX_AGE_MS);
+    const orphan = reader.closing || cfg.paused || cfg.accountPaused || reader.boot !== BOOT_ID || Date.now() - (reader.at || 0) > READER_MAX_AGE_MS;
     if (!orphan) continue;
     // Never close the owner's Chrome window. Restore reused Facebook tabs; only remove tabs we created.
-    if (reader.tabId !== undefined && reader.tabId !== null) {
-      if (reader.previousUrl) await chrome.tabs.update(reader.tabId, { url: reader.previousUrl, active: false }).catch(() => undefined);
-      else await chrome.tabs.remove(reader.tabId).catch(() => undefined);
-    }
+    if (!await releaseReaderTab(reader)) continue;
     scrapingTabs.delete(reader.tabId);
     delete readers[key];
     changed = true;
   }
   if (changed) await chrome.storage.session.set({ readers });
+  await closeIdleScrapeWindow(readers);
   });
 }
 
@@ -879,9 +885,14 @@ async function openReader(url, dedicated = false) {
       tabId = tab.id;
     }
     scrapingTabs.add(tabId);
-    readers[String(tabId)] = { tabId, windowId: ref.windowId, boot: BOOT_ID, at: Date.now(), previousUrl, ephemeral, dedicated, transient };
-    await chrome.storage.session.set({ readers }).catch(() => undefined);
-    return { tabId, windowId: ref.windowId, ephemeral, previousUrl, transient, dedicated };
+    readers[String(tabId)] = { tabId, url, windowId: ref.windowId, boot: BOOT_ID, at: Date.now(), previousUrl, ephemeral, dedicated, transient };
+    try { await chrome.storage.session.set({ readers }); }
+    catch (error) {
+      scrapingTabs.delete(tabId);
+      await chrome.tabs.remove(tabId).catch(() => undefined);
+      throw error;
+    }
+    return { tabId, url, windowId: ref.windowId, ephemeral, previousUrl, transient, dedicated };
   });
   await sleep(400);
   return reader;
@@ -955,23 +966,47 @@ async function pruneContinuations(cfg, groups) {
   }
 }
 
-async function closeReader(reader) {
-  if (!reader) return;
-  scrapingTabs.delete(reader.tabId);
-  if (reader.tabId !== undefined) {
-    if (reader.previousUrl) await chrome.tabs.update(reader.tabId, { url: reader.previousUrl, active: false }).catch(() => undefined);
-    else if (reader.ephemeral) await chrome.tabs.remove(reader.tabId).catch(() => undefined);
-    await withScrapeWindowLock(async () => {
-      const stored = await chrome.storage.session.get({ readers: {} });
-      const readers = stored.readers || {};
-      if (readers[String(reader.tabId)]) {
-        delete readers[String(reader.tabId)];
-        await chrome.storage.session.set({ readers });
-      }
-    });
-  }
+async function releaseReaderTab(reader) {
+  if (reader.tabId === undefined || reader.tabId === null) return true;
+  const tab = await chrome.tabs.get(reader.tabId).catch(() => null);
+  if (!tab) return true;
+  const expected = reader.continuation?.url || reader.url;
+  const actual = tab.pendingUrl || tab.url;
+  if (reader.ephemeral && expected && actual !== "about:blank" && !sameReaderUrl(actual, expected)) return true;
+  try {
+    if (reader.previousUrl) await chrome.tabs.update(reader.tabId, { url: reader.previousUrl, active: false });
+    else if (reader.ephemeral) await chrome.tabs.remove(reader.tabId);
+    return true;
+  } catch { return false; } // Keep ownership so the heartbeat can retry closing, never reopen work.
+}
+
+async function closeIdleScrapeWindow(readers) {
   const ref = await loadScrapeWindow();
-  if (ref) await saveScrapeWindow({ ...ref, usedAt: Date.now() });
+  if (!ref || ref.host !== "reader" || Object.values(readers).some(reader => reader.windowId === ref.windowId)) return;
+  const tab = ref.tabId !== undefined ? await chrome.tabs.get(ref.tabId).catch(() => null) : null;
+  // Remove only the blank tab we created. Personal tabs in this window must survive.
+  if (tab && tab.windowId === ref.windowId && tab.url === "about:blank" && !tab.pendingUrl) {
+    try { await chrome.tabs.remove(tab.id); } catch { return; }
+  }
+  await saveScrapeWindow(null);
+}
+
+async function closeReader(reader) {
+  if (!reader || reader.tabId === undefined) return;
+  await withScrapeWindowLock(async () => {
+    const stored = await chrome.storage.session.get({ readers: {} });
+    const readers = stored.readers || {};
+    const tracked = readers[String(reader.tabId)] || reader;
+    if (!await releaseReaderTab(tracked)) {
+      readers[String(reader.tabId)] = { ...tracked, closing: true };
+      await chrome.storage.session.set({ readers });
+      return;
+    }
+    scrapingTabs.delete(reader.tabId);
+    delete readers[String(reader.tabId)];
+    await chrome.storage.session.set({ readers });
+    await closeIdleScrapeWindow(readers);
+  });
 }
 
 // Scroll and read one feed until the stop rule fires. Returns the run (see scrape.js).
@@ -1654,6 +1689,7 @@ function armAlarms() {
 }
 
 chrome.runtime.onInstalled.addListener((details) => {
+  void globalThis.MyBotConnect.installed(details, { loadConfig, base, syncCustomBridge }).catch(() => undefined);
   // 1.8.0: reading starts by itself once paired; the old opt-in switch is replaced by "paused".
   if (details && details.reason === "update") {
     void chrome.storage.local.get({ migrated180: false }).then((s) => {
@@ -1676,7 +1712,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "mybot-tasks") void pollTasks();
   if (alarm.name === "mybot-tasks") {
     const deps = { loadConfig, postJson, currentFbUserId, base, waitComplete, sleep, rememberError };
-    void globalThis.MyBotCommentWorker.recover(deps).then(() => globalThis.MyBotCommentWorker.run(deps));
+    void globalThis.MyBotCommentWorker.drain(deps).catch(() => undefined);
   }
   if (alarm.name === "mybot-heartbeat") {
     void heartbeat();
@@ -1688,6 +1724,17 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 // and makes sure the alarms exist.
 void closeOrphanReaders().catch(() => undefined);
 void chrome.alarms.getAll().then((alarms) => { if (alarms.length < 3) armAlarms(); }).catch(() => undefined);
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "extension-connect-open" && sender.url === chrome.runtime.getURL("popup.html")) {
+    globalThis.MyBotConnect.open({ loadConfig, base }).then(sendResponse).catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+  if (!["extension-connect-begin", "extension-connect-complete", "extension-connect-cancel"].includes(message?.type)) return;
+  globalThis.MyBotConnect.handle(message, sender, { loadConfig, base, ready: async () => { await heartbeat(); void cycle(); } })
+    .then(sendResponse).catch(() => sendResponse({ ok: false, error: "เชื่อมต่อไม่สำเร็จ ลองใหม่อีกครั้ง" }));
+  return true;
+});
 
 // Facebook pages report who is logged in (identity.js reads the c_user cookie value only).
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

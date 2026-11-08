@@ -17,6 +17,9 @@ import { scanBrowserComments, prepareBrowserComments, claimBrowserComment, autho
 import { autoCommentTick } from "../../src/lib/auto-comment/poll";
 import { snapshotDatabase, restoreDatabase } from "../../src/lib/backup-format";
 import { encodeSetting } from "../../src/lib/setting-secrets";
+import { collectObservation, observationOptions } from "../../scripts/observe-automation.mjs";
+import { EXPECTED_EXTENSION_VERSION } from "../../src/lib/extension-heartbeat";
+import { isIncompleteScrape } from "../../src/lib/scrape-plan";
 let serial = 0;
 const active = async () => undefined;
 beforeAll(() => { if (fixture.enabled) execFileSync(process.execPath, [path.resolve("node_modules/prisma/build/index.js"), "migrate", "deploy"], { stdio: "pipe" }); }, 180000);
@@ -270,6 +273,35 @@ describe.skipIf(!fixture.enabled)("live-only owner workflow", () => {
 });
 
 describe.skipIf(!fixture.enabled)("comment queue efficiency", () => {
+  it("yields a scan between posts and resumes from durable evaluations without losing or duplicating work", async () => {
+    const s = await setup();
+    await prisma.post.createMany({ data: Array.from({length:8},(_,i)=>({ sourceId:s.source.id, externalUrl:`https://www.facebook.com/groups/12345/posts/${9100+i}/`,text:"หาช่างแอร์",normalizedText:"หาช่างแอร์",contentHash:`slice-${i}` })) });
+    let clock = Date.now();
+    const now = vi.spyOn(Date,"now").mockImplementation(()=>clock);
+    try { await scanBrowserComments(async()=>{clock+=1000;},{deadlineMs:clock+500}); }
+    finally { now.mockRestore(); }
+    expect(await prisma.autoCommentEvaluation.count()).toBe(2);
+    await scanBrowserComments(active);
+    expect(await prisma.autoCommentEvaluation.count()).toBe(9);
+    expect(await prisma.autoCommentJob.count()).toBe(9);
+    await scanBrowserComments(active);
+    expect(await prisma.autoCommentJob.count()).toBe(9);
+  });
+
+  it("yields job preparation between jobs and resumes unsent work on the next pass", async () => {
+    const s = await setup();
+    await prisma.post.createMany({ data: Array.from({length:8},(_,i)=>({ sourceId:s.source.id, externalUrl:`https://www.facebook.com/groups/12345/posts/${9200+i}/`,text:"หาช่างแอร์",normalizedText:"หาช่างแอร์",contentHash:`prepare-slice-${i}` })) });
+    await scanBrowserComments(active);
+    let clock = Date.now();
+    const now = vi.spyOn(Date,"now").mockImplementation(()=>clock);
+    try { await prepareBrowserComments(async()=>{clock+=1000;},{deadlineMs:clock+1500}); }
+    finally { now.mockRestore(); }
+    expect(await prisma.autoCommentJob.count({where:{status:"pending_ai"}})).toBe(7);
+    await prepareBrowserComments(active);
+    expect(await prisma.autoCommentJob.count({where:{status:"browser_ready"}})).toBe(9);
+    expect(await prisma.autoCommentLog.count({where:{event:"dispatch"}})).toBe(0);
+  });
+
   it("checks group cooldown before claiming and defers only the remaining interval", async () => {
     const s = await setup(); const now = Date.now();
     await prisma.autoCommentLog.create({ data: { event: "dispatch", pageId: s.job.pageId, jobId: s.job.id, ruleId: s.ruleId, createdAt: new Date(now - 30000) } });
@@ -290,6 +322,38 @@ describe.skipIf(!fixture.enabled)("comment queue efficiency", () => {
 });
 
 describe.skipIf(!fixture.enabled)("efficient browser delivery failure handling", () => {
+  it("retries only provably ungranted preparation, fences old tokens and stops after two retries", async () => {
+    const s = await setup();
+    let c = (await claim(s.device.id))!;
+    for (let retry=0;retry<2;retry++) {
+      expect(await reportBrowserComment(s.device.id,c.id,c.claimToken,"failed")).toBe(true);
+      const row=await prisma.autoCommentJob.findUniqueOrThrow({where:{id:c.id}});
+      expect(row).toMatchObject({status:"browser_ready",attempts:0,dispatchedAt:null,claimToken:null});
+      expect(row.nextAttemptAt.getTime()).toBeGreaterThan(Date.now()+25000);
+      expect(await reportBrowserComment(s.device.id,c.id,c.claimToken,"failed")).toBe(true);
+      expect(await prisma.autoCommentLog.count({where:{jobId:c.id,event:"prepare_retry"}})).toBe(retry+1);
+      await prisma.autoCommentJob.update({where:{id:c.id},data:{nextAttemptAt:new Date(0)}});
+      const previous=c;c=(await claim(s.device.id))!;
+      expect(c.claimToken).not.toBe(previous.claimToken);
+      expect(await permit(s.device.id,previous)).toBeNull();
+      expect(await reportBrowserComment(s.device.id,previous.id,previous.claimToken,"failed")).toBe(false);
+    }
+    await reportBrowserComment(s.device.id,c.id,c.claimToken,"failed");
+    expect(await prisma.autoCommentJob.findUniqueOrThrow({where:{id:c.id}})).toMatchObject({status:"cancelled",attempts:0,dispatchedAt:null});
+    expect((await readCommentControl()).state).toBe("running");
+    expect(await prisma.autoCommentLog.count({where:{event:"dispatch"}})).toBe(0);
+  });
+
+  it("recovers an expired ungranted claim but does not requeue it after Stop", async () => {
+    const s = await setup(),c=(await claim(s.device.id))!;
+    await prisma.autoCommentJob.update({where:{id:c.id},data:{claimUntil:new Date(0)}});
+    await prepareBrowserComments(active);
+    expect(await prisma.autoCommentJob.findUniqueOrThrow({where:{id:c.id}})).toMatchObject({status:"browser_ready",attempts:0,dispatchedAt:null});
+    await updateCommentControl({action:"stop"});
+    await prepareBrowserComments(active);
+    expect(await prisma.autoCommentJob.findUniqueOrThrow({where:{id:c.id}})).toMatchObject({status:"cancelled"});
+  });
+
   it("records definite non-delivery without pausing or rearming a dispatched key", async () => {
     const s = await setup(), c = (await claim(s.device.id))!;
     await permit(s.device.id, c);
@@ -326,8 +390,14 @@ describe.skipIf(!fixture.enabled)("efficient browser delivery failure handling",
   });
   it("skips scan SQL when no enabled bound rule can receive work", async () => {
     const s = await setup(); await prisma.autoCommentRule.update({ where: { id: s.ruleId }, data: { enabled: false } });
+    const original = prisma.$queryRaw;
     const query = vi.spyOn(prisma, "$queryRaw");
-    try { await scanBrowserComments(active); expect(query).not.toHaveBeenCalled(); } finally { query.mockRestore(); }
+    try { await scanBrowserComments(active); expect(query).not.toHaveBeenCalled(); }
+    finally {
+      query.mockRestore();
+      // Prisma's extended client is a proxy; restoring its descriptor alone can hide the method.
+      prisma.$queryRaw = original;
+    }
   });
 });
 
@@ -342,4 +412,48 @@ describe.skipIf(!fixture.enabled)("quota changes wake deferred work", () => {
     const after = await readCommentControl(); expect(after.state).toBe(before.state); expect(after.generation).toBe(before.generation);
     expect(await claim(s.device.id)).not.toBeNull();
   });
+});
+
+describe.skipIf(!fixture.enabled)("read-only automation observation", () => {
+  it("collects aggregate evidence without changing jobs, consent or control", async () => {
+    const s = await setup();
+    const since = new Date(Date.now() - 3600000);
+    const fixtures = [
+      { stoppedBy: "cap", ok: true, found: 10 },
+      { stoppedBy: "loading", ok: true, found: 1 },
+      { stoppedBy: "exhausted", ok: true, found: 0, hitLimit: true },
+      { stoppedBy: "end", ok: true, found: 1 },
+      { stoppedBy: "error", ok: false, found: 0 },
+    ];
+    await prisma.scrapeRun.createMany({ data: fixtures.map(run => ({ ...run, sourceId: s.source.id, extVersion: EXPECTED_EXTENSION_VERSION, inserted: 2 })) });
+    await prisma.scrapeRun.create({ data: { sourceId: s.source.id, extVersion: "old-version", inserted: 999 } });
+    await prisma.autoCommentLog.create({ data: { event: "browser_observed", jobId: s.job.id, createdAt: new Date(s.post.createdAt.getTime() + 1500) } });
+    await prisma.extensionHeartbeat.create({ data: { id: "observation-device", version: EXPECTED_EXTENSION_VERSION, outboxSize: 2 } });
+    await prisma.setting.create({ data: { key: "extension_capture", value: JSON.stringify({ at: new Date().toISOString(), pendingPosts: 5, parkedFeeds: 1, oldestPendingAt: Date.now() - 60000, token: "synthetic-private-value" }) } });
+    const before = await readCommentControl();
+    const sample = await collectObservation(prisma, since);
+    expect(sample.collection).toMatchObject({ runs: 5, newPosts: 10, loadingOrStalled: 1,
+      incomplete: fixtures.filter(run => isIncompleteScrape({ ...run, postsFound: run.found })).length });
+    expect(sample.comments).toEqual({ browser_ready: 1 });
+    expect(sample.latency).toMatchObject({ observedCount: 1, ingestToObservedP50Seconds: 1.5, ingestToObservedP95Seconds: 1.5 });
+    expect(sample.extension).toMatchObject({ onlineDevices: 1, outboxBatches: 2, capture: { pendingPosts: 5, parkedFeeds: 1 } });
+    expect(sample.extension.capture.oldestPendingSeconds).toBeGreaterThanOrEqual(60);
+    expect(sample.stages).toEqual(expect.arrayContaining([expect.objectContaining({ stage: "browser_ready", count: 1 }), expect.objectContaining({ stage: "browser_observed", p50Seconds: 1.5 })]));
+    expect(await readCommentControl()).toEqual(before);
+    expect(await prisma.autoCommentJob.findUniqueOrThrow({ where: { id: s.job.id } })).toMatchObject({ status: "browser_ready", attempts: 0, dispatchedAt: null });
+    expect(JSON.stringify(sample)).not.toContain(s.post.text);
+    expect(JSON.stringify(sample)).not.toContain(s.device.id);
+    expect(JSON.stringify(sample)).not.toContain("synthetic-private-value");
+    await prisma.extensionHeartbeat.update({ where: { id: "observation-device" }, data: { lastSeenAt: new Date(Date.now() - 900000) } });
+    const stale = await collectObservation(prisma, since);
+    expect(stale.extension).toMatchObject({ onlineDevices: 0, outboxBatches: null, capture: null });
+  });
+});
+
+it("validates observation duration and cadence without requiring database credentials", () => {
+  expect(observationOptions([])).toMatchObject({ hours: 24, intervalSeconds: 60 });
+  expect(observationOptions(["--once"])).toMatchObject({ once: true });
+  for (const args of [["--hours=NaN"], ["--hours=-1"], ["--interval-seconds=0"], ["--unknown"], ["--hours=1", "--hours=2"]]) {
+    expect(() => observationOptions(args)).toThrow();
+  }
 });

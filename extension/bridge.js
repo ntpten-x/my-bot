@@ -1,8 +1,14 @@
 // Runs only on the local MY-BOT app. Relays owner-triggered requests ("reply to this lead",
 // "open the next queued lead when the gap allows") to the extension. It accepts messages from this page only.
 (function () {
-  document.documentElement.setAttribute("data-mybot-extension", "assist-2");
-  document.documentElement.setAttribute("data-mybot-extension-version", chrome.runtime.getManifest().version);
+  if (globalThis.mybotBridgeLoaded) return;
+  globalThis.mybotBridgeLoaded = true;
+  const mark = () => {
+    document.documentElement.setAttribute("data-mybot-extension", "assist-2");
+    document.documentElement.setAttribute("data-mybot-extension-version", chrome.runtime.getManifest().version);
+  };
+  if (document.documentElement) mark();
+  else document.addEventListener("DOMContentLoaded", mark, { once: true });
   const RELAYED = new Set(["assist-reply", "queue-advance", "queue-advance-cancel", "heartbeat-now"]);
   window.addEventListener("message", (event) => {
     if (event.source !== window || event.origin !== location.origin) return;

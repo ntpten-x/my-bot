@@ -21,13 +21,18 @@
   <body>
     <h1>MY-BOT <span id="version" class="pill"></span></h1>
     <p>อ่านโพสต์ส่งเข้า MY-BOT และส่งคอมเมนต์ผ่านหน้าจอ Facebook เฉพาะกฎที่คุณเปิดและผูกกับอุปกรณ์นี้</p>
+    <button id="connectAuto">เปิด MY-BOT และเชื่อมต่ออัตโนมัติ</button>
+    <p style="margin-top:6px">หากยังไม่ได้เข้าสู่ระบบ ให้ล็อกอิน MY-BOT แล้วระบบจะเชื่อมต่อให้ ไม่ต้องกรอก URL หรือรหัสจับคู่</p>
+    <div id="pairState" style="margin-top:8px"></div>
+    <details>
+    <summary>เชื่อมต่อแบบเดิมหรือเปลี่ยนเซิร์ฟเวอร์</summary>
     <label for="apiBase">ที่อยู่เซิร์ฟเวอร์ MY-BOT</label>
     <input id="apiBase" placeholder="https://my-bot-e6bt.onrender.com" />
     <p>หลังติดตั้งหรืออัปเดต Extension ถ้ายังไม่เริ่มอ่าน ให้กด Reload ที่ chrome://extensions แล้วเปิด facebook.com ค้างไว้ (หรือรีเฟรชแท็บ Facebook)</p>
-    <div id="pairState" style="margin-top:8px"></div>
     <label for="code">รหัสจับคู่ (จากหน้า “ส่วนขยาย” บนเว็บ)</label>
     <input id="code" maxlength="9" placeholder="ABCD-EFGH" autocomplete="off" />
     <button id="pair">จับคู่อุปกรณ์นี้</button>
+    </details>
     <div class="row">
       <input id="enabled" type="checkbox" style="width:auto" />
       <label for="enabled" style="margin:0">ดึงข้อมูลอัตโนมัติเบื้องหลัง (ติ๊กออก = พัก)</label>

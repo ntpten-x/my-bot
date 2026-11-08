@@ -37,6 +37,14 @@ export async function createPairingCode(now = new Date()) {
   return { code, expiresAt };
 }
 
+/** Owner-session enrollment: the credential stays in Chrome; only its hash is registered here. */
+export async function registerExtensionHash(tokenHash: string, hint: string, name: string, ip: string) {
+  if (!/^[a-f0-9]{64}$/.test(tokenHash) || !/^mbd_…[A-Za-z0-9_-]{4}$/.test(hint)) throw new Error("Invalid device fingerprint");
+  await prisma.extensionDevice.createMany({ data: [{ tokenHash, tokenHint: hint, name: name.slice(0, 60), lastIp: ip.slice(0, 60) }], skipDuplicates: true });
+  const device = await prisma.extensionDevice.findUniqueOrThrow({ where: { tokenHash }, select: { id: true, revokedAt: true } });
+  return device.revokedAt ? null : { deviceId: device.id };
+}
+
 /** One-time: marks the code used atomically, then issues a device token. */
 export async function redeemPairingCode(input: string, name: string, ip: string, now = new Date()) {
   const code = normalizeCode(input);

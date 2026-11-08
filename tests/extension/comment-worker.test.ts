@@ -4,27 +4,28 @@ import { expect, it, vi } from "vitest";
 
 function harness(enabled = true, failAuthorize = false, authorizeDelay = 0) {
   let clock = Date.now();
+  let openedUrl = "https://www.facebook.com/groups/12345/posts/8888/";
   class Clock extends Date { static now() { return clock; } }
   const stored: Record<string, unknown> = { browserCommentsEnabled: enabled };
   const session: Record<string, unknown> = {};
   const execute = vi.fn(async ({ args }: { args: [string, unknown] }) => [{ result: args[0] === "observe" ? { ok: true, outcome: "observed", commentUrl: "https://www.facebook.com/groups/12345/posts/8888/?comment_id=777" } : { ok: true } }]);
-  const tabs = { create: vi.fn(async () => ({ id: 1 })), remove: vi.fn(async () => undefined) };
+  const tabs = { create: vi.fn(async ({url}:{url:string}) => { openedUrl=url;return { id: 1 }; }), remove: vi.fn(async () => undefined), get: vi.fn(async (id: number) => ({ id, url: openedUrl })) };
   const postJson = vi.fn(async (_cfg, _path, body) => {
     if (body.action === "authorize") clock += authorizeDelay;
     if (body.action === "authorize" && failAuthorize) throw new Error("lost authorization response");
     return { ok: true, json: async () => body.action === "claim" ? { job: { id: "job", claimToken: "synthetic-claim", externalUrl: "https://www.facebook.com/groups/12345/posts/8888/", fbUserId: "99887766", message: "ข้อความทดสอบ" } } : body.action === "authorize" ? { grant: { ttlMs: 3000 } } : { ok: true } };
   });
-  const context = vm.createContext({ Date: Clock, setTimeout, clearTimeout, chrome: { tabs, scripting: { executeScript: execute }, storage: { session: {get: async (defaults:object)=>({...defaults,...structuredClone(session)}),set: async (value:object)=>Object.assign(session,structuredClone(value))}, local: {
+  const context = vm.createContext({ Date: Clock, URL, setTimeout, clearTimeout, chrome: { tabs, scripting: { executeScript: execute }, storage: { session: {get: async (defaults:object)=>({...defaults,...structuredClone(session)}),set: async (value:object)=>Object.assign(session,structuredClone(value))}, local: {
     get: async (defaults: object) => ({ ...defaults, ...structuredClone(stored) }),
     set: async (value: object) => Object.assign(stored, structuredClone(value)),
     remove: async (key: string) => { delete stored[key]; },
   } } }, MyBotBrowserComment: { action: () => undefined } });
   vm.runInContext(readFileSync("extension/focus.js", "utf8"), context);
   vm.runInContext(readFileSync("extension/comment-worker.js", "utf8"), context);
-  const worker = context.MyBotCommentWorker as { run(deps: object): Promise<void>; recover(deps: object): Promise<void> };
+  const worker = context.MyBotCommentWorker as { run(deps: object): Promise<boolean | undefined>; recover(deps: object): Promise<void>; drain(deps: object): Promise<void> };
   const deps = { loadConfig: async () => ({ apiBase: "https://owner.example", token: "mbd_synthetic", paused: false }), base: (cfg: { apiBase: string }) => cfg.apiBase,
-    currentFbUserId: async () => "99887766", postJson, waitComplete: async () => undefined, sleep: async () => undefined, rememberError: vi.fn(async () => undefined) };
-  return { worker, deps, stored, session, execute, tabs, postJson };
+    currentFbUserId: async () => "99887766", postJson, waitComplete: async () => undefined, sleep: async (ms: number) => { clock+=ms; }, rememberError: vi.fn(async () => undefined) };
+  return { worker, deps, stored, session, execute, tabs, postJson, advance: (ms: number) => { clock+=ms; }, now:()=>clock };
 }
 it("receives only server-approved work after pairing even when the obsolete local toggle is off", async () => {
   const h = harness(false); await h.worker.run(h.deps);
@@ -143,4 +144,126 @@ it('preserves ambiguity when send itself stops responding instead of clicking ag
     expect(h.postJson.mock.calls.filter(([, , body])=>body.action==='report').map(([, , body])=>body.outcome)).toEqual(['uncertain']);
     expect(h.session.commentFocusLease).toBeNull();
   }finally{vi.useRealTimers();}
+});
+
+it('closes a recorded bot tab after MV3 restart even if the success journal was already cleared',async()=>{
+  const h=harness();h.session.commentTab={jobId:'old',tabId:1,url:'https://www.facebook.com/groups/12345/posts/8888/'};
+  await h.worker.recover(h.deps);
+  expect(h.tabs.remove).toHaveBeenCalledWith(1);
+  expect(h.session.commentTab).toBeNull();
+  expect(h.tabs.create).not.toHaveBeenCalled();expect(h.postJson).not.toHaveBeenCalled();
+});
+
+it('never closes or inspects an unowned personal tab to recover an old journal',async()=>{
+  const h=harness();h.stored.commentJournal={id:'old',claimToken:'synthetic-old',apiBase:'https://owner.example',state:'sending',at:Date.now(),job:{externalUrl:'https://www.facebook.com/groups/12345/posts/8888/'}};
+  await h.worker.recover(h.deps);
+  expect(h.tabs.get).not.toHaveBeenCalled();expect(h.tabs.remove).not.toHaveBeenCalled();
+  expect(h.execute).not.toHaveBeenCalled();
+  expect(h.postJson.mock.calls[0][2]).toMatchObject({action:'report',outcome:'uncertain'});
+});
+
+it('cleans up the owned tab during an outage while retaining the pending report',async()=>{
+  const h=harness();h.session.commentTab={jobId:'old',tabId:1,url:'https://www.facebook.com/groups/12345/posts/8888/'};
+  h.stored.commentJournal={id:'old',claimToken:'synthetic-old',apiBase:'https://owner.example',state:'sending',pendingReport:{outcome:'uncertain'}};
+  h.postJson.mockRejectedValue(new Error('offline'));
+  await h.worker.recover(h.deps);
+  expect(h.tabs.remove).toHaveBeenCalledWith(1);expect(h.session.commentTab).toBeNull();
+  expect(h.stored.commentJournal).toMatchObject({pendingReport:{outcome:'uncertain'}});
+});
+
+it('retries tab removal without resending a completed comment',async()=>{
+  const h=harness();h.tabs.remove.mockRejectedValueOnce(new Error('temporary browser error'));
+  await h.worker.run(h.deps);
+  expect(h.session.commentTab).toMatchObject({tabId:1});
+  await h.worker.recover(h.deps);
+  expect(h.session.commentTab).toBeNull();expect(h.tabs.remove).toHaveBeenCalledTimes(2);
+  expect(h.execute.mock.calls.filter(([call])=>call.args[0]==='send')).toHaveLength(1);
+});
+
+it('leaves a bot-created comment tab alone once the owner has navigated it elsewhere',async()=>{
+  const h=harness();h.tabs.get.mockResolvedValue({id:1,url:'https://example.com/owner-page'});
+  await h.worker.run(h.deps);
+  expect(h.tabs.remove).not.toHaveBeenCalled();expect(h.session.commentTab).toBeNull();
+});
+
+it('bounds a stalled recovery and still closes the owned tab without another send',async()=>{
+  vi.useFakeTimers();
+  try {
+    const h=harness();h.session.commentTab={jobId:'old',tabId:1,url:'https://www.facebook.com/groups/12345/posts/8888/'};
+    h.stored.commentJournal={id:'old',claimToken:'synthetic-old',apiBase:'https://owner.example',state:'sending',at:Date.now(),job:{externalUrl:'https://www.facebook.com/groups/12345/posts/8888/'}};
+    h.execute.mockImplementation(()=>new Promise(()=>{}));
+    const work=h.worker.recover(h.deps);await vi.advanceTimersByTimeAsync(6000);await work;
+    expect(h.tabs.remove).toHaveBeenCalledWith(1);
+    expect(h.execute.mock.calls.map(([call])=>call.args[0])).toEqual(['reconcile']);
+    expect(h.stored.commentJournal).toBeDefined();
+  }finally{vi.useRealTimers();}
+});
+
+it('drains at most three observed jobs sequentially without waiting for another alarm',async()=>{
+  const h=harness();const original=h.postJson.getMockImplementation()!;let claims=0;
+  h.postJson.mockImplementation(async(cfg,path,body)=>{
+    const response=await original(cfg,path,body);
+    if(body.action==='claim') {
+      claims++;
+      return {...response,json:async()=>({job:{id:`job-${claims}`,claimToken:`synthetic-${claims}`,externalUrl:'https://www.facebook.com/groups/12345/posts/8888/',fbUserId:'99887766',message:'synthetic'}})};
+    }
+    return response;
+  });
+  await Promise.all([h.worker.drain(h.deps),h.worker.drain(h.deps)]);
+  expect(claims).toBe(3);
+  expect(h.postJson.mock.calls.map(([, , body])=>body.action)).toEqual(['claim','authorize','report','claim','authorize','report','claim','authorize','report']);
+  expect(h.tabs.remove).toHaveBeenCalledTimes(3);
+});
+
+it('stops draining immediately after an ambiguous send',async()=>{
+  const h=harness();const original=h.execute.getMockImplementation()!;
+  h.execute.mockImplementation(async options=>options.args[0]==='send'?[{result:{ok:false,outcome:'uncertain'}}]:original(options));
+  await h.worker.drain(h.deps);
+  expect(h.postJson.mock.calls.filter(([, , body])=>body.action==='claim')).toHaveLength(1);
+  expect(h.execute.mock.calls.filter(([call])=>call.args[0]==='send')).toHaveLength(1);
+});
+
+it('does not authorize a job whose claim has already expired while the page loads',async()=>{
+  const h=harness();h.deps.waitComplete=async()=>{h.advance(125000);};
+  await h.worker.run(h.deps);
+  expect(h.postJson.mock.calls.some(([, , body])=>body.action==='authorize')).toBe(false);
+  expect(h.execute.mock.calls.some(([call])=>call.args[0]==='send')).toBe(false);
+  expect(h.tabs.remove).toHaveBeenCalledWith(1);
+});
+
+it('yields the drain budget after a slow successful job instead of opening another tab',async()=>{
+  const h=harness();h.deps.waitComplete=async()=>{h.advance(50000);};
+  await h.worker.drain(h.deps);
+  expect(h.postJson.mock.calls.filter(([, , body])=>body.action==='claim')).toHaveLength(1);
+  expect(h.execute.mock.calls.filter(([call])=>call.args[0]==='send')).toHaveLength(1);
+});
+
+it('obeys a server stop or quota decision between jobs instead of preclaiming a batch',async()=>{
+  const h=harness();const original=h.postJson.getMockImplementation()!;let claims=0;
+  h.postJson.mockImplementation(async(cfg,path,body)=>{
+    if(body.action==='claim' && ++claims>1) return {ok:true,json:async()=>({job:null})};
+    return original(cfg,path,body);
+  });
+  await h.worker.drain(h.deps);
+  expect(claims).toBe(2);expect(h.tabs.create).toHaveBeenCalledTimes(1);
+  expect(h.execute.mock.calls.filter(([call])=>call.args[0]==='send')).toHaveLength(1);
+});
+
+it('does not drain another job after an expired click grant',async()=>{
+  const h=harness(true,false,4000);await h.worker.drain(h.deps);
+  expect(h.postJson.mock.calls.filter(([, , body])=>body.action==='claim')).toHaveLength(1);
+  expect(h.execute.mock.calls.some(([call])=>call.args[0]==='send')).toBe(false);
+});
+
+it('bounds observation work within the claim lease and reports uncertainty without sending again',async()=>{
+  const h=harness();const started=h.now();const original=h.execute.getMockImplementation()!;
+  h.execute.mockImplementation(async options=>{
+    if(options.args[0]==='observe'){h.advance(7000);return [{result:{ok:false,outcome:'uncertain'}}];}
+    return original(options);
+  });
+  await h.worker.drain(h.deps);
+  expect(h.now()-started).toBeLessThan(120000);
+  expect(h.execute.mock.calls.filter(([call])=>call.args[0]==='send')).toHaveLength(1);
+  expect(h.postJson.mock.calls.filter(([, , body])=>body.action==='report').map(([, , body])=>body.outcome)).toEqual(['uncertain']);
+  expect(h.tabs.remove).toHaveBeenCalledWith(1);
 });

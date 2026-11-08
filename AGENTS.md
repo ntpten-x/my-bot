@@ -140,3 +140,15 @@ Owner-enabled server-side Graph API comments live in `src/lib/auto-comment`, `/a
 ## Central comment control (extension 1.11.9)
 
 Per the owner instruction, paired device tokens make the extension eligible to claim comments automatically. The obsolete local browserCommentsEnabled flag no longer gates delivery. Server control/rule consent, pinned device/account, allowlist, quotas and final authorize remain mandatory. The popup collection pause only affects collection; stop comments from /auto-comment or account pause. This change is not permission to grant Chrome host permissions silently or bypass browser/Facebook restrictions.
+
+## Automatic bot tab cleanup (extension 1.11.11)
+
+Close unused bot-owned reader/comment tabs automatically. Keep active readers and needed continuations; release inactive parked readers when collection/account is paused without deleting durable pending recovery. Remove only the known blank container tab when no readers remain, never an entire window containing personal tabs. Failed tab removal keeps ownership for retry. Comment recovery uses session-owned tab IDs, never a matching personal Facebook tab; preserve uncertain-send journals and never resend to recover a tab. Ownership does not survive a full Chrome restart or extension reload; do not infer ownership of unknown tabs from their URL. See docs/BOT-TAB-CLEANUP.th.md.
+
+## Database-first comment delivery (extension 1.11.12)
+
+Select comments only from stored Post rows and durable evaluations, never a second Facebook feed discovery pass. Extension drain is sequential, at most 3 observed-and-acknowledged jobs per 90-second wake, with a fresh claim/authorize for each and no quota changes. Bound page work by claim expiry and reserve report time. Worker scan/preparation use independent cooperative slices, retaining checkpoints. Retry preparation at most twice (30/60 seconds) only under the control lock for claimed work with attempts=0, dispatchedAt=null and a current running generation; rotate claim tokens and preserve live dedupe keys. Never retry dispatched, uncertain or blocked work automatically. See docs/COMMENT-PIPELINE-1.11.12.th.md.
+
+## Automatic extension connection (extension 1.11.13)
+
+Authenticated downloads package only the public server origin in install-config.json plus explicit manifest host matches, never tokens or pairing codes. Fresh install opens that app; after owner login an isolated content script registers only a worker-generated pending token hash via the same-origin, session-authenticated connect endpoint. The raw device token never crosses into the page. Bind completion to origin/main-frame/tab/nonce/hash, retain the pending fingerprint across lost responses, never revive revoked hashes or overwrite existing pairing/pause. Keep Start, rule consent, device/account pinning and quotas unchanged. No silent optional-host grant. Manual code pairing remains an advanced fallback. See docs/EXTENSION-AUTO-CONNECT.th.md.

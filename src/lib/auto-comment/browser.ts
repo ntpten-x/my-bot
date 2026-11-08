@@ -4,6 +4,7 @@ import { draftStillValid, draftKey, generateCommentDraft } from "./draft";
 import { createHash, randomUUID } from "node:crypto";
 import { Prisma, type AutoCommentJob } from "@prisma/client";
 import { prisma } from "../prisma";
+import { recordTiming } from "../metrics";
 import { explainCommentRule, matchesCommentRule, templateIndex, jsonList } from "./matching";
 import { lockCommentControl, mayRun, readCommentControl, storeCommentControl, type CommentControl } from "./control";
 
@@ -34,6 +35,16 @@ export function browserTarget(url: string, sourceUrl: string, sourceType: string
 async function log(tx: Prisma.TransactionClient, job: AutoCommentJob, event: string, message: string) {
   await tx.autoCommentLog.create({ data: { jobId: job.id, ruleId: job.ruleId, pageId: job.pageId, sourceId: job.sourceId, event, message } });
 }
+async function retryBeforeGrant(tx: Prisma.TransactionClient, job: AutoCommentJob, control: CommentControl) {
+  if (job.status !== "claimed" || job.dispatchedAt || job.attempts !== 0 || !mayRun(control) || job.generation !== control.generation) return false;
+  const retries = await tx.autoCommentLog.count({ where: { jobId: job.id, event: "prepare_retry" } });
+  if (retries >= 2) return false;
+  const nextAttemptAt = new Date(Date.now() + 30_000 * 2 ** retries);
+  await tx.autoCommentJob.update({ where: { id: job.id }, data: { status: "browser_ready", claimToken: null, claimUntil: null, nextAttemptAt,
+    lastError: `เตรียมหน้าไม่สำเร็จก่อนออกสิทธิ์ส่ง รอลองใหม่ครั้งที่ ${retries + 1}/2` } });
+  await log(tx, job, "prepare_retry", "ยังไม่เคยออกสิทธิ์ส่ง เว้นระยะและลองเตรียมหน้าใหม่ ไม่ใช่การส่งซ้ำ");
+  return true;
+}
 async function cancelBeforeSend(tx: Prisma.TransactionClient, job: AutoCommentJob) {
   await tx.autoCommentJob.update({ where: { id: job.id }, data: { status: "cancelled", claimToken: null, claimUntil: null, lastError: "กฎหรือโพสต์เปลี่ยนแล้ว" } });
   if (job.postId) await tx.autoCommentEvaluation.updateMany({ where: { postId: job.postId, generation: job.generation }, data: { nextEvaluateAt: new Date() } });
@@ -57,7 +68,7 @@ async function aiReady(tx: Prisma.TransactionClient, post: { id: string; aiProvi
 }
 
 /** Only the leased worker observes posts and prepares durable browser jobs. */
-export async function scanBrowserComments(assertActive: () => Promise<void>) {
+export async function scanBrowserComments(assertActive: () => Promise<void>, options: { deadlineMs?: number } = {}) {
   if (process.env.MYBOT_PROCESS !== "worker") return;
   const initial = await readCommentControl(); if (!mayRun(initial)) return;
   const initialRules = await prisma.autoCommentRule.findMany(ruleQuery);
@@ -80,100 +91,109 @@ export async function scanBrowserComments(assertActive: () => Promise<void>) {
     ) ORDER BY e."evaluatedAt" ASC NULLS FIRST,p."createdAt" ASC,p."id" ASC LIMIT 100
   `);
   for (const candidate of posts) {
+    if (Date.now() >= (options.deadlineMs ?? Infinity)) break;
     await assertActive();
-    await prisma.$transaction(async tx => {
-      const control = await lockCommentControl(tx); if (!mayRun(control) || control.generation !== initial.generation) return;
-      const post = await tx.post.findUnique({ where: { id: candidate.id }, include: { source: true } }); if (!post) return;
-      await tx.autoCommentLog.createMany({ data: [{ eventKey: `observed:${control.generation}:${post.id}`, event: "observed", sourceId: post.sourceId }], skipDuplicates: true });
-      const rules = await tx.autoCommentRule.findMany(ruleQuery);
-      const now = new Date();
-      const reasons: { ruleId: string; codes: string[] }[] = [];
-      let evaluationState = "skipped";
-      let nextEvaluateAt: Date | null = null;
-      let classificationReady: boolean | undefined;
-      for (const rule of rules) {
-        const result = explainCommentRule(rule, post, now);
-        const codes = result.checks.filter(check => !check.passed).map(check => check.code);
-        if (!post.source.enabled) codes.push("source_disabled");
-        if (!codes.includes("source") && !await commentTypeAllowed(tx, rule.id, post.source)) codes.push("type_scope");
-        if (rule.messageMode !== "ai_draft" && !rule.templates.length) codes.push("no_template");
-        if (post.postedAt && post.postedAt < new Date(control.startedAt)) codes.push("before_start");
-        const target = browserTarget(post.externalUrl, post.source.url, post.source.type);
-        if (!target) codes.push("unsupported_target");
-        const deadline = (post.postedAt ?? post.createdAt).getTime() + rule.maxAgeHours * 3600_000;
-        if (codes.includes("type_scope") && deadline > now.getTime()) nextEvaluateAt = new Date(Math.min(deadline + 1, now.getTime() + 60_000));
-        // Keep a durable wait even if pre-AI labels initially reject the post.
-        if (post.truncated && deadline > now.getTime() && !codes.some(code => ["source", "source_disabled", "type_scope", "before_start", "age", "unsupported_target"].includes(code))) {
-          evaluationState = "waiting_full_text";
-          nextEvaluateAt = new Date(Math.min(deadline + 1, now.getTime() + 60_000));
-          reasons.push({ ruleId: rule.id, codes: ["full_text"] });
-          break;
-        }
-        const aiRelevant = rule.requireAi && codes.every(code => ["not_ad", "intent", "window"].includes(code));
-        const waitingAi = aiRelevant && !(classificationReady ??= await aiReady(tx, post));
-        if (waitingAi && deadline > now.getTime() && codes.every(code => ["not_ad", "intent", "window"].includes(code))) {
-          evaluationState = "waiting_ai";
-          nextEvaluateAt = new Date(Math.min(deadline + 1, now.getTime() + 30_000));
-        } else if (codes.length === 1 && codes[0] === "window" && deadline > now.getTime()) {
-          evaluationState = "waiting_window";
-          nextEvaluateAt = new Date(Math.min(deadline + 1, now.getTime() + 60_000));
-        }
-        reasons.push({ ruleId: rule.id, codes: waitingAi ? [...codes, "waiting_ai"] : codes });
-        // A higher-priority applicable rule waiting for classification must not
-        // lose its post to a lower-priority keyword-only rule.
-        if (evaluationState === "waiting_ai" && codes.length && codes.every(code => ["not_ad", "intent", "window"].includes(code))) break;
-        if (codes.length || !target) continue;
-        const message = rule.messageMode === "ai_draft" ? "" : rule.templates[templateIndex(rule.selectionMode, rule.templates.length, rule.nextTemplate)].body;
-        const dedupeKey = `${control.dryRun ? `dry:${control.generation}` : "live"}:${target.key}`;
-        const existing = await tx.autoCommentJob.findUnique({ where: { dedupeKey } });
-        const data = { ruleId: rule.id, postId: post.id, sourceId: post.sourceId,
-          externalUrl: target.url, postKey: target.key, remotePostId: "", pageId: target.area,
-          deliveryMode: "extension", browserDeviceId: rule.browserDeviceId, browserFbUserId: rule.browserFbUserId,
-          generation: control.generation, ruleRevision: rule.revision, textRevision: post.textRevision,
-          dryRun: control.dryRun, message, status: "pending_ai",
-        };
-        // Only re-evaluate cancelled work that provably never received a send grant
-        // in this generation. Never clear or reuse a historical live dispatch key.
-        const rearm = existing?.status === "cancelled" && existing.generation === control.generation
-          && !existing.dispatchedAt && existing.attempts === 0;
-        let job: AutoCommentJob;
-        if (!existing) job = await tx.autoCommentJob.create({ data: { ...data, dedupeKey } });
-        else if (rearm) job = await tx.autoCommentJob.update({ where: { id: existing.id }, data: {
-          ...data, claimToken: null, claimUntil: null, lastError: "", nextAttemptAt: now,
-        } });
-        else {
-          evaluationState = waitingAi && existing.status === "pending_ai" ? "waiting_ai" : "deduplicated";
-          reasons.push({ ruleId: rule.id, codes: ["existing_delivery", existing.status] });
-          if (evaluationState !== "waiting_ai") nextEvaluateAt = null;
-          break;
-        }
-        if (rule.messageMode === "template") await tx.autoCommentRule.update({ where: { id: rule.id }, data: { nextTemplate: { increment: 1 } } });
-        await log(tx, job, "matched", "จับคู่กฎ Extension รอการตรวจความพร้อม");
-        evaluationState = waitingAi ? "waiting_ai" : "matched";
-        if (!waitingAi) nextEvaluateAt = null;
-        break;
-      }
-      const checkpoint = { inputFingerprint: candidate.inputFingerprint, postUpdatedAt: post.updatedAt, sourceUpdatedAt: post.source.updatedAt,
-        rulesFingerprint: fingerprint(rules), state: evaluationState, reasonsJson: JSON.stringify(reasons),
-        nextEvaluateAt, evaluatedAt: now };
-      await tx.autoCommentEvaluation.upsert({
-        where: { generation_postId: { generation: control.generation, postId: post.id } },
-        create: { postId: post.id, generation: control.generation, ...checkpoint }, update: checkpoint,
+    const transactionStarted = performance.now();
+    try {
+      await prisma.$transaction(async tx => {
+        const control = await lockCommentControl(tx); if (!mayRun(control) || control.generation !== initial.generation) return;
+        const lockStarted = performance.now();
+        try {
+          const post = await tx.post.findUnique({ where: { id: candidate.id }, include: { source: true } }); if (!post) return;
+          await tx.autoCommentLog.createMany({ data: [{ eventKey: `observed:${control.generation}:${post.id}`, event: "observed", sourceId: post.sourceId }], skipDuplicates: true });
+          const rules = await tx.autoCommentRule.findMany(ruleQuery);
+          const now = new Date();
+          const reasons: { ruleId: string; codes: string[] }[] = [];
+          let evaluationState = "skipped";
+          let nextEvaluateAt: Date | null = null;
+          let classificationReady: boolean | undefined;
+          for (const rule of rules) {
+            const result = explainCommentRule(rule, post, now);
+            const codes = result.checks.filter(check => !check.passed).map(check => check.code);
+            if (!post.source.enabled) codes.push("source_disabled");
+            if (!codes.includes("source") && !await commentTypeAllowed(tx, rule.id, post.source)) codes.push("type_scope");
+            if (rule.messageMode !== "ai_draft" && !rule.templates.length) codes.push("no_template");
+            if (post.postedAt && post.postedAt < new Date(control.startedAt)) codes.push("before_start");
+            const target = browserTarget(post.externalUrl, post.source.url, post.source.type);
+            if (!target) codes.push("unsupported_target");
+            const deadline = (post.postedAt ?? post.createdAt).getTime() + rule.maxAgeHours * 3600_000;
+            if (codes.includes("type_scope") && deadline > now.getTime()) nextEvaluateAt = new Date(Math.min(deadline + 1, now.getTime() + 60_000));
+            // Keep a durable wait even if pre-AI labels initially reject the post.
+            if (post.truncated && deadline > now.getTime() && !codes.some(code => ["source", "source_disabled", "type_scope", "before_start", "age", "unsupported_target"].includes(code))) {
+              evaluationState = "waiting_full_text";
+              nextEvaluateAt = new Date(Math.min(deadline + 1, now.getTime() + 60_000));
+              reasons.push({ ruleId: rule.id, codes: ["full_text"] });
+              break;
+            }
+            const aiRelevant = rule.requireAi && codes.every(code => ["not_ad", "intent", "window"].includes(code));
+            const waitingAi = aiRelevant && !(classificationReady ??= await aiReady(tx, post));
+            if (waitingAi && deadline > now.getTime() && codes.every(code => ["not_ad", "intent", "window"].includes(code))) {
+              evaluationState = "waiting_ai";
+              nextEvaluateAt = new Date(Math.min(deadline + 1, now.getTime() + 30_000));
+            } else if (codes.length === 1 && codes[0] === "window" && deadline > now.getTime()) {
+              evaluationState = "waiting_window";
+              nextEvaluateAt = new Date(Math.min(deadline + 1, now.getTime() + 60_000));
+            }
+            reasons.push({ ruleId: rule.id, codes: waitingAi ? [...codes, "waiting_ai"] : codes });
+            // A higher-priority applicable rule waiting for classification must not
+            // lose its post to a lower-priority keyword-only rule.
+            if (evaluationState === "waiting_ai" && codes.length && codes.every(code => ["not_ad", "intent", "window"].includes(code))) break;
+            if (codes.length || !target) continue;
+            const message = rule.messageMode === "ai_draft" ? "" : rule.templates[templateIndex(rule.selectionMode, rule.templates.length, rule.nextTemplate)].body;
+            const dedupeKey = `${control.dryRun ? `dry:${control.generation}` : "live"}:${target.key}`;
+            const existing = await tx.autoCommentJob.findUnique({ where: { dedupeKey } });
+            const data = { ruleId: rule.id, postId: post.id, sourceId: post.sourceId,
+              externalUrl: target.url, postKey: target.key, remotePostId: "", pageId: target.area,
+              deliveryMode: "extension", browserDeviceId: rule.browserDeviceId, browserFbUserId: rule.browserFbUserId,
+              generation: control.generation, ruleRevision: rule.revision, textRevision: post.textRevision,
+              dryRun: control.dryRun, message, status: "pending_ai",
+            };
+            // Only re-evaluate cancelled work that provably never received a send grant
+            // in this generation. Never clear or reuse a historical live dispatch key.
+            const rearm = existing?.status === "cancelled" && existing.generation === control.generation
+              && !existing.dispatchedAt && existing.attempts === 0;
+            let job: AutoCommentJob;
+            if (!existing) job = await tx.autoCommentJob.create({ data: { ...data, dedupeKey } });
+            else if (rearm) job = await tx.autoCommentJob.update({ where: { id: existing.id }, data: {
+              ...data, claimToken: null, claimUntil: null, lastError: "", nextAttemptAt: now,
+            } });
+            else {
+              evaluationState = waitingAi && existing.status === "pending_ai" ? "waiting_ai" : "deduplicated";
+              reasons.push({ ruleId: rule.id, codes: ["existing_delivery", existing.status] });
+              if (evaluationState !== "waiting_ai") nextEvaluateAt = null;
+              break;
+            }
+            if (rule.messageMode === "template") await tx.autoCommentRule.update({ where: { id: rule.id }, data: { nextTemplate: { increment: 1 } } });
+            await log(tx, job, "matched", "จับคู่กฎ Extension รอการตรวจความพร้อม");
+            evaluationState = waitingAi ? "waiting_ai" : "matched";
+            if (!waitingAi) nextEvaluateAt = null;
+            break;
+          }
+          const checkpoint = { inputFingerprint: candidate.inputFingerprint, postUpdatedAt: post.updatedAt, sourceUpdatedAt: post.source.updatedAt,
+            rulesFingerprint: fingerprint(rules), state: evaluationState, reasonsJson: JSON.stringify(reasons),
+            nextEvaluateAt, evaluatedAt: now };
+          await tx.autoCommentEvaluation.upsert({
+            where: { generation_postId: { generation: control.generation, postId: post.id } },
+            create: { postId: post.id, generation: control.generation, ...checkpoint }, update: checkpoint,
+          });
+        } finally { recordTiming("comment_scan_lock", performance.now() - lockStarted); }
       });
-    });
+    } finally { recordTiming("comment_scan_transaction", performance.now() - transactionStarted); }
   }
 }
 
-export async function prepareBrowserComments(assertActive: () => Promise<void>) {
+export async function prepareBrowserComments(assertActive: () => Promise<void>, options: { deadlineMs?: number } = {}) {
   if (process.env.MYBOT_PROCESS !== "worker") return;
   await assertActive();
   const stale = await prisma.autoCommentJob.findMany({ where: { deliveryMode: "extension", status: { in: ["claimed", "sending"] }, claimUntil: { lt: new Date() } }, take: 50, select: { id: true } });
   for (const candidate of stale) {
+    if (Date.now() >= (options.deadlineMs ?? Infinity)) return;
     await assertActive();
     await prisma.$transaction(async tx => {
       const control = await lockCommentControl(tx);
       const job = await tx.autoCommentJob.findFirst({ where: { id: candidate.id, deliveryMode: "extension", status: { in: ["claimed", "sending"] }, claimUntil: { lt: new Date() } } });
       if (!job) return;
+      if (await retryBeforeGrant(tx, job, control)) return;
       const status = job.status === "sending" ? "uncertain" : "cancelled";
       await tx.autoCommentJob.update({ where: { id: job.id }, data: { status, claimToken: null, claimUntil: null, lastError: "Extension ขาดการติดต่อ ไม่ส่งงานนี้ซ้ำอัตโนมัติ" } });
       await log(tx, job, status, "หมดเวลางาน Extension");
@@ -186,6 +206,7 @@ export async function prepareBrowserComments(assertActive: () => Promise<void>) 
   // One transaction per job keeps the global control lock short on remote Postgres.
   const jobs = await prisma.autoCommentJob.findMany({ where: { deliveryMode: "extension", status: "pending_ai", nextAttemptAt: { lte: new Date() } }, take: 50, orderBy: { nextAttemptAt: "asc" }, select: { id: true } });
   for (const candidate of jobs) {
+    if (Date.now() >= (options.deadlineMs ?? Infinity)) break;
     await assertActive();
     const draft = await prisma.$transaction(async tx => {
       const control = await lockCommentControl(tx); if (!mayRun(control)) return;
@@ -217,6 +238,7 @@ export async function prepareBrowserComments(assertActive: () => Promise<void>) 
           const state = await valid(tx, current, control);
           if (!state || result.key !== draftKey(state.rule, state.post)) { await cancelBeforeSend(tx, current); return; }
           await tx.autoCommentJob.update({ where: { id: current.id }, data: { message: result.message, draftInputKey: result.key, draftProvider: result.provider, status: current.dryRun ? "dry_run" : "browser_ready", nextAttemptAt: new Date(), lastError: "" } });
+          await log(tx, current, current.dryRun ? "dry_run" : "browser_ready", "AI Draft พร้อมส่งหลังตรวจ revision แล้ว");
         });
       } catch {
         await prisma.autoCommentJob.updateMany({ where: { id: draft.job.id, status: "pending_ai", ruleRevision: draft.job.ruleRevision, textRevision: draft.job.textRevision }, data: { nextAttemptAt: new Date(Date.now() + 60_000), lastError: "AI Draft ยังไม่ผ่าน ตรวจข้อมูลธุรกิจ/provider จะประเมินใหม่ก่อนหมดอายุโพสต์" } });
@@ -301,6 +323,7 @@ export async function reportBrowserComment(deviceId: string, id: string, token: 
       return Boolean(handled && (["browser_observed", "uncertain", "cancelled", "not_sent"].includes(handled.status)
         || (handled.status === "browser_ready" && !handled.claimToken)));
     }
+    if (["failed", "not_sent"].includes(outcome) && await retryBeforeGrant(tx, job, control)) return true;
     let observed = false;
     try { const url = new URL(commentUrl || ""); observed = browserTarget(url.origin + url.pathname, job.externalUrl.replace(/\/(?:posts|permalink)\/\d+\/?$/, ""), "facebook_group")?.key === job.postKey && /^\d+$/.test(url.searchParams.get("comment_id") || ""); } catch { /* no identifiable comment */ }
     const status = outcome === "not_sent" ? "not_sent"

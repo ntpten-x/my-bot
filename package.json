@@ -32,6 +32,7 @@
     "db:migrate-from-sqlite": "tsx scripts/migrate-sqlite-to-postgres.ts",
     "postinstall": "prisma generate",
     "readiness": "tsx scripts/readiness.ts",
+    "observe:automation": "node scripts/observe-automation.mjs",
     "test:production": "node scripts/smoke-production-local.mjs",
     "test:ci": "node scripts/test-ci.mjs",
     "db:encrypt-settings": "tsx scripts/encrypt-settings.ts"

@@ -5,6 +5,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({ ingest: vi.fn() }));
 vi.mock("../../src/lib/auth", () => ({ requireExtensionToken: async () => true }));
 vi.mock("../../src/lib/ingest", () => ({ ingestPosts: mocks.ingest }));
+vi.mock("../../src/lib/facebook-accounts", () => ({ facebookWorkAllowed: async () => true }));
 vi.mock("../../src/lib/extension-heartbeat", () => ({ countCapturedPosts: async () => undefined, noteBadExtensionToken: async () => undefined }));
 import { POST } from "../../src/app/api/v1/ingest/route";
 const source = readFileSync("extension/background.js", "utf8");
