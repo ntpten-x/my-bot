@@ -37,3 +37,11 @@ it('keeps searchable MY-BOT Desktop shortcuts and a confirmed purge action', () 
   expect(texts.rollbackConfirm).toContain('release');
   expect(readFileSync('desktop/Control.ps1', 'utf8')).toContain("ValidateSet('Start', 'Stop', 'Open', 'Status', 'Password', 'Resume', 'Rollback', 'Uninstall', 'Purge', 'KeepAlive')");
 });
+
+it('creates Thai Start Menu shortcuts via ASCII temp names then Rename-Item', () => {
+  const install = readFileSync('desktop/Install.ps1', 'utf8');
+  expect(install).toContain("MY-BOT Desktop - ' + $Item[1] + '.tmp.lnk'");
+  expect(install).toContain('Rename-Item -LiteralPath $TempPath -NewName $FinalName');
+  expect(install).toMatch(/Create Start Menu links before Start/);
+  expect(install).not.toMatch(/CreateShortcut\(\(Join-Path \$Links \(\$Item\[0\] \+ '\.lnk'\)\)\)/);
+});

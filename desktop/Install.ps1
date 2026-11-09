@@ -102,25 +102,34 @@ try {
     Copy-Item -LiteralPath (Join-Path $PackageDir 'ownership.ps1') -Destination (Join-Path $AppRoot 'ownership.ps1') -Force
     Copy-Item -LiteralPath (Join-Path $PackageDir 'strings.th.json') -Destination (Join-Path $AppRoot 'strings.th.json') -Force
     [IO.File]::WriteAllText($StatePath, ($NewState | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
-    Write-Host $Texts.password
-    & (Join-Path $AppRoot 'Control.ps1') -Action Password
-    & (Join-Path $AppRoot 'Control.ps1') -Action Start
+    # Create Start Menu links before Start so Stop/Status exist even if later steps fail.
+    # WScript.Shell cannot Save() a .lnk whose path contains Thai; create ASCII then Rename-Item.
     $Shell = New-Object -ComObject WScript.Shell
     $Links = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\MY-BOT Desktop'
     New-Item -ItemType Directory -Force -Path $Links | Out-Null
     foreach ($Item in @(@($Texts.viewer, 'Open'), @($Texts.start, 'Start'), @($Texts.stop, 'Stop'), @($Texts.status, 'Status'), @($Texts.resume, 'Resume'), @($Texts.rollback, 'Rollback'), @($Texts.uninstall, 'Uninstall'), @($Texts.purge, 'Purge'))) {
-        $Link = $Shell.CreateShortcut((Join-Path $Links ($Item[0] + '.lnk')))
+        $FinalName = $Item[0] + '.lnk'
+        $TempPath = Join-Path $Links ('MY-BOT Desktop - ' + $Item[1] + '.tmp.lnk')
+        $FinalPath = Join-Path $Links $FinalName
+        if (Test-Path -LiteralPath $TempPath) { Remove-Item -LiteralPath $TempPath -Force }
+        if (Test-Path -LiteralPath $FinalPath) { Remove-Item -LiteralPath $FinalPath -Force }
+        $Link = $Shell.CreateShortcut($TempPath)
         $Link.TargetPath = (Join-Path $PSHOME 'powershell.exe')
         $Link.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $AppRoot 'Control.ps1') + '" -Action ' + $Item[1]
         $Link.WorkingDirectory = $AppRoot
+        $Link.Description = $Item[0]
         $Link.WindowStyle = if ($Item[1] -eq 'Status') { 1 } else { 7 }
         $Link.Save()
+        Rename-Item -LiteralPath $TempPath -NewName $FinalName
     }
     $Startup = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\MY-BOT-Desktop.vbs'
     $StartCommand = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $AppRoot 'Control.ps1') + '" -Action Start'
     $VbsCommand = $StartCommand.Replace('"', '""')
     Set-Content -LiteralPath $Startup -Encoding Unicode -Value "Set shell = CreateObject(""Wscript.Shell"")`r`nshell.Run ""$VbsCommand"", 0, False"
     [IO.File]::WriteAllText($StatePath, ($NewState | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+    Write-Host $Texts.password
+    & (Join-Path $AppRoot 'Control.ps1') -Action Password
+    & (Join-Path $AppRoot 'Control.ps1') -Action Start
     [Windows.Forms.MessageBox]::Show($Texts.done, $Texts.title) | Out-Null
     # Browser launch is best-effort: a blocked Start-Process must not rewrite a successful install as failed.
     $ViewerUrl = 'http://localhost:' + [string]$Ports.viewerPort + '/vnc.html?host=localhost&port=' + [string]$Ports.viewerPort + '&resize=scale'
