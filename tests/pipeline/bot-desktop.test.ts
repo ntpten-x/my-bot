@@ -46,7 +46,14 @@ it('starts a lightweight bottom panel after openbox and recovers it without kill
   expect(readFileSync('desktop/tint2rc','utf8')).toMatch(/panel_position = bottom/);
   expect(readFileSync('desktop/focus-bot-browser.sh','utf8')).toContain('desktop-browser-profile');
   expect(readFileSync('desktop/open-files.sh','utf8')).toContain('pcmanfm');
+  expect(readFileSync('desktop/open-files.sh','utf8')).toContain('MYBOT_DESKTOP_BIN');
   expect(readFileSync('desktop/mimeapps.list','utf8')).toContain('inode/directory=pcmanfm.desktop');
+  expect(readFileSync('desktop/extract-archive.sh','utf8')).toContain('unzip');
+  expect(readFileSync('desktop/archiver-shim.sh','utf8')).toContain('extract-archive.sh');
+  expect(readFileSync('desktop/libfm.conf','utf8')).toMatch(/archiver=xarchiver/);
+  expect(source).toContain('extract-archive.sh');
+  expect(source).toContain('archiver-shim.sh');
+  expect(source).toContain('MYBOT_DESKTOP_BIN');
 });
 
 it('removes inherited WSLg Wayland signals while keeping the actual X display and owner environment',()=>{

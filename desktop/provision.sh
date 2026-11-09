@@ -68,13 +68,13 @@ pruneDesktopReleases('/opt/mybot-desktop/releases',[release, previous]);
 JS
 chmod -R go-w /opt/mybot-desktop/releases
 # Launcher scripts must stay executable after the Windows-built ZIP lands in the release tree.
-for script in focus-bot-browser.sh open-files.sh; do
+for script in focus-bot-browser.sh open-files.sh extract-archive.sh archiver-shim.sh; do
   if [[ -f /opt/mybot-desktop/current/desktop/$script ]]; then
     chmod a+x /opt/mybot-desktop/current/desktop/$script
   fi
 done
 # Prefer the file manager over Chromium for folders inside the bot desktop.
-install -d -m 0755 -o mybot -g mybot /home/mybot/.config
+install -d -m 0755 -o mybot -g mybot /home/mybot/.config /home/mybot/.config/libfm
 cat > /home/mybot/.config/mimeapps.list <<'MIME'
 [Default Applications]
 inode/directory=pcmanfm.desktop;
@@ -86,6 +86,16 @@ application/x-compressed-tar=xarchiver.desktop;
 MIME
 chown mybot:mybot /home/mybot/.config/mimeapps.list
 chmod 0644 /home/mybot/.config/mimeapps.list
+# Force PCManFM to use xarchiver section; the runtime PATH shim makes that call unzip instead of the hanging GUI.
+if [[ -f /opt/mybot-desktop/current/desktop/libfm.conf ]]; then
+  install -m 0644 -o mybot -g mybot /opt/mybot-desktop/current/desktop/libfm.conf /home/mybot/.config/libfm/libfm.conf
+else
+  cat > /home/mybot/.config/libfm/libfm.conf <<'LIBFM'
+[config]
+archiver=xarchiver
+LIBFM
+  chown mybot:mybot /home/mybot/.config/libfm/libfm.conf
+fi
 cat > /etc/wsl.conf <<'CONF'
 [boot]
 systemd=true

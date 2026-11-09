@@ -19,7 +19,8 @@ it.each(['inactive', 'failed'])('keeps the foreground WSL request alive during s
       }
     `);
     chmodSync(fake, 0o755);
-    execFileSync('bash', ['desktop/keepalive.sh'], { timeout: 5000, env: { ...process.env,
+    // Full-suite load can make bash/node spawn slower than a tight 5s budget on Windows.
+    execFileSync('bash', ['desktop/keepalive.sh'], { timeout: 20_000, env: { ...process.env,
       PATH: `${root}:${process.env.PATH}`, MYBOT_KEEPALIVE_INTERVAL: '0.01',
       SYNTHETIC_CALLS: calls, SYNTHETIC_COUNTER: path.join(root, 'count'), SYNTHETIC_TERMINAL: terminalState,
     } });

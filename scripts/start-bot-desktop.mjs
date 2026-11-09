@@ -178,6 +178,9 @@ try {
       const focusScript = path.join(root, 'desktop', 'focus-bot-browser.sh');
       const filesScript = path.join(root, 'desktop', 'open-files.sh');
       const mimeTemplate = path.join(root, 'desktop', 'mimeapps.list');
+      const extractScript = path.join(root, 'desktop', 'extract-archive.sh');
+      const archiverShim = path.join(root, 'desktop', 'archiver-shim.sh');
+      const libfmTemplate = path.join(root, 'desktop', 'libfm.conf');
       try {
         await access(panelTemplate, constants.R_OK);
         await access(focusScript, constants.R_OK);
@@ -201,6 +204,29 @@ try {
           await mkdir(xdgConfig, { recursive: true, mode: 0o700 });
           await writeFile(path.join(xdgConfig, 'mimeapps.list'), await readFile(mimeTemplate, 'utf8'), { mode: 0o600 });
           env.XDG_CONFIG_HOME = xdgConfig;
+          // PCManFM Extract Here calls file-roller/xarchiver; stock xarchiver hangs on Xvfb.
+          try {
+            const shimBin = path.join(plan.runtime, 'bin');
+            await mkdir(shimBin, { recursive: true, mode: 0o700 });
+            const runtimeExtract = path.join(shimBin, 'extract-archive.sh');
+            const runtimeShim = path.join(shimBin, 'archiver-shim.sh');
+            const extractSource = await access(extractScript, constants.R_OK).then(() => extractScript, () => access(runtimeExtract, constants.R_OK).then(() => runtimeExtract, () => null));
+            const shimSource = await access(archiverShim, constants.R_OK).then(() => archiverShim, () => access(runtimeShim, constants.R_OK).then(() => runtimeShim, () => null));
+            if (extractSource && shimSource) {
+              await writeFile(runtimeExtract, await readFile(extractSource), { mode: 0o755 });
+              const shimBody = await readFile(shimSource);
+              await writeFile(runtimeShim, shimBody, { mode: 0o755 });
+              for (const name of ['file-roller', 'xarchiver']) {
+                await writeFile(path.join(shimBin, name), shimBody, { mode: 0o755 });
+              }
+              env.PATH = `${shimBin}${path.delimiter}${env.PATH || '/usr/bin:/bin'}`;
+              env.MYBOT_DESKTOP_BIN = shimBin;
+            }
+            const libfmDir = path.join(xdgConfig, 'libfm');
+            await mkdir(libfmDir, { recursive: true, mode: 0o700 });
+            const libfmBody = await access(libfmTemplate, constants.R_OK).then(() => readFile(libfmTemplate, 'utf8'), () => '[config]\narchiver=xarchiver\n');
+            await writeFile(path.join(libfmDir, 'libfm.conf'), libfmBody, { mode: 0o600 });
+          } catch { /* extract shim is best-effort */ }
         } catch { /* mime defaults are best-effort */ }
         const template = await readFile(panelTemplate, 'utf8');
         if (!template.includes('MYBOT_LAUNCHER_BROWSER') || !template.includes('MYBOT_LAUNCHER_FILES')) {

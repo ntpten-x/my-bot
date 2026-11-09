@@ -8,4 +8,9 @@ if ! command -v pcmanfm >/dev/null 2>&1; then
   echo 'pcmanfm is not installed' >&2
   exit 1
 fi
+# Keep the unzip-based archiver shim ahead of stock xarchiver for Extract Here.
+SHIM_BIN="${MYBOT_DESKTOP_BIN:-/var/lib/mybot-desktop/bot-desktop/bin}"
+if [[ -x "$SHIM_BIN/xarchiver" && -x "$SHIM_BIN/extract-archive.sh" ]]; then
+  export PATH="$SHIM_BIN:${PATH:-/usr/bin:/bin}"
+fi
 exec pcmanfm "$TARGET"
