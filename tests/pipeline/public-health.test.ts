@@ -33,6 +33,28 @@ describe("public health", () => {
     expect(r.checks.extension.lastSeenAgoSec).toBeNull();
   });
 
+  it("stays degraded during startup grace when the worker is not ready yet", async () => {
+    const r = await buildHealth(deps({
+      workerReady: async () => false,
+      startedAt: 1_000_000 - 60_000,
+      availableAiProviders: async () => 2,
+    }));
+    expect(r.status).toBe("degraded");
+    expect(httpStatusFor(r)).toBe(200);
+    expect(r.checks.worker).toEqual({ ok: false });
+  });
+
+  it("is down (503) after startup grace when the worker stays unavailable", async () => {
+    const r = await buildHealth(deps({
+      workerReady: async () => false,
+      startedAt: 1_000_000 - 200_000,
+      availableAiProviders: async () => 2,
+    }));
+    expect(r.status).toBe("down");
+    expect(httpStatusFor(r)).toBe(503);
+    expect(r.checks.worker).toEqual({ ok: false });
+  });
+
   it("is down (503) when the db fails or times out", async () => {
     const failed = await buildHealth(deps({ pingDb: async () => { throw new Error("password=secret"); } }));
     expect(failed.status).toBe("down");

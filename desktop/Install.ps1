@@ -66,7 +66,7 @@ try {
         }
     }
     $Ports = Select-DesktopPorts -Existing $State
-    $NewState = @{ product = 'MY-BOT Desktop'; distribution = $Distro; serverOrigin = $Metadata.serverOrigin; releaseId = $Metadata.releaseId; vncPort = $Ports.vncPort; viewerPort = $Ports.viewerPort }
+    $NewState = @{ product = 'MY-BOT Desktop'; distribution = $Distro; serverOrigin = $Metadata.serverOrigin; releaseId = $Metadata.releaseId; desktopVersion = [string]$Metadata.version; vncPort = $Ports.vncPort; viewerPort = $Ports.viewerPort }
     New-Item -ItemType Directory -Force -Path $AppRoot | Out-Null
     $UserSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     & icacls.exe $AppRoot /inheritance:r /grant:r "*${UserSid}:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' | Out-Null

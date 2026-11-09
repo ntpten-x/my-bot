@@ -2,7 +2,7 @@ import { facebookWorkAllowed } from "@/lib/facebook-accounts";
 import { requireExtensionToken } from "@/lib/auth";
 import { corsPreflight, json, withCors } from "@/lib/http";
 import { buildExtensionConfig } from "@/lib/scrape-runs";
-import { EXPECTED_EXTENSION_VERSION, extensionVersionFromRequest, isCurrentExtensionVersion } from "@/lib/extension-heartbeat";
+import { EXPECTED_EXTENSION_VERSION, extensionVersionFromRequest, isCompatibleExtensionVersion } from "@/lib/extension-heartbeat";
 
 export const dynamic = "force-dynamic";
 
@@ -19,7 +19,7 @@ export async function GET(request: Request) {
   }
   const config = await buildExtensionConfig();
   const version = extensionVersionFromRequest(request);
-  if (!isCurrentExtensionVersion(version)) {
+  if (!isCompatibleExtensionVersion(version)) {
     return withCors(
       json({
         ...config,

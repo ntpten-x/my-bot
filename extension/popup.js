@@ -10,9 +10,17 @@ document.getElementById("connectAuto").addEventListener("click", () => {
 });
 const enabled = document.getElementById("enabled");
 document.getElementById("clearCommentJournal").addEventListener("click", async () => {
-  if (!confirm("ตรวจผลบน Facebook และประวัติงานแล้วใช่ไหม? งานเดิมจะไม่ส่งซ้ำ ปุ่มนี้ล้างเฉพาะตัวล็อกบนเครื่อง ไม่ล้างประวัติเซิร์ฟเวอร์")) return;
-  await chrome.storage.local.remove("commentJournal");
-  status.textContent = "ปลดล็อกบนเครื่องแล้ว ตรวจและบันทึกกฎที่พักไว้บนเว็บก่อน Start ใหม่";
+  if (!confirm("ตรวจผลบน Facebook และประวัติงานแล้วใช่ไหม? งานเดิมจะไม่ส่งซ้ำ ระบบจะบันทึกการตรวจบนเซิร์ฟเวอร์ก่อนปลดล็อกบนเครื่อง")) return;
+  status.textContent = "กำลังบันทึกการตรวจบนเซิร์ฟเวอร์…";
+  chrome.runtime.sendMessage({ type: "clear-comment-journal" }, async result => {
+    void chrome.runtime.lastError;
+    if (!result?.ok) {
+      status.textContent = result?.error || "บันทึกบนเซิร์ฟเวอร์ไม่สำเร็จ จึงยังไม่ปลดล็อกบนเครื่อง";
+      return;
+    }
+    await chrome.storage.local.remove("commentJournal");
+    status.textContent = "บันทึกแล้วและปลดล็อกบนเครื่อง ตรวจกฎที่พักไว้บนเว็บก่อน Start ใหม่";
+  });
 });
 const dedicatedReaderDesktop = document.getElementById("dedicatedReaderDesktop");
 chrome.storage.local.get({ dedicatedReaderDesktop: false }, cfg => { dedicatedReaderDesktop.checked = cfg.dedicatedReaderDesktop; });

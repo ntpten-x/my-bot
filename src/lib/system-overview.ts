@@ -177,6 +177,7 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
     "worker_started_at",
     "summary_last_day",
     "backup_last_day",
+    "backup_last_error_at",
     "reply_queue_last_slot",
     "extension_last_seen",
     "extension_reading",
@@ -561,6 +562,7 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
   const backupFile = settings.lastBackupFile ? path.join(process.cwd(), settings.lastBackupFile) : "";
   const backupSize = backupFile ? await stat(backupFile).then((info) => info.size).catch(() => null) : null;
   const backupAge = ageMs(settings.lastBackupAt || null, now);
+  const backupErrorAge = ageMs(map.backup_last_error_at ?? null, now);
   const ocrFiles = await Promise.all(
     ["tha.traineddata", "eng.traineddata"].map((file) => access(path.join(process.cwd(), file)).then(() => true).catch(() => false)),
   );
@@ -602,10 +604,15 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
     {
       key: "backup",
       label: "สำรองข้อมูลล่าสุด",
-      level: backupAge == null ? "warn" : backupAge < 2 * DAY_MS ? "ok" : "warn",
-      value: backupAge == null ? "ยังไม่เคยสำรอง" : thaiAgo(backupAge),
+      level: backupErrorAge != null && (backupAge == null || backupErrorAge < backupAge) ? "bad"
+        : backupAge == null ? "warn" : backupAge < 2 * DAY_MS ? "ok" : "warn",
+      value: backupErrorAge != null && (backupAge == null || backupErrorAge < backupAge)
+        ? `ล้มเหลวล่าสุด ${thaiAgo(backupErrorAge)}`
+        : backupAge == null ? "ยังไม่เคยสำรอง" : thaiAgo(backupAge),
       detail: settings.lastBackupFile ? `${path.basename(settings.lastBackupFile)}${backupSize != null ? ` · ${formatBytes(backupSize)}` : " · ไม่พบไฟล์"}` : undefined,
-      hint: backupAge == null || backupAge >= 2 * DAY_MS ? "worker สำรองให้ทุกวันตอน 03:00 — ตรวจว่า worker ทำงานอยู่" : undefined,
+      hint: backupErrorAge != null && (backupAge == null || backupErrorAge < backupAge)
+        ? "ตรวจ BACKUP_UPLOAD_URL บน Render หรือดิสก์ปลายทาง แล้วรันสำรองใหม่"
+        : backupAge == null || backupAge >= 2 * DAY_MS ? "worker สำรองให้ทุกวันตอน 03:00 — ตรวจว่า worker ทำงานอยู่" : undefined,
     },
     {
       key: "disk",

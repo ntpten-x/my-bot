@@ -1,0 +1,26 @@
+name: Verify production release
+on:
+  workflow_run:
+    workflows: ["Verify MY-BOT"]
+    types: [completed]
+    branches: [master]
+permissions:
+  contents: read
+jobs:
+  verify-production:
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'master' && github.event.workflow_run.event == 'push' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Poll production health headers
+        env:
+          PRODUCTION_ORIGIN: https://my-bot-e6bt.onrender.com
+          EXPECTED_COMMIT: ${{ github.event.workflow_run.head_sha }}
+          VERIFY_TIMEOUT_MS: "600000"
+        run: node scripts/verify-production-release.mjs

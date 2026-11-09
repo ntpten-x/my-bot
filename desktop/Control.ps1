@@ -1,4 +1,4 @@
-param([ValidateSet('Start', 'Stop', 'Open', 'Status', 'Password', 'Resume', 'Uninstall', 'Purge', 'KeepAlive')][string]$Action = 'Open')
+﻿param([ValidateSet('Start', 'Stop', 'Open', 'Status', 'Password', 'Resume', 'Uninstall', 'Purge', 'KeepAlive')][string]$Action = 'Open')
 $ErrorActionPreference = 'Stop'
 $Distro = 'MYBOT-Desktop-V1'
 $StatePath = Join-Path $PSScriptRoot 'install-state.json'
@@ -87,9 +87,20 @@ if ($Action -eq 'Status') {
     $Data = ($Report -join "`n") | ConvertFrom-Json
     $Ready = $Data.supervisor.phase -eq 'running' -and $Data.webReady -and $Data.vncListening -and $Data.viewerReady
     $Message = if ($Ready) { $Texts.statusReady } else { $Texts.statusAttention }
+    $InstalledVersion = [string]$State.desktopVersion
+    $ServerDesktop = ''
+    try {
+        $Health = Invoke-WebRequest -UseBasicParsing -Method Get -TimeoutSec 8 -Uri ($State.serverOrigin.TrimEnd('/') + '/api/v1/health')
+        $ServerDesktop = [string]$Health.Headers['X-MYBOT-Desktop-Version']
+    } catch { $ServerDesktop = '' }
+    $UpdateHint = if ($ServerDesktop -and $InstalledVersion -and $ServerDesktop -ne $InstalledVersion) {
+        'มีรุ่นบนเซิร์ฟเวอร์ ' + $ServerDesktop + ' (เครื่องนี้ ' + $InstalledVersion + ') — หยุดบอทแล้วดาวน์โหลด ZIP ใหม่จากเว็บเดิม'
+    } elseif ($ServerDesktop) { 'รุ่นบนเซิร์ฟเวอร์=' + $ServerDesktop } else { 'ตรวจรุ่นบนเซิร์ฟเวอร์ไม่ได้ตอนนี้' }
     $Detail = @(
         $State.serverOrigin,
         ('release=' + [string]$State.releaseId),
+        ('installed=' + $(if ($InstalledVersion) { $InstalledVersion } else { 'unknown' })),
+        $UpdateHint,
         ('viewer=' + $ViewerUrl),
         ('phase=' + [string]$Data.supervisor.phase),
         ('desktop=' + [string]$Data.supervisor.desktop),

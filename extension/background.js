@@ -1874,6 +1874,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch(() => sendResponse({ ok: false }));
     return true;
   }
+  if (message?.type === "clear-comment-journal" && sender.url === chrome.runtime.getURL("popup.html")) {
+    loadConfig()
+      .then(async cfg => {
+        if (!String(cfg.token || "").startsWith("mbd_")) throw new Error("ต้องจับคู่อุปกรณ์ก่อนปลดล็อก");
+        const response = await postJson(cfg, "/api/v1/extension/comments", { action: "clear_journal" }, { timeoutMs: 10000, retries: 0 });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok || body.ok !== true) throw new Error(body.error || (body.upgradeRequired ? `อัปเดตส่วนขยายเป็น ${body.expectedVersion}` : "เซิร์ฟเวอร์ไม่รับการปลดล็อก"));
+        sendResponse({ ok: true });
+      })
+      .catch(error => sendResponse({ ok: false, error: error?.message || "ปลดล็อกไม่สำเร็จ" }));
+    return true;
+  }
   if (message?.type !== "manual-posts") return;
   forwardManual(message, sender)
     .then(result => sendResponse({ ok: true, ...result }))

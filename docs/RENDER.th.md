@@ -6,6 +6,8 @@
 
 หลัง deploy ตรวจด้วย `node scripts/verify-production-release.mjs https://my-bot-e6bt.onrender.com <commit-sha>` หรือเรียก `GET /api/v1/health` และ `GET /health`: body สาธารณะยังมีเพียง `ok` กับ `version` ส่วน header `X-MYBOT-Desktop-Version`, `X-MYBOT-Extension-Version`, `X-MYBOT-Commit` (เมื่อ Render มี `RENDER_GIT_COMMIT`) ใช้ยืนยันรุ่นที่รันจริง response เป็น no-store ไม่เผย credentials หาก header ยังไม่มี ให้ตรวจ deploy แทนการสรุปว่า push ไม่สำเร็จ
 
+GitHub Actions workflow `Verify production release` จะรอ `Verify MY-BOT` ผ่านบน `master` แล้วโพล header บน production ให้เอง หาก Render ตั้ง Auto-Deploy เป็น After CI Checks Pass แต่ Events ยังไม่ขึ้น Live ให้ Manual Deploy → Deploy latest commit
+
 ก่อนนำ Branch ความปลอดภัยขึ้นจริง ให้อ่าน [Production Readiness และแผน Apply/Rollback](PRODUCTION-READINESS.th.md) ต้องปิด FAIL/BLOCKED ที่เกี่ยวข้องและได้รับอนุญาตก่อน Push/Deploy
 
 ## ตัวแปรที่ต้องตั้งใน Render → Environment
@@ -28,12 +30,12 @@
 ## ตั้งค่าบริการ
 
 - Build command: `npm ci --include=dev && npm run build` · Start command: `npm start` เพื่อเปิดทั้ง Web และ Worker (Build ต้องใช้ Prisma CLI/TypeScript ใน devDependencies; ตัวรัน Worker `tsx` เป็น runtime dependency)
-- Health check path: **`/health`** (ตอบ 200 เมื่อ ok/degraded, 503 เมื่อ down) พร้อม header รุ่นเดียวกับ `/api/v1/health`
+- Health check path: **`/health`** (ตอบ 200 เมื่อ ok/degraded, 503 เมื่อ down หรือเมื่อ worker หายหลังเริ่มเกิน 3 นาที) พร้อม header รุ่นเดียวกับ `/api/v1/health`
 - Migration: ตั้ง **Pre-deploy command** เป็น `npx prisma migrate deploy` และให้ fail ทั้ง deploy เมื่อ migrate ไม่ผ่าน ฐาน Supabase ใช้ร่วมกับเครื่อง — อย่ารัน migrate ซ้ำจากหลายโฮสต์พร้อมกัน
 - **Free tier หลับ** หลังไม่มีคนเรียก ~15 นาที เรียกครั้งแรกจะช้า 30–60 วินาที และงานตามตารางใน worker (สรุปรายวัน, backup, watchdog, คิว AI) จะหยุดช่วงหลับ ส่วนขยายจะลองใหม่เองรอบถัดไป ถ้าต้องการอ่าน/ส่งต่อเนื่อง 24 ชม. ต้องใช้แผน always-on หรือตัวปลุกภายนอก
 - Ollama ไม่มีบนคลาวด์: หน้า AI แสดง “ข้าม (เซิร์ฟเวอร์นี้ไม่มี Ollama)” การจัดหมวดใช้ผู้ให้บริการคลาวด์ตัวถัดไป และ embedding ใช้ Gemini หรือปิดการค้นหาเชิงความหมายเงียบ ๆ
 
-## ส่วนขยาย Chrome (v1.11.20)
+## ส่วนขยาย Chrome (v1.11.21)
 
 1. เข้าเว็บ → ตั้งค่า → ส่วนขยาย Chrome → ดาวน์โหลด .zip แล้วแตกไฟล์
 2. `chrome://extensions` → เปิด Developer mode → Load unpacked → เลือกโฟลเดอร์ `mybot-extension` (ถ้าติดตั้งเดิมไว้ ให้แตกทับแล้วกดโหลดซ้ำ)

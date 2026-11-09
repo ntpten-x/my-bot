@@ -63,12 +63,15 @@ export async function buildHealth(deps: HealthDeps): Promise<HealthReport> {
   let workerOk = true;
   if (deps.workerReady && dbOk) { try { workerOk = await withTimeout(deps.workerReady(), timeout); } catch { workerOk = false; } }
   const t = now();
+  const uptimeSec = Math.max(0, Math.floor((t - deps.startedAt) / 1000));
   const aiOk = available > 0;
-  const status: HealthStatus = !dbOk ? "down" : aiOk && workerOk ? "ok" : "degraded";
+  // After a short startup grace, a missing worker is a readiness failure so Render/load balancers stop routing.
+  const workerRequired = Boolean(deps.workerReady) && uptimeSec >= 180;
+  const status: HealthStatus = !dbOk || (workerRequired && !workerOk) ? "down" : aiOk && workerOk ? "ok" : "degraded";
   return {
     status,
     version: deps.version,
-    uptimeSec: Math.max(0, Math.floor((t - deps.startedAt) / 1000)),
+    uptimeSec,
     time: new Date(t).toISOString(),
     checks: {
       ...(deps.workerReady ? { worker: { ok: workerOk && dbOk } } : {}),
