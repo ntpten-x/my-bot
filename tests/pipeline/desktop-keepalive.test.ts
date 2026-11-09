@@ -3,6 +3,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import os from 'node:os';
 import path from 'node:path';
 import { expect, it } from 'vitest';
+import { bashTestPath, testBash } from '../helpers/bash';
 
 it.each(['inactive', 'failed'])('keeps the foreground WSL request alive during service activation and exits on %s without restarting', (terminalState) => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'mybot-desktop-keepalive-'));
@@ -20,8 +21,8 @@ it.each(['inactive', 'failed'])('keeps the foreground WSL request alive during s
     `);
     chmodSync(fake, 0o755);
     // Full-suite load can make bash/node spawn slower than a tight 5s budget on Windows.
-    execFileSync('bash', ['desktop/keepalive.sh'], { timeout: 20_000, env: { ...process.env,
-      PATH: `${root}:${process.env.PATH}`, MYBOT_KEEPALIVE_INTERVAL: '0.01',
+    execFileSync(testBash, ['-c', 'export PATH="$MYBOT_TEST_BIN:$PATH"; test "$(command -v systemctl)" = "$MYBOT_TEST_BIN/systemctl" || exit 70; exec bash desktop/keepalive.sh'], { timeout: 20_000, env: { ...process.env,
+      MYBOT_TEST_BIN: bashTestPath(root), MYBOT_KEEPALIVE_INTERVAL: '0.01',
       SYNTHETIC_CALLS: calls, SYNTHETIC_COUNTER: path.join(root, 'count'), SYNTHETIC_TERMINAL: terminalState,
     } });
     const commands = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line));

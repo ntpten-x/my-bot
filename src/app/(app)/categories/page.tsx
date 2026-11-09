@@ -63,7 +63,7 @@ export default function CategoriesPage() {
     <div>
       <h1 className="text-2xl font-semibold">หมวดและคีย์เวิร์ด</h1>
       <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
-        หมวดใช้จัดประกาศ คำในช่อง “คำจับคู่” ช่วยตัวคัดสำรองเมื่อไม่มี AI คำเฝ้าดูใช้ไฮไลต์และยิงการแจ้งเตือน คำต้องห้ามจะถูกซ่อนจากฟีดเริ่มต้น
+        หมวดใช้จัดประกาศ คำในช่อง “คำจับคู่” เป็นเงื่อนไขให้บอทจัดหมวด คำเฝ้าดูใช้ไฮไลต์และยิงการแจ้งเตือน คำต้องห้ามจะถูกซ่อนจากฟีดเริ่มต้น
       </p>
       {error ? <p className="mt-4 text-sm text-red-700">{error}</p> : null}
       {loading ? <p className="mt-4 text-sm text-muted">กำลังโหลด...</p> : null}

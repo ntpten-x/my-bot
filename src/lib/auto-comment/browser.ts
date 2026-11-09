@@ -1,6 +1,5 @@
 import { globalDispatchDelay, groupDispatchDelay, combineDispatchDelays, type DispatchDelay } from "./dispatch-budget";
 import { commentTypeAllowed } from "./type-setup";
-import { draftStillValid, draftKey, generateCommentDraft } from "./draft";
 import { createHash, randomUUID } from "node:crypto";
 import { Prisma, type AutoCommentJob } from "@prisma/client";
 import { prisma } from "../prisma";
@@ -31,7 +30,7 @@ const ruleQuery = {
   orderBy: [{ priority: "desc" as const }, { createdAt: "asc" as const }, { id: "asc" as const }],
 };
 // Only fields used by matching/delivery invalidate a checkpoint, never read/fetch timestamps.
-const inputKeySql = Prisma.sql`md5(jsonb_build_array(p."textRevision",p."truncated",p."text",p."intent",p."isAd",p."forbiddenHit",p."duplicateOfId",p."dismissed",p."aiProvider",p."suggestedReply",p."postedAt",p."externalUrl",s."enabled",s."url",s."type",s."boundCategorySlug",s."defaultProductId")::text)`;
+const inputKeySql = Prisma.sql`md5(jsonb_build_array(p."textRevision",p."truncated",p."text",p."intent",p."isAd",p."forbiddenHit",p."duplicateOfId",p."dismissed",p."aiProvider",p."suggestedReply",p."postedAt",p."externalUrl",s."enabled",s."url",s."type",s."fbGroupId",s."boundCategorySlug",s."defaultProductId")::text)`;
 const fingerprint = (rules: { id: string; revision: number }[]) => createHash("sha256")
   .update(JSON.stringify(rules.map(rule => [rule.id, rule.revision]))).digest("hex");
 export function browserTarget(url: string, sourceUrl: string, sourceType: string, aliases: string[] = []) {
@@ -70,18 +69,13 @@ async function valid(tx: Prisma.TransactionClient, job: AutoCommentJob, control:
   if (!mayRun(control) || job.generation !== control.generation || job.deliveryMode !== "extension") return null;
   const rule = await tx.autoCommentRule.findUnique({ where: { id: job.ruleId } });
   const post = job.postId ? await tx.post.findUnique({ where: { id: job.postId }, include: { source: true } }) : null;
-  if (!rule || !post || !rule.browserConsent || rule.deliveryMode !== "extension" || rule.revision !== job.ruleRevision
+  if (!rule || !post || rule.messageMode !== "template" || !rule.browserConsent || rule.deliveryMode !== "extension" || rule.revision !== job.ruleRevision
     || rule.browserDeviceId !== job.browserDeviceId || rule.browserFbUserId !== job.browserFbUserId || !post.source.enabled
     || post.textRevision !== job.textRevision || !matchesCommentRule(rule, post)
     || browserTarget(post.externalUrl, post.source.url, post.source.type, [post.source.fbGroupId || ""].filter(Boolean))?.key !== job.postKey) return null;
   if (!await commentTypeAllowed(tx, rule.id, post.source)) return null;
   if (!await tx.extensionDevice.findFirst({ where: { id: job.browserDeviceId, revokedAt: null } })) return null;
   return { rule, post };
-}
-async function aiReady(tx: Prisma.TransactionClient, post: { id: string; aiProvider: string | null }) {
-  if (post.aiProvider === "owner") return true;
-  if (!post.aiProvider || post.aiProvider.startsWith("rules")) return false;
-  return Boolean(await tx.aiJob.findFirst({ where: { postId: post.id, status: "done" } }));
 }
 
 /** Only the leased worker observes posts and prepares durable browser jobs. */
@@ -106,7 +100,7 @@ export async function scanBrowserComments(assertActive: () => Promise<void>, opt
   const posts = await prisma.$queryRaw<{ id: string; inputFingerprint: string }[]>(Prisma.sql`
     SELECT p."id", ${inputKeySql} AS "inputFingerprint" FROM "Post" p JOIN "Source" s ON s."id"=p."sourceId"
     LEFT JOIN "AutoCommentEvaluation" e ON e."postId"=p."id" AND e."generation"=${initial.generation}
-    WHERE p."createdAt">=${initial.startedAt}::timestamp
+    WHERE p."createdAt">=${initial.startedAt}::timestamp AND p."processingState"='done'
       AND p."sourceId" IN (${Prisma.join(sourceIds)})
       AND COALESCE(p."postedAt",p."createdAt")>=${oldestEligibleAt}::timestamp AND (
       e."id" IS NULL OR e."inputFingerprint"<>${inputKeySql}
@@ -139,13 +133,17 @@ export async function scanBrowserComments(assertActive: () => Promise<void>, opt
           const reasons: { ruleId: string; codes: string[] }[] = [];
           let evaluationState = "skipped";
           let nextEvaluateAt: Date | null = null;
-          let classificationReady: boolean | undefined;
           for (const rule of rules) {
+            // Historical generated-message rules stay inert until the owner selects templates.
+            if (rule.messageMode !== "template") {
+              reasons.push({ ruleId: rule.id, codes: ["no_template"] });
+              continue;
+            }
             const result = explainCommentRule(rule, post, now);
             const codes = result.checks.filter(check => !check.passed).map(check => check.code);
             if (!post.source.enabled) codes.push("source_disabled");
             if (!codes.includes("source") && !await commentTypeAllowed(tx, rule.id, post.source)) codes.push("type_scope");
-            if (rule.messageMode !== "ai_draft" && !rule.templates.length) codes.push("no_template");
+            if (!rule.templates.length) codes.push("no_template");
             if (post.postedAt && post.postedAt < new Date(control.startedAt)) codes.push("before_start");
             const target = browserTarget(post.externalUrl, post.source.url, post.source.type, [post.source.fbGroupId || ""].filter(Boolean));
             if (!target) codes.push("unsupported_target");
@@ -159,30 +157,22 @@ export async function scanBrowserComments(assertActive: () => Promise<void>, opt
               reasons.push({ ruleId: rule.id, codes: codes.includes("full_text") ? codes : [...codes, "full_text"] });
               break;
             }
-            const aiRelevant = rule.requireAi && codes.every(code => ["not_ad", "intent", "window"].includes(code));
-            const waitingAi = aiRelevant && !(classificationReady ??= await aiReady(tx, post));
-            if (waitingAi && deadline > now.getTime() && codes.every(code => ["not_ad", "intent", "window"].includes(code))) {
-              evaluationState = "waiting_ai";
-              nextEvaluateAt = new Date(Math.min(deadline + 1, now.getTime() + 30_000));
-            } else if (codes.length === 1 && codes[0] === "window" && deadline > now.getTime()) {
+            if (codes.length === 1 && codes[0] === "window" && deadline > now.getTime()) {
               evaluationState = "waiting_window";
               nextEvaluateAt = new Date(Math.min(deadline + 1, now.getTime() + 60_000));
             }
-            reasons.push({ ruleId: rule.id, codes: waitingAi ? [...codes, "waiting_ai"] : codes });
-            // A higher-priority applicable rule waiting for classification must not
-            // lose its post to a lower-priority keyword-only rule.
-            if (evaluationState === "waiting_ai" && codes.length && codes.every(code => ["not_ad", "intent", "window"].includes(code))) break;
+            reasons.push({ ruleId: rule.id, codes });
             if (codes.length || !target) continue;
-            const message = rule.messageMode === "ai_draft" ? "" : rule.templates[templateIndex(rule.selectionMode, rule.templates.length, rule.nextTemplate)].body;
+            const message = rule.templates[templateIndex(rule.selectionMode, rule.templates.length, rule.nextTemplate)].body;
             const dedupeKey = `${control.dryRun ? `dry:${control.generation}` : "live"}:${target.key}`;
             const existing = await tx.autoCommentJob.findUnique({ where: { dedupeKey } });
             // Keyword bots go straight to the Extension claim queue — no AI prepare hop.
-            const readyNow = !control.dryRun && isKeywordBotRule(rule) && Boolean(message);
+            const readyNow = !control.dryRun && Boolean(message);
             const data = { ruleId: rule.id, postId: post.id, sourceId: post.sourceId,
               externalUrl: target.url, postKey: target.key, remotePostId: "", pageId: target.area,
               deliveryMode: "extension", browserDeviceId: rule.browserDeviceId, browserFbUserId: rule.browserFbUserId,
               generation: control.generation, ruleRevision: rule.revision, textRevision: post.textRevision,
-              dryRun: control.dryRun, message, status: readyNow ? "browser_ready" : "pending_ai",
+              dryRun: control.dryRun, message, status: readyNow ? "browser_ready" : "pending_ai", nextAttemptAt: now,
             };
             // Only re-evaluate cancelled work that provably never received a send grant
             // in this generation. Never clear or reuse a historical live dispatch key.
@@ -194,17 +184,17 @@ export async function scanBrowserComments(assertActive: () => Promise<void>, opt
               ...data, claimToken: null, claimUntil: null, lastError: "", nextAttemptAt: now,
             } });
             else {
-              evaluationState = waitingAi && existing.status === "pending_ai" ? "waiting_ai" : "deduplicated";
+              evaluationState = "deduplicated";
               reasons.push({ ruleId: rule.id, codes: ["existing_delivery", existing.status] });
-              if (evaluationState !== "waiting_ai") nextEvaluateAt = null;
+              nextEvaluateAt = null;
               break;
             }
             if (rule.messageMode === "template") await tx.autoCommentRule.update({ where: { id: rule.id }, data: { nextTemplate: { increment: 1 } } });
             await log(tx, job, readyNow ? "browser_ready" : "matched", readyNow
               ? "จับคู่คำสำคัญแล้ว พร้อมให้อุปกรณ์รับงานทันที"
               : "จับคู่กฎ Extension รอการตรวจความพร้อม");
-            evaluationState = waitingAi ? "waiting_ai" : "matched";
-            if (!waitingAi) nextEvaluateAt = null;
+            evaluationState = "matched";
+            nextEvaluateAt = null;
             break;
           }
           const checkpoint = { inputFingerprint: candidate.inputFingerprint, postUpdatedAt: post.updatedAt, sourceUpdatedAt: post.source.updatedAt,
@@ -246,7 +236,7 @@ export async function prepareBrowserComments(assertActive: () => Promise<void>, 
   for (const candidate of jobs) {
     if (Date.now() >= (options.deadlineMs ?? Infinity)) break;
     await assertActive();
-    const draft = await prisma.$transaction(async tx => {
+    await prisma.$transaction(async tx => {
       const control = await lockCommentControl(tx); if (!mayRun(control)) return;
       const job = await tx.autoCommentJob.findFirst({ where: { id: candidate.id, status: "pending_ai", nextAttemptAt: { lte: new Date() } } }); if (!job) return;
       const state = await valid(tx, job, control);
@@ -254,11 +244,6 @@ export async function prepareBrowserComments(assertActive: () => Promise<void>, 
         await cancelBeforeSend(tx, job);
         return;
       }
-      if (state.rule.requireAi && !await aiReady(tx, state.post)) {
-        await tx.autoCommentJob.update({ where: { id: job.id }, data: { nextAttemptAt: new Date(Date.now() + 30000) } });
-        return;
-      }
-      if (state.rule.messageMode === "ai_draft" && !draftStillValid(job, state.rule, state.post)) return { job, ...state };
       const message = job.message;
       if (!message || message.length > 2000) { await tx.autoCommentJob.update({ where: { id: job.id }, data: { status: "cancelled", lastError: "ข้อความตอบว่างหรือยาวเกินกำหนด" } }); return; }
       const status = job.dryRun ? "dry_run" : "browser_ready";
@@ -269,23 +254,6 @@ export async function prepareBrowserComments(assertActive: () => Promise<void>, 
           ? "ข้อความสำเร็จรูปพร้อมแล้ว ให้อุปกรณ์รับงานทันที"
           : "พร้อมให้อุปกรณ์ที่ผูกไว้รับงาน");
     }, { timeout: 20000, maxWait: 20000 });
-    if (draft) {
-      await assertActive();
-      try {
-        const result = await generateCommentDraft(draft.rule, draft.post, assertActive);
-        await prisma.$transaction(async tx => {
-          const control = await lockCommentControl(tx);
-          const current = await tx.autoCommentJob.findFirst({ where: { id: draft.job.id, status: "pending_ai" } });
-          if (!current) return;
-          const state = await valid(tx, current, control);
-          if (!state || result.key !== draftKey(state.rule, state.post)) { await cancelBeforeSend(tx, current); return; }
-          await tx.autoCommentJob.update({ where: { id: current.id }, data: { message: result.message, draftInputKey: result.key, draftProvider: result.provider, status: current.dryRun ? "dry_run" : "browser_ready", nextAttemptAt: new Date(), lastError: "" } });
-          await log(tx, current, current.dryRun ? "dry_run" : "browser_ready", "AI Draft พร้อมส่งหลังตรวจ revision แล้ว");
-        });
-      } catch {
-        await prisma.autoCommentJob.updateMany({ where: { id: draft.job.id, status: "pending_ai", ruleRevision: draft.job.ruleRevision, textRevision: draft.job.textRevision }, data: { nextAttemptAt: new Date(Date.now() + 60_000), lastError: "AI Draft ยังไม่ผ่าน ตรวจข้อมูลธุรกิจ/provider จะประเมินใหม่ก่อนหมดอายุโพสต์" } });
-      }
-    }
   }
 }
 
@@ -343,8 +311,6 @@ export async function authorizeBrowserComment(deviceId: string, id: string, toke
     };
     const worker = await tx.$queryRaw<{ name: string }[]>`SELECT "name" FROM "Lease" WHERE "name"='worker' AND "expiresAt">(clock_timestamp() AT TIME ZONE 'UTC') + interval '5 seconds'`;
     if (!worker.length) return defer({ retryAt: new Date(Date.now() + 30000), reason: "รอ Worker พร้อม" });
-    if (state.rule.requireAi && !await aiReady(tx, state.post)) return defer({ retryAt: new Date(Date.now() + 30000), reason: "รอ AI" });
-    if (state.rule.messageMode === "ai_draft" && !draftStillValid(job, state.rule, state.post)) { await cancelBeforeSend(tx, job); return null; }
     const now = new Date();
     const delay = combineDispatchDelays(await Promise.all([
       globalDispatchDelay(tx, control, now), groupDispatchDelay(tx, job.pageId, state.rule.areaCooldownSec, now),

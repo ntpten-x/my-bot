@@ -48,13 +48,11 @@ export async function POST(request: Request) {
     if (!(await facebookWorkAllowed(request, fbUserId))) return withCors(json({ error: "บัญชีถูกหยุดงาน ข้อมูลยังอยู่ในคิวของส่วนขยาย", code: "ACCOUNT_PAUSED" }, 423));
     const itemIds = data.posts.map(post => post.itemId);
     if (batchId && (itemIds.some(id => !id) || new Set(itemIds).size !== itemIds.length)) return withCors(json({ error: "รายการต้องมี itemId ไม่ซ้ำ" }, 400));
-    // Durable Post+AiJob first; enrichment/notify continue after the receipt response.
+    // Post and its durable rule-work marker commit before receipt acknowledgment.
     const result = await ingestPosts({ ...data, actor: "extension" }, { deferFinalize: true });
     if (result.ok && "_finalize" in result && typeof result._finalize === "function") {
       const finalize = result._finalize;
-      after(() => {
-        void finalize().catch((error) => console.error("[ingest-finalize]", error));
-      });
+      after(async () => { await finalize().catch((error) => console.error("[ingest-finalize]", error)); });
     }
     if (result.ok) {
       const now = Date.now();

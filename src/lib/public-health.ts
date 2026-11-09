@@ -4,7 +4,8 @@ export type HealthStatus = "ok" | "degraded" | "down";
 export type HealthDeps = {
   pingDb: () => Promise<void>;
   workerReady?: () => Promise<boolean>;
-  availableAiProviders: () => Promise<number>;
+  /** Accepted from older callers but never invoked. */
+  availableAiProviders?: () => Promise<number>;
   extensionLastSeen: () => Promise<Date | null>;
   version: string;
   startedAt: number;
@@ -19,7 +20,7 @@ export type HealthReport = {
   time: string;
   checks: {
     db: { ok: boolean; latencyMs: number | null };
-    ai: { ok: boolean; availableProviders: number };
+    bot: { ok: true; mode: "rules" };
     extension: { lastSeenAgoSec: number | null };
     worker?: { ok: boolean };
   };
@@ -49,25 +50,18 @@ export async function buildHealth(deps: HealthDeps): Promise<HealthReport> {
     dbOk = false;
   }
 
-  let available = 0;
   let lastSeen: Date | null = null;
   if (dbOk) {
-    const [ai, ext] = await Promise.allSettled([
-      withTimeout(deps.availableAiProviders(), timeout),
-      withTimeout(deps.extensionLastSeen(), timeout),
-    ]);
-    if (ai.status === "fulfilled") available = ai.value;
-    if (ext.status === "fulfilled") lastSeen = ext.value;
+    try { lastSeen = await withTimeout(deps.extensionLastSeen(), timeout); } catch { /* unknown */ }
   }
 
   let workerOk = true;
   if (deps.workerReady && dbOk) { try { workerOk = await withTimeout(deps.workerReady(), timeout); } catch { workerOk = false; } }
   const t = now();
   const uptimeSec = Math.max(0, Math.floor((t - deps.startedAt) / 1000));
-  const aiOk = available > 0;
   // After a short startup grace, a missing worker is a readiness failure so Render/load balancers stop routing.
   const workerRequired = Boolean(deps.workerReady) && uptimeSec >= 180;
-  const status: HealthStatus = !dbOk || (workerRequired && !workerOk) ? "down" : aiOk && workerOk ? "ok" : "degraded";
+  const status: HealthStatus = !dbOk || (workerRequired && !workerOk) ? "down" : workerOk ? "ok" : "degraded";
   return {
     status,
     version: deps.version,
@@ -76,7 +70,7 @@ export async function buildHealth(deps: HealthDeps): Promise<HealthReport> {
     checks: {
       ...(deps.workerReady ? { worker: { ok: workerOk && dbOk } } : {}),
       db: { ok: dbOk, latencyMs },
-      ai: { ok: aiOk, availableProviders: available },
+      bot: { ok: true, mode: "rules" },
       extension: { lastSeenAgoSec: lastSeen ? Math.max(0, Math.floor((t - lastSeen.getTime()) / 1000)) : null },
     },
   };

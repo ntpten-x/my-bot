@@ -135,7 +135,7 @@ export async function setCommentRuleEnabled(id: string, enabled: boolean, revisi
     if (enabled) {
       if (rule.deliveryMode !== "extension") throw new RuleToggleError("เปิดแก้ไขชุดตั้งค่านี้เพื่อเลือกการส่งผ่านส่วนขยายก่อน");
       if (rule.pausedReason) throw new RuleToggleError("ชุดนี้ถูกพักไว้ กรุณาตรวจประวัติและแก้ไขบันทึกก่อนเปิดใช้งาน");
-      if (rule.messageMode !== "ai_draft" && !rule.templates.length) throw new RuleToggleError("ชุดนี้ไม่มีข้อความ กรุณาแก้ไขข้อความก่อน");
+      if (rule.messageMode !== "template" || !rule.templates.length) throw new RuleToggleError("เลือกข้อความสำเร็จรูปก่อนเปิดชุดนี้");
       const sourceIds = JSON.parse(rule.sourceIdsJson) as string[];
       const sources = await tx.source.findMany({ where: { id: { in: sourceIds } } });
       if (!sourceIds.length || sources.length !== new Set(sourceIds).size || sources.some(source => source.type !== "facebook_group")) throw new RuleToggleError("ตรวจรายการกลุ่มในชุดตั้งค่าก่อนเปิดใช้งาน");

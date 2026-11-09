@@ -20,7 +20,7 @@ const base = {
 
 it("treats extension template keyword rules as immediate bots", () => {
   expect(isKeywordBotRule(base)).toBe(true);
-  expect(isKeywordBotRule({ ...base, requireAi: true })).toBe(false);
+  expect(isKeywordBotRule({ ...base, requireAi: true })).toBe(true);
   expect(isKeywordBotRule({ ...base, intentMode: "buyer" })).toBe(false);
   expect(isKeywordBotRule({ ...base, messageMode: "ai_draft" })).toBe(false);
 });

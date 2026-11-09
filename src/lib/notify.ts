@@ -1,5 +1,6 @@
 import nodemailer from "nodemailer";
 import { prisma } from "./prisma";
+import type { Prisma } from "@prisma/client";
 import type { AppSettings } from "./settings";
 import { buildLeadEmbed, buildSummaryEmbed, sendDiscordContent, sendDiscordEmbed } from "./discord";
 
@@ -23,7 +24,7 @@ const INTENT_LABEL: Record<string, string> = {
   unknown: "ไม่ชัด",
 };
 
-function messageFor(post: LeadNotice) {
+export function messageFor(post: LeadNotice) {
   const category = [post.category?.name, post.subcategory?.name].filter(Boolean).join(" / ") || "อื่นๆ";
   const snippet = post.text.replace(/\s+/g, " ").trim().slice(0, 280);
   return [
@@ -114,12 +115,16 @@ export async function dispatchNotification(
   post: LeadNotice,
   settings: AppSettings,
   title = "ลีดใหม่",
-  options: { external?: boolean; forceExternal?: boolean; discordMode?: "auto" | "embed" | "text"; skipInApp?: boolean; skipChannels?: string[] } = {},
+  options: { external?: boolean; forceExternal?: boolean; discordMode?: "auto" | "embed" | "text"; skipInApp?: boolean; skipChannels?: string[]; dedupeKey?: string; db?: Pick<Prisma.TransactionClient, "notification"> } = {},
 ) {
+  if (options.db && (options.external || options.forceExternal)) throw new Error("External delivery cannot run in a database transaction");
+  const db = options.db ?? prisma;
   const body = messageFor(post);
-  if (!options.skipInApp) await prisma.notification.create({
-    data: { postId: post.id, channel: "in_app", title, body },
-  });
+  if (!options.skipInApp) {
+    const data = { postId: post.id, channel: "in_app", title, body, ...(options.dedupeKey ? { dedupeKey: options.dedupeKey } : {}) };
+    if (options.dedupeKey) await db.notification.createMany({ data: [data], skipDuplicates: true });
+    else await db.notification.create({ data });
+  }
   const channels: Record<string, ChannelResult> = {};
   if (!options.external && !options.forceExternal) return { channels };
   const senders: Array<["line" | "discord" | "email", () => Promise<ChannelResult>]> = [

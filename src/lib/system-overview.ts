@@ -1,12 +1,9 @@
-import { statfs, stat, access } from "node:fs/promises";
+import { statfs, stat } from "node:fs/promises";
 import path from "node:path";
 import { prisma } from "./prisma";
 import { getSettings, type AppSettings } from "./settings";
 import { bangkokStart } from "./format";
 import { APP_VERSION } from "./version";
-import { aiQueueStats } from "./ai/stats";
-import { resolveOllamaBaseUrl } from "./ai/ollama-url";
-import { liveTestProvider } from "./ai/live-test";
 import { EXPECTED_EXTENSION_VERSION } from "./extension-heartbeat";
 import { EXTENSION_SOURCE_TYPES, PRIORITY_LABEL, maxIntervalFor, normalizePriority } from "./scrape-plan";
 import { STOP_REASON_LABEL, readerHealth } from "./scrape-runs";
@@ -14,7 +11,6 @@ import { coverageBySource } from "./coverage-data";
 import type { Coverage } from "./coverage";
 import { parseWatchState } from "./watchdog";
 import { classificationStats } from "./classification-stats";
-import { classifyAvailability } from "./ai/run";
 import {
   ageMs,
   bangkokLabel,
@@ -115,27 +111,8 @@ function parseJson<T>(value: string | undefined, fallback: T): T {
   }
 }
 
-async function ollamaStatus(settings: AppSettings) {
-  try {
-    const base = await resolveOllamaBaseUrl(settings.ollamaBaseUrl);
-    const started = performance.now();
-    const tags = await fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(2000) });
-    const latencyMs = Math.round(performance.now() - started);
-    if (!tags.ok) return { reachable: false, latencyMs, installed: [] as string[], loaded: [] as string[], port: new URL(base).port, error: `HTTP ${tags.status}` };
-    const installed = ((await tags.json()).models ?? []).map((model: { name?: string }) => String(model.name ?? "")).filter(Boolean) as string[];
-    const ps = await fetch(`${base}/api/ps`, { signal: AbortSignal.timeout(2000) }).catch(() => null);
-    const loaded = ps?.ok ? (((await ps.json()).models ?? []) as { name?: string }[]).map((model) => String(model.name ?? "")).filter(Boolean) : [];
-    return { reachable: true, latencyMs, installed, loaded, port: new URL(base).port, error: "" };
-  } catch (error) {
-    return { reachable: false, latencyMs: null, installed: [] as string[], loaded: [] as string[], port: "", error: error instanceof Error ? error.message : "เชื่อมต่อไม่ได้" };
-  }
-}
-
-function hasModel(list: string[], model: string) {
-  return list.some((item) => item === model || item === `${model}:latest` || item.startsWith(`${model}:`) || (model.includes(":") && item === model));
-}
-
 export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
+  void options;
   const now = Date.now();
   const settings = await getSettings();
   const secrets = secretsOf(settings);
@@ -191,7 +168,7 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
     "watchdog_checked_at",
     "worker_leader",
   ];
-  const [map, accounts, installs, facebookSources, postsToday, leadsToday, lastFbPost, fbErrors24h, aiQueue, failed24h, doneJobs, ollama, groq, gemini, aiAvailability] =
+  const [map, accounts, installs, facebookSources, postsToday, leadsToday, lastFbPost, fbErrors24h] =
     await Promise.all([
       readSettingsMap(keys),
       prisma.fbAccount.findMany({ orderBy: { lastSeenAt: "desc" } }),
@@ -206,13 +183,6 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
         take: 5,
         include: { source: { select: { name: true } } },
       }),
-      aiQueueStats(),
-      prisma.aiJob.count({ where: { status: "failed", updatedAt: { gte: since24h } } }),
-      prisma.aiJob.findMany({ where: { status: "done", updatedAt: { gte: since24h } }, select: { post: { select: { aiProvider: true } } }, take: 3000 }),
-      ollamaStatus(settings),
-      liveTestProvider("groq", settings, options.fresh),
-      liveTestProvider("gemini", settings, options.fresh),
-      classifyAvailability(settings),
     ]);
 
   // ---------- Facebook accounts ----------
@@ -455,86 +425,6 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
       })
     : [{ key: "scrape-none", label: "แหล่งที่ส่วนขยายอ่าน", level: "off" as Level, value: "ยังไม่ได้เพิ่มกลุ่มหรือ Marketplace" }];
 
-  // ---------- AI ----------
-  const usage: Record<string, number> = {};
-  for (const job of doneJobs) {
-    const name = job.post?.aiProvider || "rules";
-    usage[name] = (usage[name] ?? 0) + 1;
-  }
-  const usageText = Object.entries(usage)
-    .sort((a, b) => b[1] - a[1])
-    .map(([name, count]) => `${name} ${count}`)
-    .join(" · ");
-  const topProvider = Object.entries(usage).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
-  const pending = Number(aiQueue.counts.pending ?? 0) + Number(aiQueue.counts.processing ?? 0);
-  const chatModelReady = hasModel(ollama.installed, settings.ollamaModel);
-  const embedReady = hasModel(ollama.installed, settings.embedModel);
-  const cloudCheck = (name: string, label: string, test: Awaited<ReturnType<typeof liveTestProvider>>): Check => ({
-    key: `ai-${name}`,
-    label: `${label} — ผลทดสอบการเชื่อมต่อ`,
-    level: !test.configured ? "off" : !aiAvailability.names.some(provider => provider === name || provider.startsWith(`${name}:`)) ? "warn" : test.ok ? (test.latencyMs != null && test.latencyMs > 8000 ? "warn" : "ok") : "bad",
-    value: !test.configured ? "ยังไม่ได้ใส่คีย์" : test.ok ? `ทดสอบผ่าน · ${test.latencyMs} ms${!aiAvailability.names.some(provider => provider === name || provider.startsWith(`${name}:`)) ? " · ยังไม่พร้อมจัดหมวดตามการตั้งค่า/โควตา" : ""}` : test.message,
-    detail: `คีย์: ${test.configured ? "ตั้งค่าแล้ว (ซ่อนไว้)" : "ไม่มี"} · โมเดล ${test.model}${test.testedAt ? ` · ทดสอบ ${thaiAgo(ageMs(test.testedAt, now))}` : ""}`,
-    hint: test.ok ? undefined : test.hint,
-  });
-  const aiChecks: Check[] = [
-    {
-      key: "ai-ready-now",
-      label: "AI พร้อมจัดหมวดตอนนี้",
-      level: aiAvailability.rulesOnly ? "off" : aiAvailability.ready ? "ok" : "warn",
-      value: aiAvailability.rulesOnly ? "เจ้าของเลือกใช้กฎ" : aiAvailability.ready ? `พร้อม ${aiAvailability.ready} ผู้ให้บริการ` : "รอผู้ให้บริการพร้อม — คิวไม่เพิ่มจำนวนครั้งล้มเหลวขณะพัก",
-      detail: aiAvailability.ready ? aiAvailability.names.join(" · ") : aiAvailability.waiting.map(provider => `${provider.name}: ${provider.reason}`).join(" · ") || "ตรวจการตั้งค่าและการเชื่อมต่อ AI",
-      hint: !aiAvailability.ready && aiAvailability.nextReadyAt ? `ตรวจพร้อมอีกครั้ง ${bangkokLabel(new Date(aiAvailability.nextReadyAt))}` : undefined,
-    },
-    {
-      key: "ai-ollama",
-      label: "Ollama (AI ในเครื่อง)",
-      level: !ollama.reachable ? (settings.aiProvider === "ollama" ? "bad" : "warn") : chatModelReady ? "ok" : "warn",
-      value: ollama.reachable ? `ทำงานอยู่ · ${ollama.latencyMs} ms` : "ติดต่อไม่ได้",
-      detail: ollama.reachable
-        ? `โหลดอยู่ในหน่วยความจำ: ${ollama.loaded.length ? ollama.loaded.join(", ") : "ไม่มี (จะโหลดเมื่อใช้งาน)"} · ติดตั้งแล้ว: ${ollama.installed.join(", ") || "-"}`
-        : clean(ollama.error),
-      hint: !ollama.reachable
-        ? "เปิดโปรแกรม Ollama ในเครื่อง (ไอคอนลามะที่ถาด) แล้วรอสักครู่"
-        : chatModelReady
-          ? undefined
-          : `ยังไม่มีโมเดล ${settings.ollamaModel} — สั่ง ollama pull ${settings.ollamaModel}`,
-    },
-    {
-      key: "ai-embed",
-      label: "โมเดลฝังความหมาย (embedding)",
-      level: !ollama.reachable ? "warn" : embedReady ? (settings.embedLastAt && !settings.embedLastOk ? "warn" : "ok") : "warn",
-      value: `${settings.embedModel} ${embedReady ? "พร้อม" : ollama.reachable ? "ยังไม่ได้ติดตั้ง" : "ตรวจไม่ได้"}`,
-      detail: settings.embedLastMessage ? clean(settings.embedLastMessage) : undefined,
-      hint: embedReady || !ollama.reachable ? undefined : `สั่ง ollama pull ${settings.embedModel}`,
-    },
-    cloudCheck("groq", "Groq (AI บนคลาวด์)", groq),
-    cloudCheck("gemini", "Gemini (AI บนคลาวด์)", gemini),
-    {
-      key: "ai-in-use",
-      label: "AI ที่ใช้งานจริง",
-      level: topProvider && topProvider !== "rules" ? "ok" : doneJobs.length ? "warn" : "off",
-      value: topProvider ? `${topProvider} (มากที่สุดใน 24 ชม.)` : "ยังไม่มีงานใน 24 ชม.",
-      detail: `ตั้งค่าไว้: ${settings.aiProvider === "auto" ? "อัตโนมัติ (Ollama → Gemini → Groq → กฎ)" : settings.aiProvider}${usageText ? ` · ${usageText}` : ""}`,
-      hint: topProvider === "rules" ? "AI ทุกตัวใช้ไม่ได้ ระบบเลยใช้แค่กฎคีย์เวิร์ด — ดูการ์ด Ollama / Groq / Gemini ด้านบน" : undefined,
-    },
-    {
-      key: "ai-queue",
-      label: "คิวงาน AI",
-      level: pending > 200 ? "bad" : pending > 30 ? "warn" : "ok",
-      value: `รอ ${pending} งาน`,
-      detail: aiQueue.oldestPendingMs ? `งานเก่าสุดรอมา ${thaiDuration(aiQueue.oldestPendingMs)}` : "ไม่มีงานค้าง",
-      hint: pending > 30 ? "คิวยาว: ตรวจว่า worker ทำงานอยู่และ AI อย่างน้อยหนึ่งตัวใช้งานได้" : undefined,
-    },
-    {
-      key: "ai-failed",
-      label: "งาน AI ล้มเหลว 24 ชม.",
-      level: failed24h > 20 ? "bad" : failed24h > 0 ? "warn" : "ok",
-      value: `${failed24h} งาน`,
-      detail: aiQueue.errors.length ? clean(aiQueue.errors[0].lastError) : undefined,
-    },
-  ];
-
   // ---------- Others ----------
   const workerTick = map.worker_last_tick ?? null;
   const wLevel = workerLevel(workerTick, now);
@@ -563,12 +453,22 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
   const backupSize = backupFile ? await stat(backupFile).then((info) => info.size).catch(() => null) : null;
   const backupAge = ageMs(settings.lastBackupAt || null, now);
   const backupErrorAge = ageMs(map.backup_last_error_at ?? null, now);
-  const ocrFiles = await Promise.all(
-    ["tha.traineddata", "eng.traineddata"].map((file) => access(path.join(process.cwd(), file)).then(() => true).catch(() => false)),
-  );
-  const ocrPosts24h = await prisma.post.count({ where: { createdAt: { gte: since24h }, ocrText: { not: "" } } });
   const workerStarted = map.worker_started_at ?? null;
+  const processingWhere = { processingState: { in: ["pending_new", "pending_edit"] } };
+  const [processingPending, processingFailed, oldestProcessing] = await Promise.all([
+    prisma.post.count({ where: processingWhere }),
+    prisma.post.count({ where: { ...processingWhere, processingError: { not: "" } } }),
+    prisma.post.findFirst({ where: processingWhere, orderBy: { processingQueuedAt: "asc" }, select: { processingQueuedAt: true } }),
+  ]);
+  const processingAge = oldestProcessing ? Math.max(0, now - oldestProcessing.processingQueuedAt.getTime()) : 0;
   const otherChecks: Check[] = [
+    {
+      key: "post-processing", label: "คิวประมวลผลโพสต์ด้วยกฎ",
+      level: processingAge > 300_000 ? "bad" : processingFailed || processingAge > 60_000 ? "warn" : "ok",
+      value: `รอ ${processingPending} โพสต์ · รอลองใหม่ ${processingFailed}`,
+      detail: processingPending ? `เก่าสุด ${thaiDuration(processingAge)} · กู้ต่อจากฐานข้อมูลได้เมื่อ Worker เริ่มใหม่` : "ประมวลผลครบแล้ว",
+      hint: processingAge > 60_000 ? "ตรวจ Worker และฐานข้อมูล โพสต์ที่ประมวลผลไม่ครบจะยังไม่ถูกเลือกไปคอมเมนต์" : undefined,
+    },
     {
       key: "db",
       label: "ฐานข้อมูล",
@@ -594,13 +494,6 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
     },
     channel("discord", "Discord", Boolean(settings.discordWebhook)),
     channel("line", "LINE", Boolean(settings.lineToken && settings.lineUserId)),
-    {
-      key: "ocr",
-      label: "OCR อ่านตัวหนังสือในรูป",
-      level: !settings.ocrEnabled ? "off" : "ok",
-      value: settings.ocrEnabled ? `เปิดอยู่ · อ่านได้ ${ocrPosts24h} โพสต์ใน 24 ชม.` : "ปิดอยู่",
-      detail: `ไฟล์ภาษา: ไทย ${ocrFiles[0] ? "มี" : "จะดาวน์โหลดเมื่อใช้ครั้งแรก"} · อังกฤษ ${ocrFiles[1] ? "มี" : "จะดาวน์โหลดเมื่อใช้ครั้งแรก"}`,
-    },
     {
       key: "backup",
       label: "สำรองข้อมูลล่าสุด",
@@ -639,7 +532,7 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
 
   // ---------- One status board (watchdog runs on the leader worker every 5 minutes) ----------
   const watch = parseWatchState(map.watchdog_state);
-  const boardChecks: Check[] = Object.entries(watch).map(([key, item]) => ({
+  const boardChecks: Check[] = Object.entries(watch).filter(([key]) => key !== "ai").map(([key, item]) => ({
     key: `watch_${key}`,
     label: item.label,
     level: item.level,
@@ -647,11 +540,7 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
     detail: item.level === "ok" ? `ตรวจล่าสุด ${thaiAgo(ageMs(map.watchdog_checked_at, now))}` : `เป็นแบบนี้มา ${thaiAgo(ageMs(item.since, now))} · ปกติล่าสุด ${item.lastOkAt ? thaiAgo(ageMs(item.lastOkAt, now)) : "ไม่เคย"}`,
     hint: item.level === "ok" ? undefined : item.hint || undefined,
   }));
-  const boardAi = boardChecks.find(check => check.key === "watch_ai");
-  if (boardAi) {
-    const currentAi = aiChecks.find(check => check.key === "ai-ready-now")!;
-    Object.assign(boardAi, { level: currentAi.level, value: currentAi.value, detail: currentAi.detail, hint: currentAi.hint });
-  }
+  const botChecks: Check[] = [{ key: "bot-mode", label: "บอทตามกฎ", level: "ok", value: "คำสำคัญ · กฎจัดประเภท · ข้อความสำเร็จรูป" }];
   const checkedAge = ageMs(map.watchdog_checked_at, now);
   if (!boardChecks.length || (checkedAge ?? Infinity) > 20 * 60_000) {
     boardChecks.unshift({
@@ -672,30 +561,31 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
   const corrected = cls.reduce((sum, row) => sum + row.corrected, 0);
   const reviewed = cls.reduce((sum, row) => sum + row.reviewed, 0);
   const worst = withReview.length ? Math.min(...withReview.map((row) => row.accuracy ?? 1)) : 1;
-  aiChecks.push({
-    key: "ai-accuracy",
+  botChecks.push({
+    key: "bot-accuracy",
     label: "ความแม่นยำการจัดหมวดต่อกลุ่ม (30 วัน)",
     level: !reviewed ? "off" : worst < 0.7 ? "warn" : "ok",
     value: reviewed ? `ดูแล้ว ${reviewed} โพสต์ · แก้ “หมวดผิด” ${corrected} · แม่น ${Math.round(((reviewed - corrected) / reviewed) * 100)}%` : "ยังไม่มีโพสต์ที่ตรวจ",
     detail: withReview.slice(0, 8).map((row) => `${short(row.name)} ${Math.round((row.accuracy ?? 0) * 100)}% (${row.corrected}/${row.reviewed})`).join(" · ") || undefined,
-    hint: "กด “หมวดผิด” ที่การ์ดโพสต์เพื่อแก้หมวด/เจตนา ระบบจะนับเป็นค่าจริงและใช้เป็นตัวอย่างให้ AI",
+    hint: "กด “หมวดผิด” ที่การ์ดโพสต์เพื่อแก้หมวด/เจตนา ระบบจะนับเป็นค่าจริงและปรับกฎให้ตรงกับงานจริง",
   });
   const otherWeek = cls.reduce((sum, row) => sum + row.other7d, 0);
-  aiChecks.push({
-    key: "ai-other-weekly",
+  botChecks.push({
+    key: "bot-other-weekly",
     label: "โพสต์หมวด “อื่นๆ” 7 วันล่าสุด",
     level: otherWeek >= 20 ? "warn" : "ok",
     value: `${otherWeek} โพสต์ · จัดด้วยกฎ (30 วัน) ${cls.reduce((sum, row) => sum + row.ruleDecided, 0)}`,
     detail: cls.filter((row) => row.other7d).slice(0, 8).map((row) => `${short(row.name)} ${row.other7d}`).join(" · ") || undefined,
-    hint: otherWeek ? "ระบบส่งโพสต์ “อื่นๆ”/จัดด้วยกฎ ให้ AI จัดใหม่ทีละ 20 โพสต์ทุก 30 นาที เมื่อ AI ว่าง" : undefined,
+    hint: otherWeek ? "ปรับคำจับคู่ในหมวด หรือเลือกหมวดให้โพสต์เพื่อให้ตรงกับงานของคุณ" : undefined,
   });
 
   const sections = [
     section("board", "สถานะรวม", boardChecks),
+    section("bot", "บอทตามกฎ", botChecks),
     section("facebook", "บัญชี Facebook", fbChecks),
     section("extension", "ส่วนขยาย (Extension)", extChecks),
     section("scrape", "รอบอ่านแต่ละแหล่ง", scrapeChecks),
-    section("ai", "AI", aiChecks),
+
     section("system", "ระบบอื่น ๆ", otherChecks),
   ];
   const all = sections.flatMap((item) => item.checks);

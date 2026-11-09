@@ -1,22 +1,7 @@
 import { prisma } from "../prisma";
-import { upsertSettings } from "../settings";
 import { enrichPosts } from "./enrich";
 import { getSettings } from "../settings";
-import { averageVector } from "./vector";
 import { ACTION_DELTA } from "./preference";
-import { embeddingConfig, embeddingTextKey } from "./embedding-key";
-
-const POSITIVE = new Set(["save", "contacted", "closed_won"]);
-
-function readVector(value: string | null | undefined) {
-  if (!value) return null;
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed.map(Number) : null;
-  } catch {
-    return null;
-  }
-}
 
 async function bump(kind: string, key: string, delta: number) {
   if (!key) return;
@@ -47,22 +32,6 @@ export async function recordFeedback(postId: string, action: string) {
   if (post.authorName) await bump("author", post.authorName, delta);
 
   const settings = await getSettings();
-  const config = embeddingConfig(settings);
-  const vector = post.embeddingConfig === config && post.embeddingKey.endsWith(`|${embeddingTextKey(post.text, config)}`) ? readVector(post.embeddingJson) : null;
-  if (vector) {
-    const liked = POSITIVE.has(action);
-    const key = liked ? "pref_liked_centroid" : "pref_disliked_centroid";
-    const countKey = liked ? "pref_liked_count" : "pref_disliked_count";
-    const spaceKey = liked ? "pref_liked_space" : "pref_disliked_space";
-    const space = post.embeddingKey.split("|")[0];
-    const currentRow = await prisma.setting.findUnique({ where: { key } });
-    const countRow = await prisma.setting.findUnique({ where: { key: countKey } });
-    const storedSpace = await prisma.setting.findUnique({ where: { key: spaceKey } });
-    const previous = storedSpace?.value === space ? readVector(currentRow?.value) : null;
-    const next = averageVector(previous, previous ? Number(countRow?.value || 0) : 0, vector);
-    await upsertSettings({ [key]: JSON.stringify(next.vector), [countKey]: String(next.count), [spaceKey]: space });
-  }
-
   const data: { dismissed?: boolean; isSaved?: boolean; pipelineStatus?: string } = {};
   if (action === "dismiss") data.dismissed = true;
   if (action === "save") {

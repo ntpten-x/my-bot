@@ -16,9 +16,9 @@ export function isKeywordBotRule(rule: Pick<MatchRule, "intentMode" | "requireAi
   const intent = rule.intentMode || "keyword";
   const mode = rule.messageMode || "template";
   const delivery = rule.deliveryMode || "extension";
-  return delivery === "extension" && !rule.requireAi && mode === "template" && intent === "keyword";
+  return delivery === "extension" && mode === "template" && intent === "keyword";
 }
-export type MatchPost = { truncated?: boolean; intent?: string; aiProvider?: string | null; text: string; sourceId: string; createdAt: Date; postedAt: Date | null; isAd: boolean; forbiddenHit: boolean; duplicateOfId: string | null; dismissed: boolean };
+export type MatchPost = { processingState?: string; truncated?: boolean; intent?: string; aiProvider?: string | null; text: string; sourceId: string; createdAt: Date; postedAt: Date | null; isAd: boolean; forbiddenHit: boolean; duplicateOfId: string | null; dismissed: boolean };
 export function jsonList<T>(value: string, fallback: T[] = []): T[] {
   try { const out = JSON.parse(value); return Array.isArray(out) ? out : fallback; } catch { return fallback; }
 }
@@ -56,13 +56,14 @@ export function explainCommentRule(rule: MatchRule, post: MatchPost, now = new D
   const checks = [
     { code: "enabled", label: "กฎเปิดใช้งาน", passed: rule.enabled },
     { code: "not_paused", label: "กฎไม่ถูกพัก", passed: !rule.pausedReason },
+    { code: "post_processing", label: "ประมวลผลกฎของโพสต์ครบแล้ว", passed: !post.processingState || post.processingState === "done" },
     { code: "full_text", label: "อ่านข้อความฉบับเต็มแล้ว", passed: fullTextPass },
     { code: "not_ad", label: "ไม่ใช่โฆษณา", passed: !post.isAd },
     { code: "not_forbidden", label: "ไม่พบคำต้องห้าม", passed: !post.forbiddenHit },
     { code: "not_duplicate", label: "ไม่ใช่โพสต์ซ้ำ", passed: !post.duplicateOfId },
     { code: "not_dismissed", label: "ไม่ได้ข้ามโพสต์", passed: !post.dismissed },
+    { code: "open_intent", label: "ยังไม่ปิดการหา/ขาย และไม่มีข้อความปฏิเสธ", passed: !intent.closed },
     ...(smart ? [
-      { code: "open_intent", label: "ยังไม่ปิดการหา/ขาย และไม่มีข้อความปฏิเสธ", passed: !intent.closed },
       { code: "intent", label: rule.intentMode === "buyer" ? "คนกำลังหาซื้อหรือขอคำแนะนำ" : "คนเสนอขายสินค้า/บริการ", passed: intent.value === rule.intentMode },
     ] : []),
     { code: "source", label: "แหล่งข้อมูลอยู่ใน Allowlist", passed: jsonList<string>(rule.sourceIdsJson).includes(post.sourceId) },

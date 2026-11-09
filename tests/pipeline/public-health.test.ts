@@ -15,20 +15,20 @@ function deps(over: Partial<HealthDeps> = {}): HealthDeps {
 }
 
 describe("public health", () => {
-  it("reports ok with db latency, ai count and extension age", async () => {
+  it("reports ok with db latency, local bot and extension age", async () => {
     const r = await buildHealth(deps());
     expect(r.status).toBe("ok");
     expect(httpStatusFor(r)).toBe(200);
     expect(r.version).toBe("1.2.3");
     expect(r.uptimeSec).toBe(90);
     expect(r.checks.db).toEqual({ ok: true, latencyMs: 5 });
-    expect(r.checks.ai).toEqual({ ok: true, availableProviders: 2 });
+    expect(r.checks.bot).toEqual({ ok: true, mode: "rules" });
     expect(r.checks.extension.lastSeenAgoSec).toBe(30);
   });
 
-  it("is degraded (200) when no AI provider is available", async () => {
+  it("stays healthy without model providers", async () => {
     const r = await buildHealth(deps({ availableAiProviders: async () => 0, extensionLastSeen: async () => null }));
-    expect(r.status).toBe("degraded");
+    expect(r.status).toBe("ok");
     expect(httpStatusFor(r)).toBe(200);
     expect(r.checks.extension.lastSeenAgoSec).toBeNull();
   });
@@ -65,9 +65,9 @@ describe("public health", () => {
     expect(slow.checks.db.latencyMs).toBeNull();
   });
 
-  it("still answers when the ai/extension lookups throw", async () => {
+  it("does not invoke a retired model probe", async () => {
     const r = await buildHealth(deps({ availableAiProviders: async () => { throw new Error("x"); } }));
-    expect(r.status).toBe("degraded");
+    expect(r.status).toBe("ok");
     expect(r.checks.db.ok).toBe(true);
   });
 

@@ -4,7 +4,6 @@ import { json } from "@/lib/http";
 import { bangkokStart } from "@/lib/format";
 import { postInclude, serializePost } from "@/lib/serialize";
 import { heartbeatIsStale, sourceIsStale } from "@/lib/extension-health";
-import { aiQueueStats } from "@/lib/ai/stats";
 import { EXTENSION_SOURCE_TYPES } from "@/lib/scrape-plan";
 import { memo } from "@/lib/memo";
 
@@ -20,7 +19,7 @@ export async function GET() {
 async function loadStats() {
   const start = bangkokStart(0);
   // One wave: every query starts at once (the pool runs up to 5 at a time).
-  const [postsToday, unread, buyers, pipeline, enabledSources, errorSources, grouped, recent, logs, categories, seen, facebookSources, aiQueue] =
+  const [postsToday, unread, buyers, pipeline, enabledSources, errorSources, grouped, recent, logs, categories, seen, facebookSources] =
     await Promise.all([
       prisma.post.count({ where: { createdAt: { gte: start } } }),
       prisma.post.count({ where: { isRead: false, isAd: false, forbiddenHit: false } }),
@@ -44,7 +43,6 @@ async function loadStats() {
       prisma.category.findMany({ select: { id: true, name: true } }),
       prisma.setting.findUnique({ where: { key: "extension_last_seen" } }),
       prisma.source.findMany({ where: { type: { in: [...EXTENSION_SOURCE_TYPES] } }, orderBy: { name: "asc" } }),
-      aiQueueStats(),
     ]);
   const byCategory = grouped
     .map((row) => ({
@@ -61,7 +59,6 @@ async function loadStats() {
     aged && (heartbeatIsStale(validSeen) || enabledFacebook.some((source) => sourceIsStale(source)));
   return {
     postsToday,
-    aiQueue,
     unread,
     buyers,
     pipeline,

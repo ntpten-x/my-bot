@@ -3,7 +3,6 @@ import { claimOnce } from "./lease";
 import { dispatchNotification } from "./notify";
 import { getSettings, upsertSettings, type AppSettings } from "./settings";
 import { EXTENSION_SOURCE_TYPES } from "./scrape-plan";
-import { classifyAvailability } from "./ai/run";
 import { EXPECTED_EXTENSION_VERSION } from "./extension-heartbeat";
 
 export type WatchLevel = "ok" | "warn" | "bad" | "off";
@@ -102,11 +101,7 @@ export function assessWatch(facts: WatchFacts, t: WatchThresholds): WatchConditi
     add("extension", "ส่วนขยาย Chrome", "off", "ไม่มีกลุ่ม Facebook ที่เปิดใช้งาน");
   }
 
-  if (facts.aiMode === "rules") add("ai", "AI จัดหมวด", "off", "ใช้กฎอย่างเดียว (ไม่ใช้ AI)");
-  else if (facts.aiProvidersEnabled === 0) add("ai", "AI จัดหมวด", "bad", "ไม่มีผู้ให้บริการ AI ที่เปิดใช้งาน", "เพิ่มโมเดลและคีย์ในหน้า ตั้งค่า → ผู้ให้บริการ AI");
-  else if (facts.aiProvidersReady === 0) add("ai", "AI จัดหมวด", "bad", "ผู้ให้บริการ AI ทั้งหมดกำลังพัก (โควตาเต็ม/ผิดพลาด)", "รอให้โควตารีเซ็ต หรือเพิ่มคีย์/ผู้ให้บริการสำรอง งานจะรอคิวไว้ไม่หาย");
-  else if (facts.oldestPendingAiJobAt && facts.now - facts.oldestPendingAiJobAt > HOUR) add("ai", "AI จัดหมวด", "warn", `มีงาน AI ค้างคิวเกิน ${Math.round((facts.now - facts.oldestPendingAiJobAt) / HOUR)} ชั่วโมง`, "AI อาจช้าหรือโดนจำกัด เพิ่มผู้ให้บริการสำรองจะช่วยได้");
-  else add("ai", "AI จัดหมวด", "ok", `พร้อม ${facts.aiProvidersReady}/${facts.aiProvidersEnabled} ผู้ให้บริการ`);
+  add("bot", "บอทตามกฎ", "ok", "จัดประเภทด้วยกฎ ไม่ต้องรอโมเดลหรือโควตาผู้ให้บริการ");
 
   return out;
 }
@@ -147,14 +142,12 @@ async function collectFacts(now: number, settings: AppSettings): Promise<WatchFa
       coalesce(sum(CASE WHEN length(trim(p."text")) < 5 THEN 1 ELSE 0 END), 0)::int AS notext
     FROM "Post" p JOIN "Source" s ON s."id" = p."sourceId"
     WHERE s."type"::text = ANY(${types}::text[]) AND p."createdAt" >= ${from} AND p."createdAt" < ${to}`;
-  const [enabledSources, heartbeat, lastPost, recent, base, providers, pending, tick, collectionRow, overdueSources] = await Promise.all([
+  const [enabledSources, heartbeat, lastPost, recent, base, tick, collectionRow, overdueSources] = await Promise.all([
     prisma.source.count({ where: { type: { in: [...EXTENSION_SOURCE_TYPES] }, enabled: true } }),
     prisma.extensionHeartbeat.findFirst({ where: { version: EXPECTED_EXTENSION_VERSION }, orderBy: { lastSeenAt: "desc" } }),
     prisma.post.findFirst({ where: { source: { type: { in: [...EXTENSION_SOURCE_TYPES] } } }, orderBy: { createdAt: "desc" }, select: { createdAt: true } }),
     parseQuery(recentSince, new Date(now + 60_000)),
     parseQuery(baseSince, recentSince),
-    classifyAvailability(settings),
-    prisma.aiJob.findFirst({ where: { status: "pending" }, orderBy: { createdAt: "asc" }, select: { createdAt: true } }),
     prisma.setting.findUnique({ where: { key: "worker_last_tick" } }),
     prisma.setting.findUnique({ where: { key: "extension_collection_status" } }),
     prisma.source.count({ where: {
@@ -196,9 +189,9 @@ async function collectFacts(now: number, settings: AppSettings): Promise<WatchFa
     parseRecent: pick(recent),
     parseBaseline: pick(base),
     aiMode: settings.aiProvider,
-    aiProvidersEnabled: providers.ready + providers.waiting.length,
-    aiProvidersReady: providers.ready,
-    oldestPendingAiJobAt: pending?.createdAt.getTime() ?? null,
+    aiProvidersEnabled: 0,
+    aiProvidersReady: 0,
+    oldestPendingAiJobAt: null,
     workerLastTickAt: Number.isFinite(tickAt) ? tickAt : null,
     dbTransientErrors: Math.max(0, transientDelta),
     dbError: null,

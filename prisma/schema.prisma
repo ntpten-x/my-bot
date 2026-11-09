@@ -154,6 +154,11 @@ model Post {
   labelFixes       LabelCorrection[]
   autoCommentJobs  AutoCommentJob[]
   commentEvaluations AutoCommentEvaluation[]
+  processingState   String    @default("done")
+  processingToken   String?
+  processingRetryAt DateTime  @default(now())
+  processingQueuedAt DateTime @default(now())
+  processingError   String    @default("")
 
   @@unique([sourceId, externalUrl])
   @@index([createdAt])
@@ -170,6 +175,7 @@ model Post {
   @@index([sourceId, truncated])
   @@index([productId, createdAt])
   @@index([productBy])
+  @@index([processingState, processingRetryAt])
 }
 
 model AiJob {
@@ -251,6 +257,7 @@ model Notification {
   body      String
   read      Boolean  @default(false)
   createdAt DateTime @default(now())
+  dedupeKey String?  @unique
 
   @@index([read, createdAt])
 }

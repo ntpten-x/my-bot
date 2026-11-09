@@ -4,7 +4,7 @@ import { upsertSettings } from "./settings";
 import { touchExtension } from "./extension-status";
 
 // Version this MY-BOT build expects from extension/manifest.json (tests keep the two in sync).
-export const EXPECTED_EXTENSION_VERSION = "1.11.25";
+export const EXPECTED_EXTENSION_VERSION = "1.11.26";
 /** Oldest patch still allowed for scrape/read work within the current minor line. */
 export const MINIMUM_EXTENSION_VERSION = "1.11.19";
 

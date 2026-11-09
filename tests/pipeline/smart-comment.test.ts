@@ -8,6 +8,10 @@ const rule: MatchRule = { enabled: true, pausedReason: "", sourceIdsJson: '["sho
 const post = (text: string) => ({ text, sourceId: "shoes", createdAt: now, postedAt: null, isAd: false, forbiddenHit: false, duplicateOfId: null, dismissed: false });
 
 describe("Thai smart comment policy", () => {
+  it.each(["หารองเท้า ได้ของแล้ว", "หาช่าง ได้ช่างแล้ว", "หาร้าน ได้ร้านแล้ว", "ขายรองเท้า ปิดการขาย", "ขายรองเท้า ปล่อยแล้ว"])("does not comment on a closed keyword match: %s", text => {
+    const keywords = text.startsWith("หาช่าง") ? "ช่าง" : text.startsWith("หาร้าน") ? "ร้าน" : "รองเท้า";
+    expect(explainCommentRule({ ...rule, keywords, intentMode: "keyword" }, post(text), now).matched).toBe(false);
+  });
   it.each(["หารองเท้าวิ่ง งบ 1000", "อยากได้รองเท้าวิ่ง", "หารองเท้า ไม่ขายครับ", "อยากได้รองเท้า แต่ไม่ซื้อของปลอม", "หารองเท้าครับ ไม่ต้องการสีแดง", "อยากได้รองเท้าแล้ว", "ช่วยแนะนำรองเท้าหน่อย", "แนะนำรองเท้าวิ่งทีครับ", "หาซื้อรองเท้า ใครขายบ้าง", "หาร้องเท้าวิ่งครับ"])("accepts buying intent: %s", text => {
     expect(explainCommentRule(rule, post(text), now).matched).toBe(true);
   });
@@ -17,17 +21,18 @@ describe("Thai smart comment policy", () => {
   it("requires explicit aliases, not arbitrary fuzzy matching", () => {
     expect(explainCommentRule({ ...rule, keywords: "รองเท้า" }, post("หาร้องเท้าวิ่ง"), now).matched).toBe(false);
   });
-  it("uses completed classification and retains deterministic safety gates", () => {
+  it("ignores legacy AI labels while respecting explicit owner corrections", () => {
     const classified = { ...post("รองเท้ารุ่นนี้ดีไหม"), intent: "buyer", aiProvider: "gemini:mock" };
-    expect(explainCommentRule(rule, classified, now).matched).toBe(true);
+    expect(explainCommentRule(rule, classified, now).matched).toBe(false);
+    expect(explainCommentRule(rule, { ...classified, aiProvider: "owner" }, now).matched).toBe(true);
     expect(explainCommentRule(rule, { ...classified, text: "ไม่หารองเท้าแล้ว" }, now).matched).toBe(false);
     expect(explainCommentRule(rule, { ...classified, forbiddenHit: true }, now).matched).toBe(false);
     expect(explainCommentRule(rule, { ...classified, isAd: true }, now).matched).toBe(false);
     expect(explainCommentRule(rule, { ...classified, aiProvider: "rules", text: "รองเท้าคู่นี้" }, now).matched).toBe(false);
   });
-  it("distinguishes seller mode while preserving keyword-only legacy behavior", () => {
+  it("distinguishes seller mode and refuses closed posts in keyword mode too", () => {
     expect(explainCommentRule({ ...rule, intentMode: "seller" }, post("ขายรองเท้าวิ่ง"), now).matched).toBe(true);
-    expect(explainCommentRule({ ...rule, intentMode: "keyword" }, post("ไม่ขายรองเท้าแล้ว"), now).matched).toBe(true);
+    expect(explainCommentRule({ ...rule, intentMode: "keyword" }, post("ไม่ขายรองเท้าแล้ว"), now).matched).toBe(false);
     expect(explainCommentRule({ ...rule, intentMode: undefined }, post("รองเท้า"), now).matched).toBe(true);
   });
   it("keeps old API defaults and validates policy/priority", () => {
@@ -39,7 +44,7 @@ describe("Thai smart comment policy", () => {
 });
 
 it("renders stored reasons as owner-facing Thai and tolerates malformed metadata", () => {
-  expect(evaluationReasons('[{"ruleId":"r","codes":["intent","waiting_ai"]}]', [{ id: "r", name: "รองเท้า" }])).toEqual(["รองเท้า: เจตนาไม่ตรงกฎ · รอผล AI"]);
+  expect(evaluationReasons('[{"ruleId":"r","codes":["intent","waiting_ai"]}]', [{ id: "r", name: "รองเท้า" }])).toEqual(["รองเท้า: เจตนาไม่ตรงกฎ · รอประเมินกฎใหม่"]);
   expect(evaluationReasons("null", [])).toEqual([]);
   expect(evaluationReasons("invalid", [])).toEqual(["อ่านรายละเอียดไม่สำเร็จ"]);
 });

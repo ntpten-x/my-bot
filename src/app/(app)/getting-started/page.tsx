@@ -18,7 +18,7 @@ export default function GettingStarted() {
   useEffect(() => { const controller = new AbortController(); void load(controller.signal); return () => controller.abort(); }, []);
   return <div className="space-y-5">
     <h1 className="text-2xl font-semibold">เริ่มใช้งานและตรวจความพร้อม</h1>
-    <p className="text-sm text-muted">เว็บและ AI ทำงานบนเซิร์ฟเวอร์ ส่วน Chrome บนเครื่องคุณอ่านกลุ่มและส่งคอมเมนต์ผ่านหน้าจอ ต้องเปิดเครื่องและล็อกอิน Facebook ไว้ สถานะพร้อมเป็นผลตรวจการตั้งค่า ยังไม่รับรองสิทธิ์กลุ่มหรือผลการส่ง</p>
+    <p className="text-sm text-muted">เว็บและบอทตามกฎทำงานบนเซิร์ฟเวอร์ ส่วน Chrome บนเครื่องคุณอ่านกลุ่มและส่งคอมเมนต์ผ่านหน้าจอ ต้องเปิดเครื่องและล็อกอิน Facebook ไว้ สถานะพร้อมเป็นผลตรวจการตั้งค่า ยังไม่รับรองสิทธิ์กลุ่มหรือผลการส่ง</p>
     <Button variant="outline" disabled={busy} onClick={() => void load()}>{busy ? "กำลังตรวจ..." : "ตรวจอีกครั้ง"}</Button>
     {error ? <p role="alert">{error}</p> : null}
     <ol className="space-y-3">{data?.steps.map((step, index) => <li key={step.key}><Card><div className="flex justify-between gap-3"><h2 className="font-medium">{index + 1}. {step.title}</h2><span>{step.ready ? "พร้อมตามการตั้งค่า" : "ต้องตรวจเพิ่ม"}</span></div><p className="my-2 text-sm text-muted">{step.detail}</p><Link href={step.href} className="text-sm underline">เปิดหน้าตั้งค่า</Link></Card></li>)}</ol>

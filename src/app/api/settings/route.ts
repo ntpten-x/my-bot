@@ -2,8 +2,6 @@ import { z } from "zod";
 import { authed } from "@/lib/guard";
 import { json } from "@/lib/http";
 import { getSettings, publicSettings, upsertSettings } from "@/lib/settings";
-import { clearProviderHealthCache } from "@/lib/ai/health";
-import { clearOllamaUrlCache } from "@/lib/ai/ollama-url";
 import { commentMutationGuard } from "@/lib/auto-comment/api-guard";
 
 export const dynamic = "force-dynamic";
@@ -15,15 +13,6 @@ export async function GET() {
 }
 
 const putSchema = z.object({
-  aiProvider: z.enum(["auto", "ollama", "gemini", "groq", "rules"]).optional(),
-  ollamaBaseUrl: z.string().optional(),
-  ollamaModel: z.string().optional(),
-  geminiModel: z.string().optional(),
-  groqModel: z.string().optional(),
-  updateGeminiKey: z.boolean().optional(),
-  geminiApiKey: z.string().optional(),
-  updateGroqKey: z.boolean().optional(),
-  groqApiKey: z.string().optional(),
   fetchIntervalMinutes: z.number().int().min(5).max(180).optional(),
   jitterMinutes: z.number().int().min(0).max(30).optional(),
   maxGroupsPerCycle: z.number().int().min(1).max(20).optional(),
@@ -54,10 +43,6 @@ const putSchema = z.object({
   quietWindow: z.string().max(200).regex(/^(\s*\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}\s*)?(,\s*\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}\s*)*$/, "รูปแบบเวลาเช่น 19:00-23:00").optional(),
   quietPauseWhenLocked: z.boolean().optional(),
   summaryTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
-  embedModel: z.string().optional(),
-  geminiEmbedModel: z.string().optional(),
-  ocrEnabled: z.boolean().optional(),
-  visionOcr: z.boolean().optional(),
 });
 
 export async function PUT(request: Request) {
@@ -71,13 +56,6 @@ export async function PUT(request: Request) {
     if (value === undefined) return;
     entries[key] = String(value);
   };
-  set("ai_provider", body.aiProvider);
-  set("ollama_base_url", body.ollamaBaseUrl?.trim());
-  set("ollama_model", body.ollamaModel?.trim());
-  set("gemini_model", body.geminiModel?.trim());
-  set("groq_model", body.groqModel?.trim());
-  if (body.updateGeminiKey) entries.gemini_api_key = body.geminiApiKey?.trim() ?? "";
-  if (body.updateGroqKey) entries.groq_api_key = body.groqApiKey?.trim() ?? "";
   set("fetch_interval_minutes", body.fetchIntervalMinutes);
   set("jitter_minutes", body.jitterMinutes);
   set("max_groups_per_cycle", body.maxGroupsPerCycle);
@@ -105,12 +83,6 @@ export async function PUT(request: Request) {
   set("quiet_window", body.quietWindow);
   set("quiet_pause_when_locked", body.quietPauseWhenLocked);
   set("summary_time", body.summaryTime);
-  set("embed_model", body.embedModel?.trim());
-  set("gemini_embed_model", body.geminiEmbedModel?.trim());
-  set("ocr_enabled", body.ocrEnabled);
-  set("vision_ocr", body.visionOcr);
-  clearProviderHealthCache();
-  clearOllamaUrlCache();
   try {
     await upsertSettings(entries);
     return json({ settings: publicSettings(await getSettings()) });

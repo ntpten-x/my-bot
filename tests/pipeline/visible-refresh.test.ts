@@ -1,0 +1,31 @@
+import { afterEach, expect, it, vi } from "vitest";
+import { startVisibleRefresh } from "../../src/lib/visible-refresh";
+afterEach(() => vi.useRealTimers());
+it("refreshes updated scores serially, pauses hidden pages and repairs on visibility", async () => {
+  vi.useFakeTimers();
+  const doc = Object.assign(new EventTarget(), { hidden: false });
+  let finish!: () => void;
+  const refresh = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+  const stop = startVisibleRefresh(refresh, doc);
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(refresh).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(refresh).toHaveBeenCalledTimes(1);
+  finish(); await Promise.resolve();
+  doc.hidden = true;
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(refresh).toHaveBeenCalledTimes(1);
+  doc.hidden = false; doc.dispatchEvent(new Event("visibilitychange"));
+  expect(refresh).toHaveBeenCalledTimes(2);
+  stop(); finish(); await vi.advanceTimersByTimeAsync(30_000);
+  expect(refresh).toHaveBeenCalledTimes(2);
+});
+it("continues after a failed refresh and stops on cleanup", async () => {
+  vi.useFakeTimers();
+  const refresh = vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValue(undefined);
+  const stop = startVisibleRefresh(refresh, Object.assign(new EventTarget(), { hidden: false }));
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(refresh).toHaveBeenCalledTimes(2);
+  stop(); await vi.advanceTimersByTimeAsync(10_000);
+  expect(refresh).toHaveBeenCalledTimes(2);
+});

@@ -1,4 +1,5 @@
 import { prisma } from "./prisma";
+import type { Prisma } from "@prisma/client";
 import { getSettings } from "./settings";
 import { dispatchNotification, shouldNotifyExternal } from "./notify";
 import { workerLog } from "./log";
@@ -7,9 +8,8 @@ import { inServiceArea } from "./service-area";
 export const RULE_PREFIX = "กฎ: ";
 
 // Reuse Notification for a small local outbox. Internal rows are hidden from the UI.
-export async function queueExternalNotification(postId: string, title: string) {
-  const pending = await prisma.notification.findFirst({ where: { postId, channel: "external_pending" }, select: { id: true } });
-  if (!pending) await prisma.notification.create({ data: { postId, title, channel: "external_pending", body: "0", read: true } });
+export async function queueExternalNotification(postId: string, title: string, db: Pick<Prisma.TransactionClient, "notification"> = prisma) {
+  await db.notification.createMany({ data: [{ postId, title, channel: "external_pending", body: "0", read: true, dedupeKey: `external:${postId}:${title}` }], skipDuplicates: true });
 }
 
 export async function processNotificationQueue(limit = 10, assertActive: () => Promise<void> = async () => undefined) {

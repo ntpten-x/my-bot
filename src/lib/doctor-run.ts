@@ -1,8 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { prisma } from "./prisma";
 import { getSettings } from "./settings";
-import { resolveOllamaBaseUrl } from "./ai/ollama-url";
-import { testEmbedding } from "./smart/embed";
 import { evaluateDoctor, type DoctorFacts } from "./doctor";
 import { schemaReadiness } from "./schema-readiness";
 
@@ -58,66 +56,13 @@ export async function collectDoctorReport() {
   }
   const port = Number(process.env.PORT || 8001);
   const state = await portState(port);
-  let ollamaReachable = false;
-  let ollamaModels: string[] = [];
-  if (settings) {
-    try {
-      const base = await resolveOllamaBaseUrl(settings.ollamaBaseUrl);
-      const response = await fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(1500) });
-      if (response.ok) {
-        ollamaReachable = true;
-        const data = await response.json();
-        ollamaModels = (data.models ?? []).map((model: { name?: string }) => model.name ?? "").filter(Boolean);
-      }
-    } catch {
-      ollamaReachable = false;
-    }
-  }
-  let embedOk = false;
-  let embedDetail = "ยังไม่ได้ทดสอบ";
-  if (settings && ollamaReachable) {
-    const embed = await testEmbedding(settings);
-    embedOk = embed.ok;
-    embedDetail = embed.message;
-  } else if (!ollamaReachable) {
-    embedDetail = "ข้ามเพราะต่อ Ollama ไม่ได้";
-  }
-  let groqReachable: boolean | null = null;
-  if (settings?.groqApiKey) {
-    try {
-      const response = await fetch("https://api.groq.com/openai/v1/models", {
-        headers: { authorization: `Bearer ${settings.groqApiKey}` },
-        signal: AbortSignal.timeout(5000),
-      });
-      groqReachable = response.ok;
-    } catch {
-      groqReachable = false;
-    }
-  }
-  let geminiReachable: boolean | null = null;
-  if (settings?.geminiApiKey) {
-    try {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(settings.geminiApiKey)}`,
-        { signal: AbortSignal.timeout(5000) },
-      );
-      geminiReachable = response.ok;
-    } catch {
-      geminiReachable = false;
-    }
-  }
   const facts: DoctorFacts = {
     nodeMajor,
     depsInstalled,
     env,
     dbOk,
     portState: state,
-    ollamaReachable,
-    ollamaModels,
-    embedOk,
-    embedDetail,
-    groqReachable,
-    geminiReachable,
+    ollamaReachable: false, ollamaModels: [], embedOk: false, embedDetail: "", groqReachable: null, geminiReachable: null,
     extensionToken,
   };
   const checks = evaluateDoctor(facts);

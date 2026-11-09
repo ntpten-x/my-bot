@@ -62,13 +62,6 @@ function Test-PortBusy([int]$Port) {
   return [bool]$hit
 }
 
-function Test-Ollama([int]$Port) {
-  try {
-    $response = Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 -Uri ("http://127.0.0.1:" + $Port + "/api/tags")
-    return ($response.StatusCode -ge 200 -and $response.StatusCode -lt 300)
-  } catch { return $false }
-}
-
 Write-Host "MY-BOT setup"
 Write-Host ("Folder: " + $Repo)
 
@@ -98,21 +91,9 @@ if (-not (Test-Path -LiteralPath ".env")) {
   Write-Host "Created .env from .env.example"
 }
 
-$groq = Read-OptionalSecret "GROQ_API_KEY"
-if ($groq) { Set-EnvKey ".env" "GROQ_API_KEY" $groq }
-$gemini = Read-OptionalSecret "GEMINI_API_KEY"
-if ($gemini) { Set-EnvKey ".env" "GEMINI_API_KEY" $gemini }
 $discord = Read-OptionalSecret "DISCORD_WEBHOOK_URL"
 if ($discord) { Set-EnvKey ".env" "DISCORD_WEBHOOK_URL" $discord }
 
-$env:OLLAMA_MAX_LOADED_MODELS = "2"
-$env:OLLAMA_KEEP_ALIVE = "30m"
-setx OLLAMA_MAX_LOADED_MODELS "2" | Out-Null
-setx OLLAMA_KEEP_ALIVE "30m" | Out-Null
-Write-Host "OLLAMA_MAX_LOADED_MODELS=2"
-Write-Host "OLLAMA_KEEP_ALIVE=30m"
-
-# Database: Supabase Postgres. Ask once when .env has no postgres DATABASE_URL yet.
 $dbLine = (Get-Content -LiteralPath ".env" | Where-Object { $_ -match '^DATABASE_URL=' } | Select-Object -First 1)
 if (-not $dbLine -or $dbLine -notmatch 'postgres(ql)?://' -or $dbLine -match 'YOUR-PASSWORD') {
   Write-Host "Supabase: Project > Connect > Connection string > Transaction pooler (port 6543)."
@@ -137,51 +118,6 @@ if ($LASTEXITCODE -ne 0) { throw "prisma migrate deploy failed. Check internet a
 npx tsx prisma/seed.ts
 if ($LASTEXITCODE -ne 0) { throw "database seed failed" }
 
-if (-not (Have-Command "ollama")) {
-  Install-WithWinget "Ollama.Ollama" "Ollama" | Out-Null
-}
-if (-not (Have-Command "ollama")) {
-  Write-Host "Ollama was not installed. Download it from https://ollama.com/download and rerun this script."
-  $ollamaPort = 11434
-} else {
-  $ollamaPort = 0
-  foreach ($candidate in @(11434, 41434)) {
-    if (Test-PortExcluded $candidate) {
-      Write-Host ("Port " + $candidate + " is inside a Windows excluded range.")
-      continue
-    }
-    if ((Test-Ollama $candidate) -or (-not (Test-PortBusy $candidate))) {
-      $ollamaPort = $candidate
-      break
-    }
-    Write-Host ("Port " + $candidate + " is busy and is not Ollama.")
-  }
-  if ($ollamaPort -eq 0) { $ollamaPort = 41434 }
-  $env:OLLAMA_HOST = "127.0.0.1:" + $ollamaPort
-  setx OLLAMA_HOST $env:OLLAMA_HOST | Out-Null
-  Write-Host ("OLLAMA_HOST=" + $env:OLLAMA_HOST)
-  if (-not (Test-Ollama $ollamaPort)) {
-    Write-Host "Starting ollama serve"
-    Start-Process -FilePath "ollama" -ArgumentList "serve" -WindowStyle Hidden
-    Start-Sleep -Seconds 2
-  } else {
-    Write-Host "Ollama is already running. Quit it and start ollama serve again so OLLAMA_MAX_LOADED_MODELS=2 applies."
-  }
-  Write-Host "Chat model:"
-  Write-Host "  1) qwen2.5:7b   default, about 5 GB, OK for RTX 3060 or 32 GB RAM"
-  Write-Host "  2) qwen2.5:3b   smaller, for low VRAM"
-  $choice = Read-Host "Choose 1 or 2"
-  if ($choice -eq "2") { $chatModel = "qwen2.5:3b" } else { $chatModel = "qwen2.5:7b" }
-  & ollama pull $chatModel
-  & ollama pull "bge-m3"
-  Set-EnvKey ".env" "OLLAMA_MODEL" $chatModel
-}
-
-$baseUrl = "http://127.0.0.1:" + $ollamaPort
-Set-EnvKey ".env" "OLLAMA_BASE_URL" $baseUrl
-Set-EnvKey ".env" "PORT" "8001"
-Write-Host ("OLLAMA_BASE_URL=" + $baseUrl)
-
 Write-Host "npm run build"
 npm run build
 if ($LASTEXITCODE -ne 0) { throw "npm run build failed" }
@@ -194,10 +130,8 @@ if ($auto -eq "y" -or $auto -eq "Y") {
   $repoVbs = $Repo.Replace("\", "\\")
   $vbs = @"
 Set shell = CreateObject("Wscript.Shell")
-shell.Run "cmd /c set OLLAMA_HOST=127.0.0.1:$ollamaPort&& set OLLAMA_MAX_LOADED_MODELS=2&& set OLLAMA_KEEP_ALIVE=30m&& ollama serve", 0, False
-WScript.Sleep 1500
 shell.CurrentDirectory = "$repoVbs"
-shell.Run "cmd /c mkdir data 2>nul & set OLLAMA_HOST=127.0.0.1:$ollamaPort&& set OLLAMA_MAX_LOADED_MODELS=2&& set OLLAMA_KEEP_ALIVE=30m&& set OLLAMA_BASE_URL=$baseUrl&& ""$node"" scripts\start-all.mjs --prod >> data\mybot-console.log 2>&1", 0, False
+shell.Run "cmd /c mkdir data 2>nul & ""$node"" scripts\start-all.mjs --prod >> data\mybot-console.log 2>&1", 0, False
 "@
   Set-Content -LiteralPath (Join-Path $startup "MY-BOT.vbs") -Value $vbs -Encoding ASCII
   Write-Host "Wrote Startup\MY-BOT.vbs"

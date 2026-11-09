@@ -1,25 +1,10 @@
 import { prisma } from "../prisma";
 import type { AppSettings } from "../settings";
 import type { AiItem } from "../pipeline/classify-rules";
-import { embedText } from "./embed";
 import { preferenceScore } from "./preference";
 import { ruleSignals, scoreLead } from "./score";
-import { CROSS_TEXT_DUP_MIN, cosine, findNearDuplicate } from "./vector";
+import { CROSS_TEXT_DUP_MIN, findNearDuplicate } from "./vector";
 import { captureText, chooseKeeper, mergePermalinks, readUrlList, PREFIX_DUP_MIN } from "../pipeline/capture";
-import { embeddingConfig, embeddingTextKey, readVector } from "./embedding-key";
-
-async function loadCentroids() {
-  const rows = await prisma.setting.findMany({
-    where: { key: { in: ["pref_liked_centroid", "pref_disliked_centroid", "pref_liked_space", "pref_disliked_space"] } },
-  });
-  const map = Object.fromEntries(rows.map((row) => [row.key, row.value]));
-  return {
-    liked: readVector(map.pref_liked_centroid),
-    disliked: readVector(map.pref_disliked_centroid),
-    likedSpace: map.pref_liked_space,
-    dislikedSpace: map.pref_disliked_space,
-  };
-}
 
 export async function enrichPosts(postIds: string[], classified: AiItem[], settings: AppSettings, options: { embed?: boolean; revisions?: Map<string, number> } = {}) {
   if (!postIds.length) return;
@@ -27,14 +12,12 @@ export async function enrichPosts(postIds: string[], classified: AiItem[], setti
     where: { id: { in: postIds }, ...(options.revisions ? { OR: postIds.map(id => ({ id, textRevision: options.revisions!.get(id) })) } : {}) },
     include: { source: true, category: true },
   });
-  const config = embeddingConfig(settings);
   const weights = await prisma.preferenceWeight.findMany();
-  const centroids = await loadCentroids();
   const since = new Date(Date.now() - 7 * 24 * 3600 * 1000);
   const sourceIds = [...new Set(posts.map((post) => post.sourceId))];
   const recent = await prisma.post.findMany({
     where: { duplicateOfId: null, createdAt: { gte: since }, id: { notIn: postIds }, sourceId: { in: sourceIds } },
-    select: { id: true, sourceId: true, normalizedText: true, embeddingJson: true, embeddingKey: true, embeddingConfig: true, createdAt: true },
+    select: { id: true, sourceId: true, normalizedText: true, createdAt: true },
     orderBy: { createdAt: "desc" },
     take: 400,
   });
@@ -42,7 +25,7 @@ export async function enrichPosts(postIds: string[], classified: AiItem[], setti
   const twins = texts.length
     ? await prisma.post.findMany({
         where: { normalizedText: { in: texts }, id: { notIn: postIds } },
-        select: { id: true, sourceId: true, normalizedText: true, embeddingJson: true, embeddingKey: true, embeddingConfig: true, createdAt: true },
+        select: { id: true, sourceId: true, normalizedText: true, createdAt: true },
         orderBy: [{ createdAt: "asc" }, { id: "asc" }],
         take: 200,
       })
@@ -53,26 +36,15 @@ export async function enrichPosts(postIds: string[], classified: AiItem[], setti
     id: row.id,
     sourceId: row.sourceId,
     normalizedText: row.normalizedText,
-    vector: row.embeddingConfig === config ? readVector(row.embeddingJson) : null,
-    space: row.embeddingKey.split("|")[0],
+    vector: null as number[] | null,
+    space: "",
     createdAt: row.createdAt.getTime(),
   }));
 
   for (const post of posts) {
     const item = classified.find((row) => row.id === post.id);
-    const textKey = embeddingTextKey(post.text, config);
-    const valid = post.embeddingConfig === config && post.embeddingKey.endsWith(`|${textKey}`);
-    let vector = valid ? readVector(post.embeddingJson) : null;
-    let space = valid ? post.embeddingKey.split("|")[0] : "";
-    let embeddingUpdate = {};
-    if (!vector && options.embed !== false && process.env.MYBOT_PROCESS === "worker") {
-      const embedded = await embedText(post.text, settings);
-      vector = embedded.vector;
-      space = embedded.space;
-      embeddingUpdate = vector
-        ? { embeddingJson: JSON.stringify(vector), embeddingKey: `${space}|${textKey}`, embeddingConfig: config, embeddingRetryAt: new Date() }
-        : { embeddingRetryAt: new Date(Date.now() + 5 * 60_000) };
-    }
+    const vector = null;
+    const space = "";
     const duplicate = findNearDuplicate({
       sourceId: post.sourceId,
       normalizedText: post.normalizedText,
@@ -98,8 +70,8 @@ export async function enrichPosts(postIds: string[], classified: AiItem[], setti
         boundCategorySlug: post.source.boundCategorySlug || "",
       },
       vector,
-      centroids.likedSpace === space ? centroids.liked : null,
-      centroids.dislikedSpace === space ? centroids.disliked : null,
+      null,
+      null,
     );
     const signals = item
       ? { urgency: item.urgency, hasBudget: item.hasBudget, specificity: item.specificity }
@@ -125,7 +97,6 @@ export async function enrichPosts(postIds: string[], classified: AiItem[], setti
       data: {
         score: scored.score,
         scoreReason: scored.reason,
-        ...embeddingUpdate,
         duplicateOfId: post.duplicateOfId ?? duplicate?.id ?? null,
       },
     });
@@ -241,16 +212,7 @@ export async function collapseTruncatedCaptures(sourceId?: string) {
   return linked;
 }
 
-export async function semanticRank(query: string, settings: AppSettings, posts: { id: string; embeddingJson: string; embeddingKey: string; embeddingConfig: string }[]) {
-  const embedded = await embedText(query, settings);
-  if (!embedded.vector) return { warning: embedded.message || "ยังไม่มีโมเดลฝังข้อความ จึงค้นด้วยคำแทน", scores: new Map<string, number>() };
-  const scores = new Map<string, number>();
-  const config = embeddingConfig(settings);
-  for (const post of posts) {
-    if (post.embeddingConfig !== config || !post.embeddingKey.startsWith(`${embedded.space}|`)) continue;
-    const vector = readVector(post.embeddingJson);
-    if (!vector) continue;
-    scores.set(post.id, cosine(embedded.vector, vector));
-  }
-  return { warning: scores.size ? "" : "ยังไม่มีเวกเตอร์ที่เข้ากันได้ จึงค้นด้วยคำแทน", scores };
+// Compatibility for old callers; the public search uses exact keywords only.
+export async function semanticRank(_query: string, _settings: AppSettings, _posts: { id: string; embeddingJson: string; embeddingKey: string; embeddingConfig: string }[]) { void _query; void _settings; void _posts;
+  return { warning: "ค้นด้วยคำสำคัญ", scores: new Map<string, number>() };
 }

@@ -67,7 +67,7 @@ export async function updateCommentControl(input: {
         where: {
           deliveryMode: "extension",
           messageMode: "template",
-          OR: [{ requireAi: true }, { intentMode: { not: "keyword" } }],
+          requireAi: true,
         },
         select: { id: true, templates: { select: { id: true }, take: 1 } },
       });
@@ -76,7 +76,7 @@ export async function updateCommentControl(input: {
         if (!rule.templates.length) continue;
         await tx.autoCommentRule.update({
           where: { id: rule.id },
-          data: { requireAi: false, intentMode: "keyword", revision: { increment: 1 } },
+          data: { requireAi: false, revision: { increment: 1 } },
         });
         converted += 1;
       }

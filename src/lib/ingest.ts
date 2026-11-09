@@ -6,16 +6,17 @@ import { prepareLead } from "./pipeline/prepare";
 import { canonicalSourceUrl, normalizeUrl } from "./pipeline/normalize";
 import { touchExtension } from "./extension-status";
 import { collapseIdenticalTexts, enrichPosts } from "./smart/enrich";
-import { dispatchNotification, shouldNotify, shouldNotifyExternal } from "./notify";
+import { messageFor, shouldNotify, shouldNotifyExternal } from "./notify";
+import type { Prisma } from "@prisma/client";
 import { parseFbTime } from "./fb-time";
 import { findSourceByUrl, loadCatalogFromDb, postBelongsToSource, resolveCategoryIds } from "./sources";
 import { recordTiming } from "./metrics";
-import { queueExternalNotification } from "./notification-queue";
 import { applyAutomationRules } from "./automation";
 import { inServiceArea } from "./service-area";
 import { isExpansionOf, isTruncatedText } from "./pipeline/truncation";
 import { syncDuplicateLabels } from "./smart/duplicate-labels";
 import { assignProducts } from "./products";
+import { pendingPostWork, runPostProcessing, type PostRevision } from "./post-processing";
 
 export type IncomingPost = {
   url: string;
@@ -67,14 +68,18 @@ type IngestCoreResult = {
   revisedIds: string[];
   sourceId: string;
   actor: "extension" | "worker";
+  revisions: PostRevision[];
 };
 
-async function finalizeIngest(core: IngestCoreResult) {
+async function finalizeClaimedIngest(core: IngestCoreResult, guard: () => Promise<void>) {
+  await guard();
   const enrichStarted = performance.now();
   const settings = await getSettings();
+  const revisions = new Map(core.revisions.map(row => [row.id, row.textRevision]));
   if (core.revisedIds.length) {
     await assignProducts(core.revisedIds);
-    await enrichPosts(core.revisedIds, [], settings, { embed: false });
+    await guard();
+    await enrichPosts(core.revisedIds, [], settings, { embed: false, revisions });
   }
   if (core.createdIds.length) {
     await collapseIdenticalTexts(
@@ -85,8 +90,9 @@ async function finalizeIngest(core: IngestCoreResult) {
         })
       ).map((row) => row.normalizedText),
     );
-    await assignProducts(core.createdIds).catch((error) => console.error("[products]", error));
-    await syncDuplicateLabels(core.createdIds).catch((error) => console.error("[dup-labels]", error));
+    await guard();
+    await assignProducts(core.createdIds);
+    await syncDuplicateLabels(core.createdIds);
   }
   const uniqueIds = core.createdIds.length
     ? (
@@ -96,16 +102,8 @@ async function finalizeIngest(core: IngestCoreResult) {
         })
       ).map((post) => post.id)
     : [];
-  await prisma.source.update({
-    where: { id: core.sourceId },
-    data: {
-      lastFetchedAt: new Date(),
-      lastError: null,
-      ...(core.actor === "extension" ? { lastExtensionAt: new Date() } : {}),
-    },
-  });
-  if (core.actor === "extension") await touchExtension(core.sourceId);
-  if (uniqueIds.length) await enrichPosts(uniqueIds, [], settings, { embed: false });
+  await guard();
+  if (uniqueIds.length) await enrichPosts(uniqueIds, [], settings, { embed: false, revisions });
   await prisma.fetchLog.create({
     data: {
       sourceId: core.sourceId,
@@ -117,21 +115,56 @@ async function finalizeIngest(core: IngestCoreResult) {
   recordTiming("ingest_enrich", performance.now() - enrichStarted);
   const notifyStarted = performance.now();
   if (uniqueIds.length) {
-    await applyAutomationRules(uniqueIds).catch((error) => console.error("[automation]", error));
+    await guard();
+    await applyAutomationRules(uniqueIds);
     const ready = await prisma.post.findMany({
       where: { id: { in: uniqueIds }, duplicateOfId: null, dismissed: false },
       include: { category: true, subcategory: true, source: true },
     });
+    const notices: Prisma.NotificationCreateManyInput[] = [];
     for (const post of ready) {
       if (!shouldNotify(post) || post.score < settings.notifyMinScore) continue;
       if (settings.serviceAreaNotifyOnly && !inServiceArea(post.province, settings.serviceProvinces)) continue;
       const title = post.score >= 80 ? "ลีดร้อน" : "ลีดใหม่";
-      await dispatchNotification(post, settings, title);
-      if (shouldNotifyExternal(post)) await queueExternalNotification(post.id, title);
+      notices.push({ postId: post.id, channel: "in_app", title, body: messageFor(post), dedupeKey: `ingest:${post.id}` });
+      if (shouldNotifyExternal(post)) notices.push({ postId: post.id, title, channel: "external_pending", body: "0", read: true, dedupeKey: `external:${post.id}:${title}` });
     }
+    await guard();
+    if (notices.length) await prisma.notification.createMany({ data: notices, skipDuplicates: true });
   }
   recordTiming("ingest_notify", performance.now() - notifyStarted);
   return uniqueIds;
+}
+
+async function finalizeIngest(core: IngestCoreResult, assertActive: () => Promise<void> = async () => undefined) {
+  await runPostProcessing(core.revisions, async (rows, guard) => {
+    await finalizeClaimedIngest({ ...core, revisions: rows,
+      createdIds: rows.filter(row => row.processingState === "pending_new").map(row => row.id),
+      revisedIds: rows.filter(row => row.processingState === "pending_edit").map(row => row.id),
+    }, guard);
+  }, assertActive);
+  return (await prisma.post.findMany({ where: { id: { in: core.createdIds }, duplicateOfId: null }, select: { id: true } })).map(row => row.id);
+}
+
+/** Replays durable rule work after a crash; never creates model jobs or sends Facebook comments. */
+export async function processPendingIngest(limit = 40, assertActive: () => Promise<void> = async () => undefined, deadlineMs = Date.now() + 5000) {
+  if (process.env.MYBOT_PROCESS !== "worker") return 0;
+  await assertActive();
+  const candidates = await prisma.post.findMany({ where: pendingPostWork(), orderBy: [{ processingRetryAt: "asc" }, { id: "asc" }], take: Math.min(40, Math.max(1, limit)), select: { id: true, textRevision: true } });
+  return runPostProcessing(candidates, async (rows, guard) => {
+    const completed: string[] = [];
+    for (const sourceId of new Set(rows.map(row => row.sourceId))) {
+      if (Date.now() >= deadlineMs) break;
+      const group = rows.filter(row => row.sourceId === sourceId);
+      await finalizeClaimedIngest({ ok: true, inserted: group.length, expanded: 0, revised: 0, duplicates: 0, tooOld: 0, outsideSource: 0,
+        source: sourceId, sourceId, actor: "worker", revisions: group,
+        createdIds: group.filter(row => row.processingState === "pending_new").map(row => row.id),
+        revisedIds: group.filter(row => row.processingState === "pending_edit").map(row => row.id),
+      }, guard);
+      completed.push(...group.map(row => row.id));
+    }
+    return completed;
+  }, assertActive);
 }
 
 export async function ingestPosts(
@@ -186,6 +219,17 @@ export async function ingestPosts(
     prepared.push({ raw: { ...raw, text }, lead, url, postedAt });
   }
 
+  // A transport batch can contain several observed versions of one permalink.
+  // Prefer full text; among partials keep the longest, among full edits keep the latest.
+  const byCaptureUrl = new Map<string, (typeof prepared)[number]>();
+  for (const item of prepared) {
+    const previous = byCaptureUrl.get(item.url);
+    if (previous && isTruncatedText(item.raw.text) && (!isTruncatedText(previous.raw.text) || item.raw.text.length <= previous.raw.text.length)) continue;
+    byCaptureUrl.set(item.url, previous ? { ...item, raw: { ...previous.raw, ...item.raw }, postedAt: item.postedAt ?? previous.postedAt } : item);
+  }
+  const repeatedInBatch = prepared.length - byCaptureUrl.size;
+  prepared.splice(0, prepared.length, ...byCaptureUrl.values());
+
   const existing = prepared.length
     ? await prisma.post.findMany({
         where: {
@@ -194,7 +238,7 @@ export async function ingestPosts(
             { sourceId: source.id, externalUrl: { in: prepared.map((item) => item.url) } },
           ],
         },
-        select: { id: true, contentHash: true, externalUrl: true, text: true, sourceId: true, textRevision: true, aiProvider: true },
+        select: { id: true, contentHash: true, externalUrl: true, text: true, sourceId: true, textRevision: true, aiProvider: true, processingState: true },
       })
     : [];
 
@@ -217,6 +261,7 @@ export async function ingestPosts(
           embeddingConfig: "", embeddingKey: "", embeddingRetryAt: new Date(), ocrText: "",
           keywordHitsJson: JSON.stringify(item.lead.watch), forbiddenHit: item.lead.forbidden.length > 0,
           truncated: isTruncatedText(item.raw.text), refetchAfter: null,
+          processingState: old.processingState === "pending_new" ? "pending_new" : "pending_edit", processingToken: null, processingRetryAt: new Date(), processingQueuedAt: new Date(), processingError: "",
           ...(old.aiProvider === "owner" ? {} : {
             categoryId: ids.categoryId, subcategoryId: ids.subcategoryId,
             intent: marketplace ? "seller" : item.lead.intent, province: item.lead.province,
@@ -225,14 +270,6 @@ export async function ingestPosts(
         },
       });
       if (!result.count) return false;
-      const rulesOnly = settings.aiProvider === "rules";
-      const reset = {
-        status: old.aiProvider === "owner" || rulesOnly ? "skipped" : "pending",
-        claimToken: null, attempts: 0, nextAttemptAt: new Date(),
-        lastError: old.aiProvider === "owner" ? "" : rulesOnly ? "ใช้กฎ ไม่เรียก AI" : "",
-        latencyMs: null, queueWaitMs: null, createdAt: new Date(),
-      };
-      await tx.aiJob.upsert({ where: { postId: old.id }, update: reset, create: { postId: old.id, ...reset } });
       return true;
     });
     if (revised) {
@@ -265,7 +302,7 @@ export async function ingestPosts(
       tombstoneUrls.add(row.externalUrl);
     }
   }
-  let duplicates = 0;
+  let duplicates = repeatedInBatch;
   const fresh = [];
   for (const item of prepared) {
     if (seenHash.has(item.lead.hash) || seenUrl.has(item.url)) {
@@ -283,8 +320,7 @@ export async function ingestPosts(
   const createdIds: string[] = [];
   recordTiming("ingest_prepare", performance.now() - started);
   const storeStarted = performance.now();
-  // One bounded transaction per transport-sized batch. Insert posts and their AI
-  // jobs atomically; skipDuplicates also handles concurrent capture of the same URL.
+  // One bounded transaction per transport-sized batch; no model queue is created.
   for (let offset = 0; offset < fresh.length; offset += 40) {
     const data = fresh.slice(offset, offset + 40).map(item => {
       const ids = resolveCategoryIds(rows, item.lead.categorySlug, item.lead.subcategorySlug);
@@ -299,20 +335,12 @@ export async function ingestPosts(
         isAd: marketplace ? false : item.lead.isAd,
         keywordHitsJson: JSON.stringify(item.lead.watch), forbiddenHit: item.lead.forbidden.length > 0,
         suggestedReply: item.lead.suggestedReply, aiProvider: "rules",
+        processingState: "pending_new", processingRetryAt: new Date(), processingQueuedAt: new Date(),
       };
     });
-    const rulesOnly = settings.aiProvider === "rules";
     const inserted = await prisma.$transaction(async tx => {
       await tx.post.createMany({ data, skipDuplicates: true });
       const owned = await tx.post.findMany({ where: { id: { in: data.map(row => row.id) } }, select: { id: true } });
-      if (owned.length) {
-        await tx.aiJob.createMany({
-          data: owned.map(post => ({
-            postId: post.id,
-            ...(rulesOnly ? { status: "skipped", lastError: "ใช้กฎ ไม่เรียก AI" } : {}),
-          })),
-        });
-      }
       return owned;
     });
     const ownedIds = new Set(inserted.map(post => post.id));
@@ -340,7 +368,10 @@ export async function ingestPosts(
     revisedIds,
     sourceId: source.id,
     actor: input.actor,
+    revisions: [...createdIds.map(id => ({ id, textRevision: 0 })), ...revisedIds.map(id => ({ id, textRevision: existing.find(row => row.id === id)!.textRevision }))],
   };
+  await prisma.source.update({ where: { id: source.id }, data: { lastFetchedAt: new Date(), lastError: null, ...(input.actor === "extension" ? { lastExtensionAt: new Date() } : {}) } });
+  if (input.actor === "extension") await touchExtension(source.id);
   const publicOutcomes = Object.fromEntries(itemOutcomes);
 
   if (options.deferFinalize) {

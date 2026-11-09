@@ -1,12 +1,3 @@
-import { authed } from "@/lib/guard";
-import { json } from "@/lib/http";
-import { prisma } from "@/lib/prisma";
-
+import { retiredAiResponse } from "@/lib/retired-ai";
 export const dynamic = "force-dynamic";
-
-export async function POST() {
-  const { error } = await authed();
-  if (error) return error;
-  const result = await prisma.post.updateMany({ data: { embeddingConfig: "", embeddingRetryAt: new Date() } });
-  return json({ queued: result.count });
-}
+export const POST = retiredAiResponse;

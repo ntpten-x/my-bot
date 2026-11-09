@@ -189,7 +189,7 @@ describe.skipIf(!fixture.enabled)("auto comment isolated Postgres queue and migr
     const { source } = await setup(false);
     await prisma.setting.create({ data: { key: "ai_provider", value: "rules" } });
     await ingestPosts({ sourceUrl: source.url, actor: "extension", posts: [{ url: "https://www.facebook.com/12345/posts/888", text: "ตามหาไอแพดมือสอง งบ 5000 บาท" }] });
-    const aiBefore = await prisma.aiJob.findMany(); expect(aiBefore).toHaveLength(1); await scanAutoCommentPosts();
+    const aiBefore = await prisma.aiJob.findMany(); expect(aiBefore).toHaveLength(0); await scanAutoCommentPosts();
     expect(await prisma.aiJob.findMany()).toEqual(aiBefore); expect(await prisma.autoCommentJob.count()).toBe(1);
   });
   it("polls authorized Page posts through the existing ingest/AI path without sending Dry Run", async () => {
@@ -197,7 +197,7 @@ describe.skipIf(!fixture.enabled)("auto comment isolated Postgres queue and migr
     api.posts.mockResolvedValue([{ id: "12345_778899", message: "ตามหาไอแพดใหม่", created_time: new Date().toISOString() }] as never);
     await autoCommentTick(async () => undefined, { gateway: api });
     expect(api.posts).toHaveBeenCalledTimes(1); expect(api.send).not.toHaveBeenCalled();
-    expect(await prisma.post.count()).toBe(1); expect(await prisma.aiJob.count()).toBe(1);
+    expect(await prisma.post.count()).toBe(1); expect(await prisma.aiJob.count()).toBe(0);
     expect((await prisma.autoCommentJob.findFirstOrThrow()).status).toBe("dry_run");
     await autoCommentTick(async () => undefined, { gateway: api }); expect(api.posts).toHaveBeenCalledTimes(1);
   });

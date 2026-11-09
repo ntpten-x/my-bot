@@ -20,7 +20,7 @@ it("requires a session before checking infrastructure", async () => {
   mocks.authed.mockResolvedValue({ error: new Response(null, { status: 401 }) }); expect((await GET()).status).toBe(401); expect(mocks.settings).not.toHaveBeenCalled();
 });
 it("never returns stored secrets and explains missing infrastructure", async () => {
-  mocks.settings.mockResolvedValue([{ key: "groq_api_key", value: "synthetic-sensitive-value" }]);
+  mocks.settings.mockResolvedValue([{ key: "groq_api_key", value: "synthetic-sensitive-value" }, { key: "smtp_pass", value: "synthetic-sensitive-value" }]);
   const response = await GET(), text = await response.text(); expect(text).not.toContain("synthetic-sensitive-value");
   const result = JSON.parse(text); expect(result.legacySecrets).toBe(1);
   expect(result.steps.find((step: { key: string }) => step.key === "secret").ready).toBe(false);

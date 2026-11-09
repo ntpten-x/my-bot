@@ -1,4 +1,5 @@
 "use client";
+import { startVisibleRefresh } from "@/lib/visible-refresh";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button, Input, Select } from "@/components/ui";
@@ -31,7 +32,6 @@ type Filters = {
   hideDuplicates: boolean;
   sort: string;
   minScore: string;
-  semantic: boolean;
   area: boolean;
   hideInactiveSources: boolean;
   followedOnly: boolean;
@@ -53,7 +53,6 @@ const INITIAL: Filters = {
   hideDuplicates: true,
   sort: "new",
   minScore: "",
-  semantic: false,
   area: false,
   hideInactiveSources: true,
   followedOnly: false,
@@ -114,7 +113,6 @@ function queryFrom(filters: Filters, page: number) {
   else params.set("followedOnly", "1");
   if (filters.sort) params.set("sort", filters.sort);
   if (filters.minScore) params.set("minScore", filters.minScore);
-  if (filters.semantic) params.set("semantic", "1");
   if (filters.area) params.set("area", "1");
   const days = filters.range === "today" ? 0 : filters.range === "3d" ? 3 : filters.range === "7d" ? 7 : filters.range === "30d" ? 30 : filters.range === "90d" ? 90 : null;
   if (days !== null) params.set("from", bangkokStart(days).toISOString());
@@ -148,8 +146,10 @@ export default function FeedPage() {
   const [loading, setLoading] = useState(true);
   const [sound, setSound] = useState(true);
   const loadSequence = useRef(0);
+  const loadsInFlight = useRef(0);
 
   const load = useCallback(async (nextPage: number, nextFilters: Filters) => {
+    loadsInFlight.current++;
     const sequence = ++loadSequence.current;
     setLoading(true);
     setError("");
@@ -162,6 +162,7 @@ export default function FeedPage() {
     } catch (err) {
       if (sequence === loadSequence.current) setError(err instanceof ApiError ? err.message : "โหลดฟีดไม่สำเร็จ");
     } finally {
+      loadsInFlight.current--;
       if (sequence === loadSequence.current) setLoading(false);
     }
   }, []);
@@ -204,11 +205,12 @@ export default function FeedPage() {
   useEffect(() => {
     if (!ready) return;
     const stream = new EventSource("/api/v1/stream");
+    const stopRepair = startVisibleRefresh(() => loadsInFlight.current ? Promise.resolve() : load(page, filters));
     stream.onmessage = (event) => {
       let data: { type: string; posts?: Lead[] };
       try { data = JSON.parse(event.data); } catch { return; }
       if (!data || typeof data.type !== "string") return;
-      if (data.type === "hello") { void load(page, filters); return; } // Reconnect repairs gaps with the normal filtered query.
+      if (data.type === "hello") { if (!loadsInFlight.current) void load(page, filters); return; } // Reconnect repairs gaps with the normal filtered query.
       if (data.type !== "posts" || !Array.isArray(data.posts) || !data.posts.length) return;
       const interesting = data.posts.filter((post) => !post.isAd && !post.forbiddenHit && !post.duplicateOfId);
       if (sound && interesting.length) beep();
@@ -217,9 +219,9 @@ export default function FeedPage() {
           new Notification("MY-BOT พบลีดใหม่", { body: post.text.slice(0, 140) });
         }
       }
-      void load(page, filters);
+      if (!loadsInFlight.current) void load(page, filters);
     };
-    return () => stream.close();
+    return () => { stopRepair(); stream.close(); };
   }, [ready, filters, load, page, sound]);
 
   const parents = meta?.categories.filter((item) => !item.parentId) ?? [];
@@ -318,7 +320,6 @@ export default function FeedPage() {
         <label className="flex items-center gap-2"><input type="checkbox" checked={filters.hideDuplicates} onChange={(event) => update({ hideDuplicates: event.target.checked })} /> ยุบโพสต์คล้ายกัน</label>
         <label className="flex items-center gap-2" title="ซ่อนโพสต์จากแหล่งที่ปิดชั่วคราว เช่น มาร์เก็ตเพลสที่ไม่เฝ้าแล้ว"><input type="checkbox" checked={filters.hideInactiveSources} onChange={(event) => update({ hideInactiveSources: event.target.checked })} /> เฉพาะแหล่งที่เปิด</label>
         <label className="flex items-center gap-2" title="แสดงเฉพาะโพสต์ที่ติดดาว Roblox/PUBG ฯลฯ"><input type="checkbox" checked={filters.followedOnly} onChange={(event) => update({ followedOnly: event.target.checked })} /> เฉพาะที่ติดตาม</label>
-        <label className="flex items-center gap-2"><input type="checkbox" checked={filters.semantic} onChange={(event) => update({ semantic: event.target.checked })} /> ค้นตามความหมาย</label>
         <label className="flex items-center gap-2" title="ตั้งจังหวัดได้ที่หน้า กฎอัตโนมัติ"><input type="checkbox" checked={filters.area} onChange={(event) => update({ area: event.target.checked })} /> เฉพาะพื้นที่ให้บริการ</label>
       </div>
       {error ? <p className="mt-4 text-sm text-red-700">{error}</p> : null}

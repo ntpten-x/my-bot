@@ -106,12 +106,6 @@ export async function applyAutomationRules(postIds: string[]) {
   for (const post of posts) {
     for (const rule of rules) {
       if (!matchRule(rule, post)) continue;
-      try {
-        await prisma.ruleHit.create({ data: { ruleId: rule.id, postId: post.id } });
-      } catch {
-        continue; // already applied to this post
-      }
-      hits += 1;
       const data: Record<string, unknown> = {};
       if (rule.actionDismiss) data.dismissed = true;
       if (rule.actionSave && !rule.actionDismiss && post.pipelineStatus === "none") {
@@ -131,13 +125,29 @@ export async function applyAutomationRules(postIds: string[]) {
           product: post.product?.name,
         });
       }
-      if (Object.keys(data).length) await prisma.post.update({ where: { id: post.id }, data });
-      await prisma.automationRule.update({ where: { id: rule.id }, data: { hitCount: { increment: 1 }, lastHitAt: new Date() } });
-      if (rule.actionNotify && !rule.actionDismiss) {
-        const title = `${RULE_TITLE_PREFIX}${rule.name}`.slice(0, 120);
-        await dispatchNotification({ ...post, suggestedReply: typeof data.suggestedReply === "string" ? data.suggestedReply : post.suggestedReply }, settings, title);
-        await queueExternalNotification(post.id, title);
-      }
+      const applied = await prisma.$transaction(async tx => {
+        const currentRule = await tx.automationRule.findUnique({ where: { id: rule.id } });
+        const currentPost = await tx.post.findUnique({ where: { id: post.id } });
+        if (!currentRule?.enabled || !currentPost || currentPost.dismissed) return false;
+        const policy = (value: object) => JSON.stringify(value, (key, item) => ["hitCount", "lastHitAt", "updatedAt"].includes(key) ? undefined : item);
+        if (policy(currentRule) !== policy(rule) || currentPost.textRevision !== post.textRevision) throw new Error("Rule or post changed during processing");
+        if (!matchRule(currentRule, { ...post, ...currentPost })) return false;
+        const hit = await tx.ruleHit.createMany({ data: [{ ruleId: rule.id, postId: post.id }], skipDuplicates: true });
+        if (!hit.count) return false;
+        if (Object.keys(data).length) {
+          const changed = await tx.post.updateMany({ where: { id: post.id, textRevision: post.textRevision, pipelineStatus: post.pipelineStatus, dismissed: false }, data });
+          if (!changed.count) throw new Error("Owner changed post during rule processing");
+        }
+        await tx.automationRule.update({ where: { id: rule.id }, data: { hitCount: { increment: 1 }, lastHitAt: new Date() } });
+        if (rule.actionNotify && !rule.actionDismiss) {
+          const title = `${RULE_TITLE_PREFIX}${rule.name}`.slice(0, 120);
+          await dispatchNotification({ ...post, suggestedReply: typeof data.suggestedReply === "string" ? data.suggestedReply : post.suggestedReply }, settings, title, { db: tx, dedupeKey: `rule:${rule.id}:${post.id}` });
+          await queueExternalNotification(post.id, title, tx);
+        }
+        return true;
+      }, { timeout: 10_000, maxWait: 3000 });
+      if (!applied) continue;
+      hits += 1;
       await workerLog({ postId: post.id, message: `ตรงกฎ "${rule.name}"` }).catch(() => undefined);
     }
   }

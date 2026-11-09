@@ -20,6 +20,8 @@ const eslintConfig = [
       "next-env.d.ts",
       "scripts/verify-ui-local.js",
       "data/**",
+      ".playwright-cli/**",
+      ".playwright-mcp/**",
     ],
   },
   {

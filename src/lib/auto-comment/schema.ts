@@ -19,14 +19,13 @@ export const autoCommentRuleSchema = z.object({
   deliveryMode: z.enum(["official", "extension"]).default("official"),
   browserDeviceId: z.string().max(100).default(""),
   browserFbUserId: z.string().regex(/^\d{5,20}$|^$/).default(""),
-  browserConsent: z.boolean().default(false), requireAi: z.boolean().default(false),
-  messageMode: z.enum(["template", "ai_draft"]).default("template"),
+  browserConsent: z.boolean().default(false), requireAi: z.literal(false).default(false),
+  messageMode: z.literal("template").default("template"),
   businessFacts: z.string().max(4000).default(""), draftInstruction: z.string().max(1000).default(""),
   pageToken: z.string().max(4096).optional(), managerToken: z.string().max(4096).optional(), clearCredentials: z.boolean().optional(),
 }).refine(data => data.startMinute !== data.endMinute, "ช่วงเวลาเริ่มและสิ้นสุดต้องต่างกัน")
   .refine(data => data.deliveryMode !== "extension" || !data.enabled || !data.browserConsent || Boolean(data.browserDeviceId && data.browserFbUserId && data.browserConsent && data.sourceIds.length), "ต้องเลือกอุปกรณ์ บัญชี และยืนยันสิทธิ์ใช้งานกลุ่มก่อนเปิดกฎ")
-  .refine(data => data.messageMode !== "ai_draft" || data.requireAi, "ข้อความ AI ต้องรอผลวิเคราะห์ก่อน")
-  .refine(data => data.messageMode === "ai_draft" || (data.templates.length > 0 || Boolean(data.typeProductId && data.replyTemplateIds?.length)), "ต้องมีข้อความสำเร็จรูปอย่างน้อยหนึ่งข้อความ")
+  .refine(data => data.templates.length > 0 || Boolean(data.typeProductId && data.replyTemplateIds?.length), "ต้องมีข้อความสำเร็จรูปอย่างน้อยหนึ่งข้อความ")
   .refine(data => Boolean(data.pageId) || data.sourceIds.length > 0, "ต้องเลือกแหล่งข้อมูลหรือกำหนด Page ID ใน Allowlist")
   .refine(data => {
     if (!data.enabled) return true;

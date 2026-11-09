@@ -4,12 +4,6 @@ $Node = (Get-Command node -ErrorAction Stop).Source
 $Startup = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Startup"
 $VbsPath = Join-Path $Startup "MY-BOT.vbs"
 
-$env:OLLAMA_MAX_LOADED_MODELS = "2"
-$env:OLLAMA_KEEP_ALIVE = "30m"
-setx OLLAMA_MAX_LOADED_MODELS "2" | Out-Null
-setx OLLAMA_KEEP_ALIVE "30m" | Out-Null
-Write-Host "OLLAMA_MAX_LOADED_MODELS=2"
-Write-Host "OLLAMA_KEEP_ALIVE=30m"
 
 function Write-StartupLauncher {
   New-Item -ItemType Directory -Force -Path $Startup | Out-Null
@@ -17,18 +11,12 @@ function Write-StartupLauncher {
   $nodeVbs = $Node.Replace("\", "\\")
   $vbs = @"
 Set shell = CreateObject("Wscript.Shell")
-shell.Environment("PROCESS").Item("OLLAMA_HOST") = "127.0.0.1:41434"
-shell.Environment("PROCESS").Item("OLLAMA_BASE_URL") = "http://127.0.0.1:41434"
-shell.Environment("PROCESS").Item("OLLAMA_MAX_LOADED_MODELS") = "2"
-shell.Environment("PROCESS").Item("OLLAMA_KEEP_ALIVE") = "30m"
-shell.Run "cmd /c set OLLAMA_HOST=127.0.0.1:41434&& set OLLAMA_MAX_LOADED_MODELS=2&& set OLLAMA_KEEP_ALIVE=30m&& ollama serve", 0, False
-WScript.Sleep 1500
 shell.CurrentDirectory = "$repoVbs"
-shell.Run "cmd /c mkdir data 2>nul & set OLLAMA_HOST=127.0.0.1:41434&& set OLLAMA_MAX_LOADED_MODELS=2&& set OLLAMA_KEEP_ALIVE=30m&& set OLLAMA_BASE_URL=http://127.0.0.1:41434&& ""$nodeVbs"" scripts\start-all.mjs --prod >> data\mybot-console.log 2>&1", 0, False
+shell.Run "cmd /c mkdir data 2>nul & ""$nodeVbs"" scripts\start-all.mjs --prod >> data\mybot-console.log 2>&1", 0, False
 "@
   Set-Content -Path $VbsPath -Value $vbs -Encoding ASCII
   Write-Host "Startup launcher written: $VbsPath"
-  Write-Host "It starts Ollama on 127.0.0.1:41434 and MY-BOT hidden at logon."
+  Write-Host "It starts MY-BOT hidden at logon."
 }
 
 Write-Host "Building production app in $Repo"

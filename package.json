@@ -64,7 +64,6 @@
     "react-dom": "19.1.0",
     "rss-parser": "^3.13.0",
     "tailwind-merge": "^3.7.0",
-    "tesseract.js": "^7.0.0",
     "tsx": "^4.23.15",
     "zod": "^4.6.7"
   },

@@ -22,14 +22,14 @@ describe("audit fixes", () => {
     expect(Object.keys(payload).sort()).toEqual(["ok", "version"]);
   });
 
-  it("resets a stuck AI job after two minutes and keeps OCR inside the worker", () => {
+  it("keeps legacy timing constants and retires OCR in every process", () => {
     expect(STUCK_JOB_MS).toBe(2 * 60 * 1000);
     expect(OLLAMA_KEEP_ALIVE).toBe("30m");
     const previous = process.env.MYBOT_PROCESS;
     delete process.env.MYBOT_PROCESS;
     expect(ocrRunsInThisProcess()).toBe(false);
     process.env.MYBOT_PROCESS = "worker";
-    expect(ocrRunsInThisProcess()).toBe(true);
+    expect(ocrRunsInThisProcess()).toBe(false);
     if (previous === undefined) delete process.env.MYBOT_PROCESS;
     else process.env.MYBOT_PROCESS = previous;
   });

@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 
 const REQUIRED = [
+  ["Post", "processingState"], ["Post", "processingToken"], ["Notification", "dedupeKey"],
   ["AutoCommentEvaluation", "inputFingerprint"], ["AutoCommentRule", "businessFacts"], ["AutoCommentJob", "draftInputKey"], ["IngestReceipt", "itemId"],
   ["AutoCommentRule", "intentMode"], ["AutoCommentRule", "priority"], ["AutoCommentEvaluation", "postId"],
   ["Post", "textRevision"], ["AiJob", "claimToken"], ["Lease", "expiresAt"],

@@ -27,9 +27,9 @@ describe("doctor", () => {
   it("passes a healthy machine and warns when optional keys are absent", () => {
     const rows = evaluateDoctor(facts());
     expect(status("node", rows)).toBe("PASS");
-    expect(status("ollama", rows)).toBe("PASS");
-    expect(status("embed", rows)).toBe("PASS");
-    expect(status("env-groq", rows)).toBe("WARN");
+    expect(status("ollama", rows)).toBeUndefined();
+    expect(status("embed", rows)).toBeUndefined();
+    expect(status("env-groq", rows)).toBeUndefined();
     expect(status("env-discord", rows)).toBe("WARN");
     expect(doctorExitCode(rows)).toBe(0);
   });
@@ -50,7 +50,7 @@ describe("doctor", () => {
     expect(doctorExitCode(rows)).toBe(1);
   });
 
-  it("treats a free app port as a warning and a bad Groq key as a failure", () => {
+  it("warns about a free app port and ignores removed model credentials", () => {
     const rows = evaluateDoctor(
       facts({
         portState: "free",
@@ -59,7 +59,7 @@ describe("doctor", () => {
       }),
     );
     expect(status("port", rows)).toBe("WARN");
-    expect(status("groq", rows)).toBe("FAIL");
+    expect(status("groq", rows)).toBeUndefined();
     expect(rows.find((row) => row.id === "port")?.hint).toContain("start:prod");
   });
 

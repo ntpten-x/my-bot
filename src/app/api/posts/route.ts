@@ -4,8 +4,7 @@ import { authed } from "@/lib/guard";
 import { json } from "@/lib/http";
 import { postInclude, serializePost, withAlsoIn } from "@/lib/serialize";
 import { getSettings } from "@/lib/settings";
-import { semanticRank } from "@/lib/smart/enrich";
-import { isListedAd, rankHybrid, searchTokens } from "@/lib/smart/search";
+import { isListedAd, searchTokens } from "@/lib/smart/search";
 import { recordTiming } from "@/lib/metrics";
 import { readFollowedProducts } from "@/lib/product-admin";
 
@@ -62,7 +61,6 @@ export async function GET(request: Request) {
   if (from) and.push({ createdAt: { gte: new Date(from) } });
   if (to) and.push({ createdAt: { lte: new Date(to) } });
   const q = params.get("q")?.trim() ?? "";
-  const semantic = params.get("semantic") === "1" && Boolean(q);
   if (and.length) where.AND = and;
 
   if (q) {
@@ -80,56 +78,13 @@ export async function GET(request: Request) {
         },
       ],
     };
-    if (!semantic) {
+    {
       const [total, posts] = await Promise.all([
         prisma.post.count({ where: keywordWhere }),
         prisma.post.findMany({ where: keywordWhere, include: postInclude, relationLoadStrategy: "join", orderBy: [{ isAd: "asc" }, { score: "desc" }, { createdAt: "desc" }, { id: "asc" }], skip: (page - 1) * pageSize, take: pageSize }),
       ]);
       return json({ posts: await withAlsoIn(posts.map(serializePost)), total, page, pageSize, semantic: false, searchScope: "ค้นด้วยคำจากโพสต์ทั้งหมดที่ตรงตัวกรอง" });
     }
-    const select = { id: true, text: true, isAd: true, embeddingJson: true, embeddingKey: true, embeddingConfig: true } as const;
-    const candidateLimit = 1000;
-    const [keywordPosts, semanticPosts, keywordTotal, semanticTotal] = await Promise.all([
-      prisma.post.findMany({
-      where: keywordWhere,
-      select,
-      orderBy: [{ createdAt: "desc" }, { id: "asc" }],
-      take: candidateLimit,
-      }),
-      prisma.post.findMany({
-          where: { AND: [...(Array.isArray(where.AND) ? where.AND : []), { embeddingJson: { not: "" } }] },
-          select,
-          orderBy: [{ createdAt: "desc" }, { id: "asc" }],
-          take: candidateLimit,
-      }),
-      prisma.post.count({ where: keywordWhere }),
-      prisma.post.count({ where: { AND: [...(Array.isArray(where.AND) ? where.AND : []), { embeddingJson: { not: "" } }] } }),
-    ]);
-    const byId = new Map<string, (typeof keywordPosts)[number]>();
-    for (const post of [...keywordPosts, ...semanticPosts]) byId.set(post.id, post);
-    const pool = [...byId.values()];
-    const ranked = await semanticRank(q, await getSettings(), pool);
-    // If the model is unavailable, return the complete paginated keyword search.
-    if (ranked.warning) {
-      const posts = await prisma.post.findMany({ where: keywordWhere, include: postInclude, relationLoadStrategy: "join", orderBy: [{ score: "desc" }, { createdAt: "desc" }, { id: "asc" }], skip: (page - 1) * pageSize, take: pageSize });
-      return json({ posts: await withAlsoIn(posts.map(serializePost)), total: keywordTotal, page, pageSize, semantic: false, searchScope: "โมเดลค้นตามความหมายไม่พร้อม จึงค้นด้วยคำจากโพสต์ทั้งหมดที่ตรงตัวกรอง" });
-    }
-    const keywordIds = new Set(keywordPosts.map(post => post.id));
-    const ordered = rankHybrid(q, pool.filter(post => ranked.scores.has(post.id) || keywordIds.has(post.id)), ranked.scores);
-    const slice = ordered.slice((page - 1) * pageSize, page * pageSize);
-    const full = await prisma.post.findMany({ where: { id: { in: slice.map(post => post.id) } }, include: postInclude, relationLoadStrategy: "join" });
-    const byFullId = new Map(full.map(post => [post.id, post]));
-    return json({
-      posts: await withAlsoIn(slice.flatMap(post => { const row = byFullId.get(post.id); return row ? [serializePost(row)] : []; })),
-      total: ordered.length,
-      page,
-      pageSize,
-      semantic: semantic && !ranked.warning,
-      totalIsLimited: keywordTotal > candidateLimit || semanticTotal > candidateLimit,
-      searchScope: keywordTotal > candidateLimit || semanticTotal > candidateLimit
-        ? `ผลรวมเฉพาะชุดที่ค้น: โพสต์ตรงคำล่าสุดไม่เกิน ${candidateLimit} รายการ และโพสต์มีเวกเตอร์ล่าสุดไม่เกิน ${candidateLimit} รายการตามตัวกรอง เลือกวันที่หรือแหล่งข้อมูลเพื่อค้นช่วงอื่น`
-        : "ค้นจากโพสต์ทั้งหมดที่ตรงคำและโพสต์ที่มีเวกเตอร์เข้ากันได้ตามตัวกรอง",
-    });
   }
   const sortParam = params.get("sort");
   // Default: newest post first (post time, falling back to capture time).

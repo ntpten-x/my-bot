@@ -196,13 +196,22 @@ function withOutboxLock(fn) {
   const task = outboxLock.then(fn); outboxLock = task.catch(() => undefined); return task;
 }
 /** Chrome period alarms cannot be under 30s; one-shot wakes drain comment work right after ingest. */
+let commentWakeLock = Promise.resolve();
 function nudgeCommentDrain() {
-  try {
+  const capturedAt = Date.now();
+  const work = commentWakeLock.then(async () => {
     if (!chrome?.alarms?.create) return;
-    void chrome.alarms.create("mybot-comment-nudge", { when: Date.now() + 750 }).catch(() => undefined);
-  } catch {
-    // Unit harnesses and paused workers may lack alarms.
-  }
+    // The first wake can beat the worker scan. Bounded follow-ups cover preparation
+    // without waiting for the periodic 30s alarm or changing dispatch quotas.
+    for (const [name, delay] of [["mybot-comment-nudge", 750], ["mybot-comment-ready", 5000], ["mybot-comment-followup", 12000]]) {
+      const pending = await chrome.alarms.get?.(name);
+      const when = capturedAt + delay;
+      // Do not debounce a pending (even overdue) alarm away during continuous ingest.
+      if (!pending || pending.scheduledTime > when) await chrome.alarms.create(name, { when });
+    }
+  });
+  commentWakeLock = work.catch(() => undefined);
+  return commentWakeLock;
 }
 // Serialize chrome.storage read-modify-write for parallel scrapes (backlog / sweeps / reader window).
 let backlogLock = Promise.resolve();
@@ -2048,7 +2057,7 @@ chrome.runtime.onStartup.addListener(() => {
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "mybot-tick" || alarm.name === DUE_ALARM) void cycle();
   if (alarm.name === "mybot-tasks") void pollTasks();
-  if (alarm.name === "mybot-tasks" || alarm.name === "mybot-comment-nudge") {
+  if (["mybot-tasks", "mybot-comment-nudge", "mybot-comment-ready", "mybot-comment-followup"].includes(alarm.name)) {
     void globalThis.MyBotCommentWorker.drain(commentWorkerDeps()).catch(() => undefined);
   }
   if (alarm.name === "mybot-heartbeat") {

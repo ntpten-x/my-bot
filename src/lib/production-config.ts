@@ -20,7 +20,7 @@ export function productionConfigChecks(env: NodeJS.ProcessEnv): ReadinessCheck[]
     } catch { checks.push({ id: key, status: "FAIL", message: "URL ไม่ถูกต้อง เป็น Placeholder หรือใช้โหมด Pooler ผิดประเภท" }); }
   }
   checks.push({ id: "WORKER_START", status: "PASS", message: "ใช้ npm start เพื่อเปิด Web และ Worker; Worker ต้องรับ MYBOT_PROCESS=worker จาก Launcher" });
-  checks.push({ id: "CLOUD_AI", status: env.GEMINI_API_KEY || env.GROQ_API_KEY ? "PASS" : "BLOCKED", message: env.GEMINI_API_KEY || env.GROQ_API_KEY ? "มี Env Key; ต้องทดสอบ Provider ด้วยคีย์จริงบน Host เป้าหมาย" : "ไม่มี Env Key; ต้องยืนยัน Provider ใน Settings หรือ Ollama บน Host เป้าหมาย" });
+  checks.push({ id: "BOT_RULES", status: "PASS", message: "บอทใช้กฎ คำสำคัญ และข้อความสำเร็จรูป ไม่ต้องมีผู้ให้บริการโมเดล" });
   return checks;
 }
 

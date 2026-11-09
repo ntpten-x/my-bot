@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { bashTestPath, testBash } from "../helpers/bash";
 
 function crc32(buf: Buffer): number {
   let c = ~0;
@@ -20,7 +20,9 @@ it("ships a non-interactive zip extractor for PCManFM Extract Here", () => {
 });
 
 it("extracts a zip into the destination directory", () => {
-  const root = mkdtempSync(path.join(tmpdir(), "mybot-extract-"));
+  const parent = path.resolve("data/test-screens");
+  mkdirSync(parent, { recursive: true });
+  const root = mkdtempSync(path.join(parent, "extract-"));
   const zip = path.join(root, "sample.zip");
   const out = path.join(root, "out");
   mkdirSync(out);
@@ -69,8 +71,9 @@ it("extracts a zip into the destination directory", () => {
   end.writeUInt32LE(localHeader.length + payload.length, 16);
   end.writeUInt16LE(0, 20);
   writeFileSync(zip, Buffer.concat([localHeader, payload, central, end]));
-  execFileSync("bash", [path.resolve("desktop/extract-archive.sh"), "--extract-to", out, zip], { stdio: "pipe" });
+  execFileSync(testBash, [bashTestPath(path.resolve("desktop/extract-archive.sh")), "--extract-to", bashTestPath(out), bashTestPath(zip)], { stdio: "pipe" });
   expect(existsSync(path.join(out, "hello.txt"))).toBe(true);
   expect(readFileSync(path.join(out, "hello.txt"), "utf8")).toBe("hello-bot");
+  if (path.dirname(path.resolve(root)) !== parent) throw new Error("Unsafe extract test cleanup");
   rmSync(root, { recursive: true, force: true });
 });

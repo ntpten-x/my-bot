@@ -24,8 +24,13 @@ export async function autoCommentTick(assertActive: () => Promise<void>, options
     // Runtime uses browser delivery only. The injected legacy gateway is retained
     // for isolated regression tests of previously stored jobs; no runtime caller supplies it.
     if (!options.gateway) {
-      await timed("comment_scan", () => scanBrowserComments(assertActive, { deadlineMs: Date.now() + 5000 }));
-      await timed("comment_prepare", () => prepareBrowserComments(assertActive, { deadlineMs: Date.now() + 5000 }));
+      try {
+        await timed("comment_scan", () => scanBrowserComments(assertActive, { deadlineMs: Date.now() + 5000 }));
+      } finally {
+        // A bad scan must not starve durable preparation/expired-claim recovery.
+        // Preparation independently checks the worker lease before touching jobs.
+        await timed("comment_prepare", () => prepareBrowserComments(assertActive, { deadlineMs: Date.now() + 5000 }));
+      }
       return;
     }
     await timed("comment_prepare", () => prepareBrowserComments(assertActive));

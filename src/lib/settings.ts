@@ -1,4 +1,3 @@
-import { resolveGroqModel } from "./ai/models";
 import { prisma } from "./prisma";
 import { parseProvinceList } from "./service-area";
 import { parseTimes } from "./reply-queue-core";
@@ -81,24 +80,23 @@ function num(value: string | undefined, fallback: number, min: number, max: numb
 
 export async function readSettingMap() {
   const rows = await prisma.setting.findMany();
-  return Object.fromEntries(rows.map((row) => [row.key, decodeSetting(row.key, row.value)]));
+  // Retired model keys are not needed, including unreadable keys from old hosts.
+  return Object.fromEntries(rows.filter(row => !["gemini_api_key", "groq_api_key"].includes(row.key))
+    .map((row) => [row.key, decodeSetting(row.key, row.value)]));
 }
 
 export async function getSettings(): Promise<AppSettings> {
   const map = await readSettingMap();
   const env = process.env;
-  // Default is rules-only: feed capture and lead labels work without Ollama/Gemini/Groq.
-  // Owner can still switch back to auto/ollama/... in Settings later.
-  const provider = pick(map.ai_provider, undefined, "rules");
-  const allowed: AiProviderName[] = ["auto", "ollama", "gemini", "groq", "rules"];
+  // Legacy fields remain readable for backup compatibility; AI is no longer a runtime capability.
   return {
-    aiProvider: (allowed.includes(provider as AiProviderName) ? provider : "rules") as AiProviderName,
-    ollamaBaseUrl: pick(map.ollama_base_url, env.OLLAMA_BASE_URL, "http://127.0.0.1:11434").replace(/\/$/, ""),
-    ollamaModel: pick(map.ollama_model, env.OLLAMA_MODEL, "qwen2.5:7b"),
-    geminiModel: pick(map.gemini_model, undefined, "gemini-2.0-flash"),
-    geminiApiKey: pick(map.gemini_api_key, env.GEMINI_API_KEY),
-    groqModel: resolveGroqModel(pick(map.groq_model, env.GROQ_MODEL, "")),
-    groqApiKey: pick(map.groq_api_key, env.GROQ_API_KEY),
+    aiProvider: "rules",
+    ollamaBaseUrl: "",
+    ollamaModel: "",
+    geminiModel: "",
+    geminiApiKey: "",
+    groqModel: "",
+    groqApiKey: "",
     fetchIntervalMinutes: num(map.fetch_interval_minutes, 10, 5, 180),
     jitterMinutes: num(map.jitter_minutes, 1, 0, 30),
     maxGroupsPerCycle: num(map.max_groups_per_cycle, 20, 1, 20),
@@ -117,10 +115,10 @@ export async function getSettings(): Promise<AppSettings> {
     notifySound: map.notify_sound !== "false",
     notifyMinScore: num(map.notify_min_score, 50, 0, 100),
     summaryTime: /^\d{2}:\d{2}$/.test(pick(map.summary_time, undefined, "08:00")) ? pick(map.summary_time, undefined, "08:00") : "08:00",
-    embedModel: pick(map.embed_model, env.OLLAMA_EMBED_MODEL, "bge-m3"),
-    geminiEmbedModel: pick(map.gemini_embed_model, env.GEMINI_EMBED_MODEL, "text-embedding-004"),
-    ocrEnabled: map.ocr_enabled !== "false",
-    visionOcr: map.vision_ocr !== "false",
+    embedModel: "",
+    geminiEmbedModel: "",
+    ocrEnabled: false,
+    visionOcr: false,
     lastBackupAt: map.backup_last_at || "",
     lastBackupFile: map.backup_last_file || "",
     embedLastOk: map.embed_last_ok === "true",
@@ -169,13 +167,6 @@ export async function upsertSettings(entries: Record<string, string>) {
 
 export function publicSettings(settings: AppSettings) {
   return {
-    aiProvider: settings.aiProvider,
-    ollamaBaseUrl: settings.ollamaBaseUrl,
-    ollamaModel: settings.ollamaModel,
-    geminiModel: settings.geminiModel,
-    groqModel: settings.groqModel,
-    geminiKeySet: Boolean(settings.geminiApiKey),
-    groqKeySet: Boolean(settings.groqApiKey),
     fetchIntervalMinutes: settings.fetchIntervalMinutes,
     jitterMinutes: settings.jitterMinutes,
     maxGroupsPerCycle: settings.maxGroupsPerCycle,
@@ -195,15 +186,8 @@ export function publicSettings(settings: AppSettings) {
     notifySound: settings.notifySound,
     notifyMinScore: settings.notifyMinScore,
     summaryTime: settings.summaryTime,
-    embedModel: settings.embedModel,
-    geminiEmbedModel: settings.geminiEmbedModel,
-    ocrEnabled: settings.ocrEnabled,
-    visionOcr: settings.visionOcr,
     lastBackupAt: settings.lastBackupAt,
     lastBackupFile: settings.lastBackupFile,
-    embedLastOk: settings.embedLastOk,
-    embedLastMessage: settings.embedLastMessage,
-    embedLastAt: settings.embedLastAt,
     serviceProvinces: settings.serviceProvinces,
     serviceAreaNotifyOnly: settings.serviceAreaNotifyOnly,
     followUpDays: settings.followUpDays,

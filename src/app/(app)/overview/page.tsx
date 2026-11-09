@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Copy, ExternalLink, LogIn, RefreshCw } from "lucide-react";
 import { Badge, Button, Card } from "@/components/ui";
-import { AiProviderUsage } from "@/components/ai-provider-usage";
 import { LEVEL_STYLE, LevelDot, useSystemOverview } from "@/components/system-overview";
 import { timeAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -86,7 +85,7 @@ export default function OverviewPage() {
             ภาพรวมระบบ
           </h1>
           <p className="mt-1 text-sm text-muted">
-            สถานะ Facebook, ส่วนขยาย, AI และระบบเบื้องหลัง อัปเดตเองทุก 15 วินาที
+            สถานะ Facebook, ส่วนขยาย และระบบเบื้องหลัง อัปเดตเองทุก 15 วินาที
             {data ? ` · ตรวจล่าสุด ${new Date(data.generatedAt).toLocaleTimeString("th-TH", { timeZone: "Asia/Bangkok" })}` : ""}
           </p>
         </div>
@@ -109,7 +108,6 @@ export default function OverviewPage() {
               เบราว์เซอร์นี้: {installedHere ? `มีส่วนขยาย v${installedHere}` : "ไม่พบส่วนขยาย"}
             </Badge>
           </div>
-          <AiProviderUsage />
 
           {data.sections.map((item) => (
             <Card key={item.id} className="mt-5">

@@ -61,19 +61,19 @@ describe("watchdog assessment", () => {
     expect(level({ parseRecent: { total: 40, noAuthor: 30, noText: 1 } }, "parse")).toBe("bad");
     expect(level({ parseRecent: { total: 5, noAuthor: 5, noText: 5 } }, "parse")).toBe("ok");
   });
-  it("flags all AI providers cooling down, the worker and the DB", () => {
-    expect(level({ aiProvidersReady: 0 }, "ai")).toBe("bad");
-    expect(level({ aiMode: "rules", aiProvidersReady: 0 }, "ai")).toBe("off");
+  it("keeps local rules available without model providers and monitors the worker and DB", () => {
+    expect(level({ aiProvidersReady: 0 }, "bot")).toBe("ok");
+    expect(level({ aiMode: "rules", aiProvidersReady: 0 }, "bot")).toBe("ok");
     expect(level({ workerLastTickAt: NOW - 11 * 60_000 }, "worker")).toBe("bad");
     expect(level({ dbError: "timeout" }, "db")).toBe("bad");
     expect(level({ dbTransientErrors: 6 }, "db")).toBe("warn");
   });
   it("keeps since/lastOkAt across runs", () => {
     const first = mergeWatchState({}, assessWatch(healthy, thresholds), NOW);
-    const second = mergeWatchState(first, assessWatch({ ...healthy, now: NOW + 300_000, aiProvidersReady: 0 }, thresholds), NOW + 300_000);
-    expect(second.ai.level).toBe("bad");
-    expect(second.ai.lastOkAt).toBe(new Date(NOW).toISOString());
-    expect(second.ai.since).toBe(new Date(NOW + 300_000).toISOString());
+    const second = mergeWatchState(first, assessWatch({ ...healthy, now: NOW + 300_000, workerLastTickAt: NOW - 11 * 60_000 }, thresholds), NOW + 300_000);
+    expect(second.worker.level).toBe("bad");
+    expect(second.worker.lastOkAt).toBe(new Date(NOW).toISOString());
+    expect(second.worker.since).toBe(new Date(NOW + 300_000).toISOString());
     expect(second.db.since).toBe(new Date(NOW).toISOString());
     expect(parseWatchState("not json")).toEqual({});
   });

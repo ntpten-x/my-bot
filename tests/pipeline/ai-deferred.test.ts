@@ -24,20 +24,8 @@ beforeEach(()=>{
   vi.stubGlobal("fetch",vi.fn(()=>{throw Error("must not contact a provider");}));
 });
 afterEach(()=>{vi.useRealTimers();vi.unstubAllEnvs();vi.unstubAllGlobals();});
-it("keeps a ninth-attempt job pending across repeated quota waits with claim fencing",async()=>{
-  const retryAt=NOW+7*3600_000;
-  mocks.classify.mockResolvedValue({results:[],providersById:{p:"rules"},errors:[{name:"quota",message:"daily exhausted",deferred:true,retryAt}],attemptedIds:[],retryAt});
-  for(let i=0;i<2;i++)await processAiQueue();
-  const writes=mocks.update.mock.calls.map(([args])=>args).filter(args=>args.where.id==="job" && typeof args.data.attempts === "number");
-  expect(writes).toHaveLength(2);
-  for(const args of writes){expect(args.where).toMatchObject({status:"running",claimToken:expect.any(String)});expect(args.data).toMatchObject({status:"pending",attempts:9,latencyMs:null,nextAttemptAt:new Date(retryAt),claimToken:null});}
-  expect(fetch).not.toHaveBeenCalled();
-});
-it("still spends an attempt and pauses a job when a real call fails ten times",async()=>{
-  mocks.classify.mockResolvedValue({results:[],providersById:{p:"rules"},errors:[{name:"provider",message:"HTTP 503"}],attemptedIds:["p"]});
-  await processAiQueue();
-  expect(mocks.update.mock.calls.map(([args])=>args).find(args=>args.where.id==="job" && typeof args.data.attempts === "number").data).toMatchObject({status:"failed",attempts:10});
-});
+it("does not touch historical jobs or providers after removal",async()=>{for(let i=0;i<2;i++)expect(await processAiQueue()).toBe(0);expect(mocks.jobs).not.toHaveBeenCalled();expect(mocks.update).not.toHaveBeenCalled();expect(mocks.classify).not.toHaveBeenCalled();expect(fetch).not.toHaveBeenCalled();});
+
 it("waits for every restriction on a provider and computes the exact minute release",async()=>{
   const now=new Date(NOW),minute=new MinuteWindow();
   const p:RouterProvider={id:"p",name:"p",enabled:true,priority:1,tasks:["classify"],cooldownUntil:new Date(NOW+30_000),usageDay:dayKey(now),requestsToday:10,limitPerDay:10,limitPerMinute:1,resetHourUtc:0};

@@ -2,18 +2,11 @@
 
 import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
-import { Button, Card, Input, Label, Select } from "@/components/ui";
+import { Button, Card, Input, Label } from "@/components/ui";
 import { Dialog } from "@/components/dialog";
 import { ApiError, api } from "@/components/api";
 
 type Settings = {
-  aiProvider: "auto" | "ollama" | "gemini" | "groq" | "rules";
-  ollamaBaseUrl: string;
-  ollamaModel: string;
-  geminiModel: string;
-  groqModel: string;
-  geminiKeySet: boolean;
-  groqKeySet: boolean;
   fetchIntervalMinutes: number;
   jitterMinutes: number;
   maxGroupsPerCycle: number;
@@ -43,15 +36,8 @@ type Settings = {
   quietWindow?: string;
   quietPauseWhenLocked?: boolean;
   summaryTime: string;
-  embedModel: string;
-  geminiEmbedModel: string;
-  ocrEnabled: boolean;
-  visionOcr: boolean;
   lastBackupAt: string;
   lastBackupFile: string;
-  embedLastOk: boolean;
-  embedLastMessage: string;
-  embedLastAt: string;
 };
 
 type RetentionInfo = {
@@ -61,8 +47,6 @@ type RetentionInfo = {
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState<Settings | null>(null);
-  const [geminiApiKey, setGeminiApiKey] = useState("");
-  const [groqApiKey, setGroqApiKey] = useState("");
   const [lineToken, setLineToken] = useState("");
   const [smtpPass, setSmtpPass] = useState("");
   const [clearDiscord, setClearDiscord] = useState(false);
@@ -98,10 +82,6 @@ export default function SettingsPage() {
           ...settings,
           updateDiscordWebhook: clearDiscord || settings.discordWebhook.length > 0,
           discordWebhook: clearDiscord ? "" : settings.discordWebhook,
-          updateGeminiKey: geminiApiKey.length > 0,
-          geminiApiKey,
-          updateGroqKey: groqApiKey.length > 0,
-          groqApiKey,
           updateLineToken: lineToken.length > 0,
           lineToken,
           updateSmtpPass: smtpPass.length > 0,
@@ -110,28 +90,11 @@ export default function SettingsPage() {
       });
       setSettings(data.settings);
       setClearDiscord(false);
-      setGeminiApiKey("");
-      setGroqApiKey("");
       setLineToken("");
       setSmtpPass("");
       setMessage("บันทึกแล้ว");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "บันทึกไม่สำเร็จ");
-    }
-  }
-
-  async function test(provider: "ollama" | "gemini" | "groq" | "rules") {
-    setMessage("");
-    setError("");
-    try {
-      const data = await api<{ ok: boolean; message: string }>("/api/settings/test-ai", {
-        method: "POST",
-        body: JSON.stringify({ provider }),
-      });
-      if (data.ok) setMessage(data.message);
-      else setError(data.message);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "ทดสอบไม่สำเร็จ");
     }
   }
 
@@ -141,12 +104,8 @@ export default function SettingsPage() {
     <div>
       <h1 className="text-2xl font-semibold">ตั้งค่า</h1>
       <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
-        เลือกตัวช่วยจัดหมวดได้หลายชั้น ถ้าตัวแรกใช้ไม่ได้ ระบบจะขยับไปตัวถัดไป และถ้าไม่มี AI เลยจะใช้คำจับคู่ในหมวดแทน
+        บอทจัดหมวดและเลือกข้อความด้วยกฎ คำสำคัญ และข้อความสำเร็จรูป ตั้งจังหวะดึงข้อมูลและช่องทางแจ้งเตือนได้ที่นี่
       </p>
-      <Link href="/settings/ai-providers" className="mt-4 block rounded-2xl border border-line bg-card p-4 text-sm shadow-sm hover:bg-paper">
-        <span className="font-semibold">ผู้ให้บริการ AI และ API key →</span>
-        <span className="mt-1 block text-muted">เพิ่ม Groq, Gemini, OpenRouter, OpenCode Zen ฯลฯ เรียงลำดับ และสลับอัตโนมัติเมื่อโควตาหมด</span>
-      </Link>
       <div className="mt-3 grid gap-3 md:grid-cols-2">
         <Link href="/settings/extension" className="block rounded-2xl border border-line bg-card p-4 text-sm shadow-sm hover:bg-paper">
           <span className="font-semibold">ส่วนขยาย Chrome: ดาวน์โหลดและจับคู่ →</span>
@@ -162,55 +121,6 @@ export default function SettingsPage() {
         </Link>
       </div>
       <form onSubmit={save} className="mt-5 space-y-4">
-        <Card className="space-y-3">
-          <h2 className="font-semibold">ผู้ช่วยจัดหมวด</h2>
-          <div>
-            <Label>โหมด</Label>
-            <Select value={settings.aiProvider} onChange={(event) => setSettings({ ...settings, aiProvider: event.target.value as Settings["aiProvider"] })}>
-              <option value="rules">ใช้คำจับคู่เท่านั้น (ค่าเริ่มต้น — บอททำงานเอง ไม่รอ AI)</option>
-              <option value="auto">อัตโนมัติ: Ollama แล้ว Gemini แล้ว Groq แล้วคำจับคู่</option>
-              <option value="ollama">Ollama อย่างเดียว แล้วถอยไปคำจับคู่</option>
-              <option value="gemini">Gemini อย่างเดียว แล้วถอยไปคำจับคู่</option>
-              <option value="groq">Groq อย่างเดียว แล้วถอยไปคำจับคู่</option>
-            </Select>
-          </div>
-          <div className="grid gap-3 md:grid-cols-2">
-            <div>
-              <Label>ที่อยู่ Ollama</Label>
-              <Input value={settings.ollamaBaseUrl} onChange={(event) => setSettings({ ...settings, ollamaBaseUrl: event.target.value })} />
-            </div>
-            <div>
-              <Label>โมเดล Ollama</Label>
-              <Input value={settings.ollamaModel} onChange={(event) => setSettings({ ...settings, ollamaModel: event.target.value })} />
-            </div>
-            <div>
-              <Label>โมเดล Gemini</Label>
-              <Input value={settings.geminiModel} onChange={(event) => setSettings({ ...settings, geminiModel: event.target.value })} />
-            </div>
-            <div>
-              <Label>คีย์ Gemini {settings.geminiKeySet ? "(มีค่าแล้ว ว่างไว้ถ้าไม่เปลี่ยน)" : ""}</Label>
-              <Input type="password" value={geminiApiKey} onChange={(event) => setGeminiApiKey(event.target.value)} placeholder="GEMINI_API_KEY" />
-            </div>
-            <div>
-              <Label>โมเดล Groq</Label>
-              <Input value={settings.groqModel} onChange={(event) => setSettings({ ...settings, groqModel: event.target.value })} />
-            </div>
-            <div>
-              <Label>คีย์ Groq {settings.groqKeySet ? "(มีค่าแล้ว ว่างไว้ถ้าไม่เปลี่ยน)" : ""}</Label>
-              <Input type="password" value={groqApiKey} onChange={(event) => setGroqApiKey(event.target.value)} placeholder="GROQ_API_KEY" />
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="outline" onClick={() => test("ollama")}>ทดสอบ Ollama</Button>
-            <Button type="button" variant="outline" onClick={() => test("gemini")}>ทดสอบ Gemini</Button>
-            <Button type="button" variant="outline" onClick={() => test("groq")}>ทดสอบ Groq</Button>
-            <Button type="button" variant="outline" onClick={() => test("rules")}>ทดสอบคำจับคู่</Button>
-            <Button type="button" variant="ghost" onClick={async () => {
-              const data = await api<{ deleted: number }>("/api/settings/clear-cache", { method: "POST" });
-              setMessage(`ล้างแคช AI แล้ว ${data.deleted} รายการ`);
-            }}>ล้างแคช AI</Button>
-          </div>
-        </Card>
         <Card className="space-y-3">
           <h2 className="font-semibold">จังหวะดึงกลุ่ม</h2>
           <div className="grid gap-3 md:grid-cols-3">
@@ -295,7 +205,7 @@ export default function SettingsPage() {
         </Card>
         <Card className="space-y-3">
           <h2 className="font-semibold">ลบข้อมูลเก่าอัตโนมัติ</h2>
-          <p className="text-sm text-muted-foreground">ระบบลบโพสต์ที่ดึงมาเก่ากว่าที่กำหนดทุกวันเวลา 03:30 น. พร้อมผล AI แจ้งเตือน และประวัติการดึงที่เก่ากว่ากัน โพสต์ที่ลบแล้วจะไม่ถูกเก็บหรือแจ้งเตือนซ้ำ</p>
+          <p className="text-sm text-muted-foreground">ระบบลบโพสต์ที่ดึงมาเก่ากว่าที่กำหนดทุกวันเวลา 03:30 น. พร้อมแจ้งเตือน และประวัติการดึงที่เก่ากว่ากัน โพสต์ที่ลบแล้วจะไม่ถูกเก็บหรือแจ้งเตือนซ้ำ</p>
           <div className="grid gap-3 md:grid-cols-2">
             <div>
               <Label>เก็บโพสต์ไว้ (วัน)</Label>
@@ -331,50 +241,7 @@ export default function SettingsPage() {
               <Label>เวลาสรุปรายวัน (เอเชีย/กรุงเทพ)</Label>
               <Input value={settings.summaryTime} onChange={(event) => setSettings({ ...settings, summaryTime: event.target.value })} placeholder="08:00" />
             </div>
-            <div>
-              <Label>โมเดลฝังข้อความ Ollama</Label>
-              <Input value={settings.embedModel} onChange={(event) => setSettings({ ...settings, embedModel: event.target.value })} />
-            </div>
-            <div>
-              <Label>โมเดลฝังข้อความ Gemini</Label>
-              <Input value={settings.geminiEmbedModel} onChange={(event) => setSettings({ ...settings, geminiEmbedModel: event.target.value })} />
-            </div>
           </div>
-          <p className="text-sm text-muted">
-            สถานะ embedding: {settings.embedLastMessage || "ยังไม่ได้ทดสอบ"} {settings.embedLastAt ? `(${settings.embedLastAt})` : ""}
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="outline" onClick={async () => {
-              setMessage("");
-              setError("");
-              try {
-                const data = await api<{ ok: boolean; message: string; dimensions: number; missing: number }>("/api/settings/test-embed", { method: "POST" });
-                const text = `${data.message} ขาดอีก ${data.missing} โพสต์`;
-                if (data.ok) setMessage(text);
-                else setError(text);
-              } catch (err) {
-                setError(err instanceof ApiError ? err.message : "ทดสอบ embedding ไม่สำเร็จ");
-              }
-            }}>ทดสอบ embedding</Button>
-            <Button type="button" variant="outline" onClick={async () => {
-              setMessage("");
-              setError("");
-              try {
-                const data = await api<{ queued: number }>("/api/settings/backfill-embeddings", { method: "POST" });
-                setMessage(`ส่งให้ worker สร้างเวกเตอร์ใหม่ ${data.queued} โพสต์แล้ว`);
-              } catch (err) {
-                setError(err instanceof ApiError ? err.message : "เติม embedding ไม่สำเร็จ");
-              }
-            }}>สร้างเวกเตอร์ใหม่ในเบื้องหลัง</Button>
-          </div>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={settings.ocrEnabled} onChange={(event) => setSettings({ ...settings, ocrEnabled: event.target.checked })} />
-            อ่านข้อความในรูป (OCR ไทย+อังกฤษ)
-          </label>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={settings.visionOcr} onChange={(event) => setSettings({ ...settings, visionOcr: event.target.checked })} />
-            ถ้ามี Ollama ที่อ่านรูปได้ (qwen2.5vl หรือ llava) ให้ใช้ก่อน OCR
-          </label>
           <p className="text-sm text-muted">
             สำรองฐานล่าสุด: {settings.lastBackupAt ? `${settings.lastBackupFile} (${settings.lastBackupAt})` : "ยังไม่มี — ระบบสำรองทุกวัน 03:00"}
             . ข้อมูลหลักอยู่บน Supabase ถ้าต้องกู้คืน ให้หยุดแอปแล้วรัน npm run db:restore -- (ไฟล์สำรอง) --replace
