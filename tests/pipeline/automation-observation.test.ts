@@ -2,6 +2,15 @@ import { expect, it } from "vitest";
 import { summarizeObservation } from "../../scripts/observe-automation.mjs";
 
 const start = Date.parse("2026-11-09T00:00:00Z");
+it("measures rules-only processing backlog independently of retired AI work", () => {
+  expect(summarizeObservation([sample(1)]).max.processingPending).toBeNull();
+  const report = summarizeObservation([
+    { ...sample(1), processing: { pending: 8, running: 2, oldestPendingSeconds: 900 } },
+    { ...sample(60), processing: { pending: 0, running: 0, oldestPendingSeconds: 0 } },
+  ]);
+  expect(report.max).toMatchObject({ aiPending: 0, processingPending: 8, processingPendingSeconds: 900 });
+  expect(report.processing).toMatchObject({ pending: 0 });
+});
 function sample(seconds: number) {
   return { at: new Date(start + seconds * 1000).toISOString(), since: new Date(start).toISOString(),
     collection: { runs: 3, newPosts: 8, errors: 1 }, comments: {}, stages: [],

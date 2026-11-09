@@ -1,6 +1,6 @@
 import { spawn, execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { access, chmod, mkdir, stat, mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import { access, chmod, mkdir, stat, mkdtemp, writeFile, readFile, rm, rename } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
@@ -17,14 +17,25 @@ let stopping = false;
 const recoveryTimers = new Set();
 const componentState = {};
 let stateWrite = Promise.resolve();
+let heartbeatTimer;
+function persistComponents() {
+  const state = JSON.stringify({ session: process.env.MYBOT_WORKSTATION_SESSION || null, at: new Date().toISOString(), phase: stopping ? 'stopped' : Object.values(componentState).some(value => ['review', 'recovering'].includes(value)) ? 'degraded' : 'running', components: componentState });
+  stateWrite = stateWrite.catch(() => undefined).then(async () => {
+    const file = path.join(dataRoot, 'bot-desktop/components.json');
+    const temporary = `${file}.${process.pid}.tmp`;
+    await writeFile(temporary, state, { mode: 0o600 });
+    await rename(temporary, file);
+  }).catch(() => undefined);
+}
 function recordComponent(name, phase) {
   componentState[name] = phase;
-  const state = JSON.stringify({ at: new Date().toISOString(), phase: Object.values(componentState).some(value => ['review', 'recovering'].includes(value)) ? 'degraded' : 'running', components: componentState });
-  stateWrite = stateWrite.catch(() => undefined).then(() => writeFile(path.join(dataRoot, 'bot-desktop/components.json'), state, { mode: 0o600 })).catch(() => undefined);
+  persistComponents();
 }
 function shutdown(code) {
   if (stopping) return;
   stopping = true;
+  clearInterval(heartbeatTimer);
+  if (Object.keys(componentState).length) persistComponents();
   for (const timer of recoveryTimers) clearTimeout(timer);
   // Signal only process groups created by this supervisor; no PID files or global pkill.
   for (const child of [...children].reverse()) {
@@ -244,6 +255,8 @@ try {
       start('Web viewer', 'websockify', plan.proxy, env);
       await waitFor(() => isListening(plan.viewerPort), 'Web viewer');
       start('Browser', browser, plan.chrome, env);
+      heartbeatTimer = setInterval(persistComponents, 15_000);
+      heartbeatTimer.unref();
       console.log(`Bot desktop started. Open ${plan.viewer} and enter your local viewer password.`);
       console.log('Keep this WSL process running. You may close/minimize the viewer; do not minimize Chrome inside it. No automation settings were changed.');
     }

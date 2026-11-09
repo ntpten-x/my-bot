@@ -3,6 +3,14 @@ import net from 'node:net';
 export const WORKSTATION_INTERVAL_MS = 15_000;
 export const restartDelay = failures => Math.min(300_000, 3000 * 2 ** Math.min(7, Math.max(0, failures - 1)));
 
+// Listener availability alone cannot prove the desktop supervisor is progressing.
+export function desktopComponentsReady(details, session, now = Date.now()) {
+  const age = now - Date.parse(details?.at);
+  return Boolean(session && details?.session === session && age >= 0 && age < 60_000 &&
+    details.phase === 'running' && ['Virtual display', 'Window manager', 'Desktop viewer', 'Web viewer', 'Browser']
+      .every(name => details.components?.[name] === 'running'));
+}
+
 export function desktopPorts(raw = {}) {
   const vncPort = raw.vncPort ?? 5905, viewerPort = raw.viewerPort ?? 6085;
   if (![vncPort, viewerPort].every(port => Number.isInteger(port) && port >= 1024 && port <= 65535) || vncPort === viewerPort) throw new Error('Invalid Desktop viewer ports.');

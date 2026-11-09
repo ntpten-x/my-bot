@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { open, readFile, writeFile, rename, mkdir, chmod } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { desktopAction, desktopPorts, portOpen, webReady, viewerReady, restartDelay, workstationConfig, WORKSTATION_INTERVAL_MS } from './lib/workstation.mjs';
+import { desktopAction, desktopComponentsReady, desktopPorts, portOpen, webReady, viewerReady, restartDelay, workstationConfig, WORKSTATION_INTERVAL_MS } from './lib/workstation.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dataRoot = process.env.MYBOT_DATA_ROOT || path.join(root, 'data');
@@ -83,7 +83,8 @@ async function main() {
   const persist = async () => { state.at = new Date().toISOString(); await saveJson(statusFile, state); };
   const start = (name, executable, childArgs, onExit) => {
     if (stopping) return null;
-    const child = spawn(executable, childArgs, { cwd: root, detached: true, stdio: ['ignore', 'inherit', 'inherit'], shell: false });
+    const child = spawn(executable, childArgs, { cwd: root, detached: true, stdio: ['ignore', 'inherit', 'inherit'], shell: false,
+      env: { ...process.env, MYBOT_WORKSTATION_SESSION: state.session } });
     children.add(child);
     let finished = false;
     const done = () => { if (finished) return; finished = true; children.delete(child); if (!stopping) onExit(); };
@@ -159,7 +160,7 @@ async function main() {
       state.desktopComponents = desktopChild && details ? details : null;
       firstCheck = false;
       state.phase = ['running', 'existing', 'remote'].includes(state.web) && ['running', 'existing'].includes(state.desktop) ? 'running' : 'needs-attention';
-      if (state.desktopComponents?.phase === 'degraded') state.phase = 'needs-attention';
+      if (desktopChild && !desktopComponentsReady(details, state.session)) state.phase = 'needs-attention';
       await persist();
       for (let step = 0; step < WORKSTATION_INTERVAL_MS / 250 && !stopping; step++) await new Promise(resolve => setTimeout(resolve, 250));
     }

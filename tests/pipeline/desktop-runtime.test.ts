@@ -49,7 +49,7 @@ linuxOnly('runs the real supervisor in remote mode, never starts local web, and 
     copyFileSync('scripts/start-workstation.mjs', path.join(root, 'scripts/start-workstation.mjs'));
     const actualModule = new URL(`file://${path.resolve('scripts/lib/workstation.mjs')}`).href;
     writeFileSync(path.join(root, 'scripts/lib/workstation.mjs'), `
-      export {desktopAction, desktopPorts, restartDelay, workstationConfig} from ${JSON.stringify(actualModule)};
+      export {desktopAction, desktopComponentsReady, desktopPorts, restartDelay, workstationConfig} from ${JSON.stringify(actualModule)};
       export const WORKSTATION_INTERVAL_MS=250;
       export const webReady=async()=>false, portOpen=async()=>false, viewerReady=async()=>false;
     `);

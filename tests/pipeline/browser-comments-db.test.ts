@@ -735,7 +735,14 @@ describe.skipIf(!fixture.enabled)("read-only automation observation", () => {
         await prisma.extensionHeartbeat.create({ data: { id: "observation-device", version: EXPECTED_EXTENSION_VERSION, outboxSize: 2 } });
         await prisma.setting.create({ data: { key: "extension_capture", value: JSON.stringify({ at: new Date().toISOString(), pendingPosts: 5, parkedFeeds: 1, oldestPendingAt: Date.now() - 60000, token: "synthetic-private-value" }) } });
         const before = await readCommentControl();
+        await prisma.post.update({ where: { id: s.post.id }, data: {
+            processingState: "pending_edit", processingQueuedAt: new Date(Date.now() - 900000),
+            processingToken: "synthetic-claim", processingRetryAt: new Date(Date.now() + 60000),
+        } });
         const sample = await collectObservation(prisma, since);
+        expect(sample.processing.pending).toBeGreaterThanOrEqual(1);
+        expect(sample.processing.running).toBeGreaterThanOrEqual(1);
+        expect(sample.processing.oldestPendingSeconds).toBeGreaterThanOrEqual(900);
         expect(sample.collection).toMatchObject({ runs: 5, newPosts: 10, loadingOrStalled: 1,
             incomplete: fixtures.filter(run => isIncompleteScrape({ ...run, postsFound: run.found })).length });
         expect(sample.comments).toEqual({ browser_ready: 1 });

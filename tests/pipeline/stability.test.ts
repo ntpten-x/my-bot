@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { assessWatch, mergeWatchState, parseWatchState, type WatchFacts } from "../../src/lib/watchdog";
+import { assessWatch, mergeWatchState, parseWatchState, planWatchAlerts, type WatchFacts } from "../../src/lib/watchdog";
 import { tuneDatabaseUrl, prisma } from "../../src/lib/prisma";
 import { acquireLease, claimOnce, releaseLease } from "../../src/lib/lease";
 
@@ -34,6 +34,15 @@ const healthy: WatchFacts = {
 const level = (facts: Partial<WatchFacts>, key: string) => assessWatch({ ...healthy, ...facts }, thresholds).find((c) => c.key === key)?.level;
 
 describe("watchdog assessment", () => {
+  it("does not send a false post recovery when collection goes offline", () => {
+    const previous = mergeWatchState({}, assessWatch({ ...healthy, lastExtensionPostAt: NOW - 7 * 3600_000 }, thresholds), NOW);
+    const conditions = assessWatch({ ...healthy, lastHeartbeatAt: NOW - 3600_000, lastExtensionPostAt: NOW - 7 * 3600_000 }, thresholds);
+    const next = mergeWatchState(previous, conditions, NOW + 300_000);
+    const plan = planWatchAlerts(previous, next, conditions, { posts: { at: NOW, since: previous.posts.since } }, NOW + 300_000, 3600_000);
+    expect(plan.send.some(item => item.condition.key === 'posts' && item.kind === 'recovered')).toBe(false);
+    expect(next.posts.lastOkAt).toBeNull();
+    expect(plan.alerted.posts).toBeDefined();
+  });
   it("is all green for a healthy system", () => {
     expect(assessWatch(healthy, thresholds).every((c) => c.level === "ok")).toBe(true);
   });
@@ -55,11 +64,13 @@ describe("watchdog assessment", () => {
   });
   it("flags no posts only while the extension is online", () => {
     expect(level({ lastExtensionPostAt: NOW - 7 * 3600_000 }, "posts")).toBe("bad");
-    expect(level({ lastExtensionPostAt: NOW - 7 * 3600_000, lastHeartbeatAt: NOW - 3600_000 }, "posts")).toBe("ok");
+    expect(level({ lastExtensionPostAt: NOW - 7 * 3600_000, lastHeartbeatAt: NOW - 3600_000 }, "posts")).toBe("warn");
+    expect(level({ extensionEnabled: false }, "posts")).toBe("off");
+    expect(level({ lastHeartbeatAt: NOW + 60_000 }, "posts")).toBe("warn");
   });
   it("flags a parse-quality spike against the baseline", () => {
     expect(level({ parseRecent: { total: 40, noAuthor: 30, noText: 1 } }, "parse")).toBe("bad");
-    expect(level({ parseRecent: { total: 5, noAuthor: 5, noText: 5 } }, "parse")).toBe("ok");
+    expect(level({ parseRecent: { total: 5, noAuthor: 5, noText: 5 } }, "parse")).toBe("warn");
   });
   it("keeps local rules available without model providers and monitors the worker and DB", () => {
     expect(level({ aiProvidersReady: 0 }, "bot")).toBe("ok");

@@ -45,9 +45,10 @@ export function summarizeObservation(samples, options = { hours: 24, intervalSec
   return { startedAt, lastSampleAt: last?.at ?? null, expectedExtensionVersion: last?.expectedExtensionVersion ?? extensionVersion,
     requestedHours: options.hours, elapsedSeconds, successfulSamples: valid.length, failedSamples, longestGapSeconds,
     coverageComplete: !incompleteReasons.length, incompleteReasons,
-    collection: last?.collection ?? null, comments: last?.comments ?? null, stages: last?.stages ?? [],
+    collection: last?.collection ?? null, processing: last?.processing ?? null, comments: last?.comments ?? null, stages: last?.stages ?? [],
     max: { overdueSources: maximum(row => row.sources?.overdueSources), overdueSeconds: maximum(row => row.sources?.maxOverdueSeconds),
       aiPending: maximum(row => row.ai?.pending), aiPendingSeconds: maximum(row => row.ai?.oldestPendingSeconds),
+      processingPending: maximum(row => row.processing?.pending), processingPendingSeconds: maximum(row => row.processing?.oldestPendingSeconds),
       outboxBatches: maximum(row => row.extension?.outboxBatches), pendingPosts: maximum(row => row.extension?.capture?.pendingPosts),
       closingTabs: maximum(row => row.extension?.tabs?.closing), idleReaders: maximum(row => row.extension?.tabs?.idleReaders) },
     noCurrentExtensionSamples: valid.filter(row => !row.extension?.onlineDevices).length,
@@ -80,6 +81,11 @@ export async function collectObservation(db, since) {
       SELECT count(*)::int AS "pending",
         coalesce(max(extract(epoch FROM ((clock_timestamp() AT TIME ZONE 'UTC')-"createdAt"))),0)::float8 AS "oldestPendingSeconds"
       FROM "AiJob" WHERE "status" IN ('pending','running')`;
+    const [processing] = await tx.$queryRaw`
+      SELECT count(*)::int AS "pending",
+        count(*) FILTER (WHERE "processingToken" IS NOT NULL AND "processingRetryAt">(clock_timestamp() AT TIME ZONE 'UTC'))::int AS "running",
+        coalesce(max(extract(epoch FROM ((clock_timestamp() AT TIME ZONE 'UTC')-"processingQueuedAt"))),0)::float8 AS "oldestPendingSeconds"
+      FROM "Post" WHERE "processingState" IN ('pending_new','pending_edit')`;
     const comments = await tx.$queryRaw(Prisma.sql`
       SELECT "status", count(*)::int AS "count" FROM "AutoCommentJob"
       WHERE "deliveryMode"='extension' AND "createdAt">=${since.toISOString()}::timestamp GROUP BY "status"`);
@@ -122,7 +128,7 @@ export async function collectObservation(db, since) {
     } catch { /* Unknown or old-version lifecycle evidence remains null. */ }
     const windowMinutes = Math.max((Date.now() - since.getTime()) / 60000, 1 / 60);
     return { at: new Date().toISOString(), since: since.toISOString(), windowMinutes, expectedExtensionVersion: extensionVersion,
-      collection: { ...collection, newPostsPerMinute: collection.newPosts / windowMinutes }, sources, ai,
+      collection: { ...collection, newPostsPerMinute: collection.newPosts / windowMinutes }, sources, ai, processing,
       comments: Object.fromEntries(comments.map(row => [row.status, row.count])), latency, stages,
       extension: { onlineDevices: heartbeat._count, onlineVersions: onlineVersions.map(row => ({ version: row.version, devices: row._count._all })), outboxBatches: heartbeat._count ? heartbeat._sum.outboxSize ?? 0 : null, lastSeenAt: heartbeat._max.lastSeenAt, capture, tabs } };
   }, { timeout: 15000 });

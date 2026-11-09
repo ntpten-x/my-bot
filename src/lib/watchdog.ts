@@ -58,7 +58,7 @@ export function assessWatch(facts: WatchFacts, t: WatchThresholds): WatchConditi
 
   if (facts.enabledExtensionSources > 0) {
     const offlineMs = facts.lastHeartbeatAt ? facts.now - facts.lastHeartbeatAt : Infinity;
-    const online = offlineMs <= t.watchExtOfflineMinutes * 60_000;
+    const online = offlineMs >= 0 && offlineMs <= t.watchExtOfflineMinutes * 60_000;
     if (!online) {
       add("extension", "ส่วนขยาย Chrome", "bad", facts.lastHeartbeatAt ? `ส่วนขยายออฟไลน์ ${Math.round(offlineMs / 60_000)} นาที` : "ยังไม่เคยได้รับสัญญาณจากส่วนขยาย", "เปิด Chrome ที่ติดตั้งส่วนขยาย ตรวจว่าโทเคนตรงกันและเปิดใช้งานอยู่");
     } else if (facts.extensionEnabled === false) {
@@ -68,7 +68,11 @@ export function assessWatch(facts: WatchFacts, t: WatchThresholds): WatchConditi
     } else add("extension", "ส่วนขยาย Chrome", "ok", "ออนไลน์และเปิดดึงอัตโนมัติ");
 
     const postAge = facts.lastExtensionPostAt ? facts.now - facts.lastExtensionPostAt : Infinity;
-    if (online && facts.extensionEnabled !== false && !facts.collection?.quietReason && postAge > t.watchNoPostsHours * HOUR) {
+    if (facts.extensionEnabled === false || facts.collection?.quietReason) {
+      add("posts", "โพสต์ใหม่", "off", "พักการเก็บโพสต์ตามการตั้งค่าของเจ้าของ");
+    } else if (!online || facts.extensionEnabled !== true) {
+      add("posts", "โพสต์ใหม่", "warn", "ยังยืนยันการรับโพสต์ไม่ได้ เพราะส่วนขยายไม่มีสถานะออนไลน์ที่ตรวจสอบได้");
+    } else if (postAge > t.watchNoPostsHours * HOUR) {
       add("posts", "โพสต์ใหม่", "bad", facts.lastExtensionPostAt ? `ไม่มีโพสต์ใหม่จากกลุ่มที่เปิดไว้ ${Math.round(postAge / HOUR)} ชั่วโมง` : "ยังไม่มีโพสต์จากกลุ่มที่เปิดไว้", "ตรวจว่า Facebook ยังล็อกอินอยู่ และลองกด \"ดึงตอนนี้\" ในส่วนขยาย");
     } else add("posts", "โพสต์ใหม่", "ok", "มีโพสต์เข้ามาตามปกติ");
 
@@ -96,7 +100,7 @@ export function assessWatch(facts: WatchFacts, t: WatchThresholds): WatchConditi
     const authorJump = ratio(r.noAuthor, r.total) - ratio(b.noAuthor, b.total);
     if (r.total >= 10 && (textJump >= spike || authorJump >= spike)) {
       add("parse", "คุณภาพการอ่านโพสต์", "bad", `โพสต์ล่าสุดขาดข้อความ ${Math.round(ratio(r.noText, r.total) * 100)}% / ขาดชื่อ ${Math.round(ratio(r.noAuthor, r.total) * 100)}% (ปกติ ${Math.round(ratio(b.noText, b.total) * 100)}% / ${Math.round(ratio(b.noAuthor, b.total) * 100)}%)`, "Facebook อาจเปลี่ยนหน้าตา ตรวจตัวอย่างการอ่านในหน้าแหล่งข้อมูล และอัปเดตส่วนขยาย");
-    } else add("parse", "คุณภาพการอ่านโพสต์", "ok", r.total ? `อ่านได้ครบ ${r.total} โพสต์ล่าสุด` : "ยังไม่มีโพสต์ช่วงนี้");
+    } else add("parse", "คุณภาพการอ่านโพสต์", r.total >= 10 ? "ok" : "warn", r.total >= 10 ? `ตรวจ ${r.total} โพสต์ล่าสุด ขาดข้อความ ${r.noText} / ขาดชื่อ ${r.noAuthor} · ไม่พบอัตราข้อมูลขาดเพิ่มถึงเกณฑ์แจ้งเตือน` : "ตัวอย่างโพสต์ยังไม่เพียงพอสำหรับประเมินคุณภาพ");
   } else {
     add("extension", "ส่วนขยาย Chrome", "off", "ไม่มีกลุ่ม Facebook ที่เปิดใช้งาน");
   }

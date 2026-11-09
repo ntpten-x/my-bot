@@ -5,7 +5,23 @@ import vm from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
 
 const evaluate = (body: string) => JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e',
-  `import {desktopAction,restartDelay,webReady} from './scripts/lib/workstation.mjs'; ${body}`], { encoding: 'utf8' }));
+  `import {desktopAction,desktopComponentsReady,restartDelay,webReady} from './scripts/lib/workstation.mjs'; ${body}`], { encoding: 'utf8' }));
+
+it('requires fresh complete desktop telemetry belonging to this supervisor session', () => {
+  expect(evaluate(`
+    const now=Date.now(), details={session:'current',at:new Date(now).toISOString(),phase:'running',components:
+      Object.fromEntries(['Virtual display','Window manager','Desktop viewer','Web viewer','Browser'].map(name=>[name,'running']))};
+    console.log(JSON.stringify([
+      desktopComponentsReady(details,'current',now),
+      desktopComponentsReady(null,'current',now),
+      desktopComponentsReady(details,'previous',now),
+      desktopComponentsReady(details,'current',now+60000),
+      desktopComponentsReady(details,'current',now-1),
+      desktopComponentsReady({...details,components:{...details.components,Browser:'review'}},'current',now),
+      desktopComponentsReady({...details,phase:'degraded'},'current',now)
+    ]));
+  `)).toEqual([true,false,false,false,false,false,false]);
+});
 
 it('starts a missing desktop once, adopts existing listeners and latches an unexpected loss', () => {
   expect(evaluate(`console.log(JSON.stringify([
