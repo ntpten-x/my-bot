@@ -12,6 +12,7 @@ import {
   scrubSecrets,
   section,
   supabaseLabel,
+  tabLifecycleCheck,
   versionLevel,
   workerLevel,
   worstLevel,
@@ -76,6 +77,12 @@ describe("facebook identity (extension/identity.js)", () => {
 });
 
 describe("heartbeat payload", () => {
+  it("accepts only aggregate lifecycle counters and rejects negative or excessive values", () => {
+    const tabs = { activeReaders: 1, activeComments: 0, parkedReaders: 2, closing: 1, idleReaders: 0, released: 3, retryAt: 0 };
+    expect(heartbeatSchema.parse({ installId: "synthetic", runtime: { tabs } }).runtime?.tabs).toEqual(tabs);
+    expect(heartbeatSchema.safeParse({ installId: "synthetic", runtime: { tabs: { ...tabs, closing: -1 } } }).success).toBe(false);
+    expect(heartbeatSchema.safeParse({ installId: "synthetic", runtime: { tabs: { ...tabs, activeReaders: 99999 } } }).success).toBe(false);
+  });
   it("keeps a valid account id and drops bad ids and non-facebook tabs", () => {
     const parsed = heartbeatSchema.parse({
       installId: "abcd-1234",
@@ -98,6 +105,17 @@ describe("heartbeat payload", () => {
 
 describe("status helpers", () => {
   const now = Date.parse("2026-11-04T10:00:00Z");
+  it("distinguishes waiting cursors, closing failures and absent/old lifecycle telemetry", () => {
+    const tabs = { at: new Date(now).toISOString(), version: EXPECTED_EXTENSION_VERSION, activeReaders: 0,
+      activeComments: 0, parkedReaders: 2, closing: 0, idleReaders: 0, released: 1 };
+    const check = (value: object) => tabLifecycleCheck(JSON.stringify(value), EXPECTED_EXTENSION_VERSION, now);
+    expect(check(tabs)).toMatchObject({ level: "ok" });
+    expect(check({ ...tabs, closing: 1 })).toMatchObject({ level: "warn" });
+    expect(check({ ...tabs, version: "old" })).toMatchObject({ level: "off" });
+    expect(check({ ...tabs, at: new Date(now - 180001).toISOString() })).toMatchObject({ level: "off" });
+    expect(check({ ...tabs, at: new Date(now + 60000).toISOString() })).toMatchObject({ level: "off" });
+    expect(tabLifecycleCheck(undefined, EXPECTED_EXTENSION_VERSION, now).value).toContain("รอข้อมูล");
+  });
   it("grades heartbeat and worker age", () => {
     expect(heartbeatLevel(new Date(now - 60_000), now)).toBe("ok");
     expect(heartbeatLevel(new Date(now - 10 * 60_000), now)).toBe("warn");

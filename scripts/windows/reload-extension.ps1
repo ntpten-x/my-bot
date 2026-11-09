@@ -2,5 +2,7 @@
 # Chrome does not auto-reload unpacked extensions after file changes.
 $ErrorActionPreference = "Stop"
 Write-Host "Opening chrome://extensions ..."
-Write-Host "Find MY-BOT Lead Radar and click Reload until the version shows 1.10.5"
+$manifestPath = Join-Path $PSScriptRoot "..\..\extension\manifest.json"
+$version = (Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json).version
+Write-Host "Find MY-BOT Lead Radar and click Reload until the version shows $version"
 Start-Process "chrome" "chrome://extensions/"

@@ -132,3 +132,25 @@ document.getElementById("clearOutboxProblems").addEventListener("click", async (
   await showOutbox();
 });
 void showOutbox();
+
+function showTabStatus(tabs) {
+  document.getElementById("tabStatus").textContent = tabs
+    ? `กำลังอ่าน ${tabs.activeReaders} · คอมเมนต์ ${tabs.activeComments} · รออ่านต่อ ${tabs.parkedReaders} · รอปิด ${tabs.closing} · รอเก็บกวาด ${tabs.idleReaders} · คืนให้เจ้าของแล้ว ${tabs.released}`
+      + (tabs.closing ? " — Chrome ยังไม่ยืนยันการปิด ระบบจะลองใหม่" : tabs.parkedReaders ? " — เก็บตำแหน่งเพื่ออ่านต่อ ไม่ใช่แท็บที่ลืมปิด" : "")
+    : "ยังอ่านสถานะแท็บบอทไม่ได้ ลองเปิดป๊อปอัปใหม่";
+}
+function refreshTabStatus(type = "bot-tabs-status") {
+  chrome.runtime.sendMessage({ type }, result => {
+    void chrome.runtime.lastError;
+    showTabStatus(result?.ok ? result.tabs : null);
+    document.getElementById("cleanupBotTabs").disabled = false;
+  });
+}
+document.getElementById("cleanupBotTabs").addEventListener("click", () => {
+  document.getElementById("cleanupBotTabs").disabled = true;
+  refreshTabStatus("bot-tabs-cleanup");
+});
+refreshTabStatus();
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "session" && ["readers", "commentTab", "tabCleanup", "scrapeWindow", "scrapeContainers"].some(key => changes[key])) refreshTabStatus();
+});

@@ -18,8 +18,9 @@ import { autoCommentTick } from "../../src/lib/auto-comment/poll";
 import { snapshotDatabase, restoreDatabase } from "../../src/lib/backup-format";
 import { encodeSetting } from "../../src/lib/setting-secrets";
 import { collectObservation, observationOptions } from "../../scripts/observe-automation.mjs";
-import { EXPECTED_EXTENSION_VERSION } from "../../src/lib/extension-heartbeat";
+import { EXPECTED_EXTENSION_VERSION, heartbeatSchema, recordHeartbeat } from "../../src/lib/extension-heartbeat";
 import { isIncompleteScrape } from "../../src/lib/scrape-plan";
+import { postStreamWhere, type PostStreamCursor } from "../../src/lib/post-stream";
 let serial = 0;
 const active = async () => undefined;
 beforeAll(() => { if (fixture.enabled) execFileSync(process.execPath, [path.resolve("node_modules/prisma/build/index.js"), "migrate", "deploy"], { stdio: "pipe" }); }, 180000);
@@ -28,6 +29,7 @@ beforeEach(async () => {
   process.env.MYBOT_PROCESS = "worker"; process.env.AI_KEY_SECRET = "synthetic-browser-comment-test-key-only";
   await prisma.autoCommentLog.deleteMany(); await prisma.autoCommentJob.deleteMany(); await prisma.autoCommentTemplate.deleteMany(); await prisma.autoCommentRule.deleteMany();
   await prisma.aiJob.deleteMany(); await prisma.post.deleteMany(); await prisma.source.deleteMany(); await prisma.extensionDevice.deleteMany(); await prisma.setting.deleteMany(); await prisma.lease.deleteMany();
+  await prisma.extensionHeartbeat.deleteMany();
 });
 afterAll(async () => { if (fixture.enabled) { await fixture.drop(prisma, fixture.schema); await prisma.$disconnect(); } });
 async function setup(options: { dry?: boolean; requireAi?: boolean; aiDraft?: boolean } = {}) {
@@ -46,6 +48,53 @@ const claim = (deviceId: string) => claimBrowserComment(deviceId, "99887766");
 const permit = (deviceId: string, job: { id: string; claimToken: string }) => authorizeBrowserComment(deviceId, job.id, job.claimToken, "99887766");
 
 describe.skipIf(!fixture.enabled)("browser comment durable workflow on disposable Postgres", () => {
+  it("loads template bodies once per scan and still rotates templates for each post", async () => {
+    const s = await setup({ dry: true });
+    await saveCommentRule({ ...s.input, selectionMode: "sequential", templates: ["first", "second"] }, s.ruleId);
+    await prisma.autoCommentRule.update({ where: { id: s.ruleId }, data: { nextTemplate: 0 } });
+    await prisma.post.createMany({ data: Array.from({ length: 6 }, (_, index) => ({ sourceId: s.source.id,
+      externalUrl: `https://www.facebook.com/groups/12345/posts/${8100 + index}/`,
+      text: "หาช่างแอร์", normalizedText: "หาช่างแอร์", contentHash: `rotation-${++serial}` })) });
+    let templateLoads = 0, manifests = 0;
+    const original = prisma.$transaction;
+    // Forward to real disposable Postgres. Count only the query payload, never mock results.
+    prisma.$transaction = (async (work, ...args) => original.call(prisma, async tx => work(new Proxy(tx, {
+      get(target, property) {
+        if (property !== "autoCommentRule") return Reflect.get(target, property);
+        return new Proxy(target.autoCommentRule, { get(model, method) {
+          if (method !== "findMany") return Reflect.get(model, method);
+          return query => {
+            if (query.include?.templates) templateLoads++;
+            if (query.select?.revision) manifests++;
+            return model.findMany(query);
+          };
+        } });
+      },
+    })), ...args)) as typeof prisma.$transaction;
+    try { await scanBrowserComments(active); } finally { prisma.$transaction = original; }
+    const jobs = await prisma.autoCommentJob.findMany({ where: { postId: { not: s.post.id } }, orderBy: { externalUrl: "asc" } });
+    expect(jobs.map(job => job.message)).toEqual(["first", "second", "first", "second", "first", "second"]);
+    expect(templateLoads).toBe(0); // Initial snapshot is loaded outside these per-post transactions.
+    expect(manifests).toBeGreaterThanOrEqual(6);
+  });
+  it("refreshes a scan snapshot when consent or templates change between posts", async () => {
+    const s = await setup({ dry: true });
+    const makePost = (id: number) => prisma.post.create({ data: { sourceId: s.source.id,
+      externalUrl: `https://www.facebook.com/groups/12345/posts/${id}/`, text: "หาช่างแอร์",
+      normalizedText: "หาช่างแอร์", contentHash: `snapshot-${++serial}` } });
+    const a = await makePost(8201), b = await makePost(8202), c = await makePost(8203);
+    let calls = 0;
+    await scanBrowserComments(async () => {
+      calls++;
+      if (calls === 2) await saveCommentRule({ ...s.input, templates: ["updated"] }, s.ruleId);
+      if (calls === 3) await saveCommentRule({ ...s.input, browserConsent: false }, s.ruleId);
+    });
+    expect(await prisma.autoCommentJob.findFirst({ where: { postId: a.id } })).toMatchObject({ message: "ข้อความทดสอบ" });
+    expect(await prisma.autoCommentJob.findFirst({ where: { postId: b.id } })).toMatchObject({ message: "updated" });
+    expect(await prisma.autoCommentJob.count({ where: { postId: c.id } })).toBe(0);
+    await prepareBrowserComments(active);
+    expect(await claim(s.device.id)).toBeNull();
+  });
   it("records rejected posts and revisits them after AI changes without a createdAt change", async () => {
     const s = await setup({ dry: true, requireAi: true });
     const post = await prisma.post.create({ data: { sourceId: s.source.id, externalUrl: "https://www.facebook.com/groups/12345/posts/4444/", text: "หาช่างแอร์", normalizedText: "หาช่างแอร์", contentHash: `post-${++serial}`, isAd: true } });
@@ -415,6 +464,34 @@ describe.skipIf(!fixture.enabled)("quota changes wake deferred work", () => {
 });
 
 describe.skipIf(!fixture.enabled)("read-only automation observation", () => {
+  it("streams a burst of 25 stored posts sharing one timestamp without losing the tail", async () => {
+    const s = await setup({ dry: true }); const at = new Date(Date.now() + 1000);
+    await prisma.post.createMany({ data: Array.from({ length: 25 }, (_, index) => ({ id: `stream-${String(index).padStart(2, "0")}`,
+      sourceId: s.source.id, externalUrl: `https://www.facebook.com/groups/12345/posts/${9500 + index}/`,
+      text: "synthetic", normalizedText: "synthetic", contentHash: `stream-${++serial}`, createdAt: at })) });
+    let cursor: PostStreamCursor = { createdAt: at, id: null }; const ids: string[] = [];
+    for (let batch = 0; batch < 3; batch++) {
+      const rows = await prisma.post.findMany({ where: postStreamWhere(cursor), orderBy: [{ createdAt: "asc" }, { id: "asc" }], take: 20, select: { id: true, createdAt: true } });
+      ids.push(...rows.map(row => row.id)); if (!rows.length) break;
+      const last = rows[rows.length - 1];cursor = { createdAt: last.createdAt, id: last.id };
+    }
+    expect(ids).toHaveLength(25);expect(new Set(ids).size).toBe(25);
+  });
+  it("stores aggregate tab status for overview without changing comment control or jobs", async () => {
+    const s = await setup();
+    const tabs = { activeReaders: 1, activeComments: 0, parkedReaders: 2, closing: 1, idleReaders: 0, released: 3, retryAt: Date.now() + 30000 };
+    const before = await readCommentControl();
+    await recordHeartbeat(heartbeatSchema.parse({ installId: "synthetic-lifecycle", version: EXPECTED_EXTENSION_VERSION,
+      runtime: { tabs } }), s.device.id);
+    const stored = await prisma.setting.findUniqueOrThrow({ where: { key: "extension_tab_status" } });
+    expect(JSON.parse(stored.value)).toMatchObject({ ...tabs, version: EXPECTED_EXTENSION_VERSION });
+    expect(stored.value).not.toContain(s.post.text);expect(stored.value).not.toContain(s.device.id);
+    expect(await readCommentControl()).toEqual(before);
+    expect(await prisma.autoCommentJob.findUniqueOrThrow({ where: { id: s.job.id } })).toMatchObject({ status: "browser_ready", attempts: 0 });
+    expect((await collectObservation(prisma, new Date(Date.now() - 60000))).extension.tabs).toMatchObject({ closing: 1, parkedReaders: 2 });
+    await prisma.setting.update({ where: { key: "extension_tab_status" }, data: { value: JSON.stringify({ ...tabs, version: "old", at: new Date().toISOString() }) } });
+    expect((await collectObservation(prisma, new Date(Date.now() - 60000))).extension.tabs).toBeNull();
+  });
   it("collects aggregate evidence without changing jobs, consent or control", async () => {
     const s = await setup();
     const since = new Date(Date.now() - 3600000);

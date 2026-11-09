@@ -4,7 +4,7 @@ import { upsertSettings } from "./settings";
 import { touchExtension } from "./extension-status";
 
 // Version this MY-BOT build expects from extension/manifest.json (tests keep the two in sync).
-export const EXPECTED_EXTENSION_VERSION = "1.11.13";
+export const EXPECTED_EXTENSION_VERSION = "1.11.16";
 
 export function isCurrentExtensionVersion(version: string | null | undefined) {
   return String(version || "").trim() === EXPECTED_EXTENSION_VERSION;
@@ -62,6 +62,15 @@ export const heartbeatSchema = z.object({
       quietReason: z.string().max(160).default(""),
       commentsEnabled: z.boolean().default(false),
       commentPending: z.boolean().default(false),
+      tabs: z.object({
+        activeReaders: z.number().int().min(0).max(1000),
+        activeComments: z.number().int().min(0).max(1),
+        parkedReaders: z.number().int().min(0).max(1000),
+        closing: z.number().int().min(0).max(1000),
+        idleReaders: z.number().int().min(0).max(1000),
+        released: z.number().int().min(0).max(1000000),
+        retryAt: z.number().nonnegative(),
+      }).optional(),
       capture: z.object({
         pendingPosts: z.number().int().min(0).max(100000).default(0),
         oldestPendingAt: z.number().nonnegative().default(0),
@@ -165,6 +174,9 @@ export async function recordHeartbeat(input: HeartbeatInput, deviceId?: string) 
   }
   if (input.runtime?.capture) {
     await upsertSettings({ extension_capture: JSON.stringify({ ...input.runtime.capture, at: now.toISOString() }) });
+  }
+  if (input.runtime?.tabs) {
+    await upsertSettings({ extension_tab_status: JSON.stringify({ ...input.runtime.tabs, version: row.version, at: now.toISOString() }) });
   }
   return row;
 }

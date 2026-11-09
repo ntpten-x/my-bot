@@ -7,6 +7,7 @@ import { requireExtensionToken } from "@/lib/auth";
 import { corsPreflight, json, withCors } from "@/lib/http";
 import { ingestPosts } from "@/lib/ingest";
 import { countCapturedPosts, noteBadExtensionToken } from "@/lib/extension-heartbeat";
+import { recordTiming } from "@/lib/metrics";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +22,7 @@ const bodySchema = z.object({
         authorName: z.string().max(200).optional(),
         text: z.string().min(1).max(20000),
         postedAt: z.string().nullable().optional(),
+        observedAt: z.number().int().nonnegative().optional(),
         images: z.array(z.string().url().max(2000)).max(6).optional(),
       }),
     )
@@ -46,6 +48,14 @@ export async function POST(request: Request) {
     const itemIds = data.posts.map(post => post.itemId);
     if (batchId && (itemIds.some(id => !id) || new Set(itemIds).size !== itemIds.length)) return withCors(json({ error: "รายการต้องมี itemId ไม่ซ้ำ" }, 400));
     const result = await ingestPosts({ ...data, actor: "extension" });
+    if (result.ok) {
+      const now = Date.now();
+      for (const post of data.posts) {
+        const latency = post.observedAt === undefined ? -1 : now - post.observedAt;
+        // Browser clocks may be wrong; unknown/negative samples must not become healthy zero.
+        if (latency >= 0 && latency <= 72 * 3600000) recordTiming("capture_to_ingest", latency);
+      }
+    }
     await countCapturedPosts(fbUserId, result.inserted).catch(() => undefined);
     if (!batchId || !result.ok) return withCors(json(result, result.ok ? 200 : 404));
     const deviceKey = createHash("sha256").update(request.headers.get("authorization") || "").digest("hex");

@@ -21,20 +21,21 @@ function harness() {
       remove: vi.fn(async (id: number) => { for (const win of windows.values()) win.tabs = win.tabs.filter((tab: { id: number }) => tab.id !== id); }),
       create: async (v: any) => { const tab={id:100+[...windows.values()].flatMap(w=>w.tabs).length,...v}; windows.get(v.windowId).tabs.push(tab); return tab; } },
     windows: { WINDOW_ID_NONE: -1, get: async (id: number) => {if(!windows.has(id)) throw Error('missing'); return windows.get(id);},
-      create: vi.fn(async (v: any) => { const win={id:2,type:'normal',state:'normal',focused:false,tabs:[{id:20,windowId:2,url:v.url,active:true}]}; windows.set(2,win); return win; }),
+      create: vi.fn(async (v: any) => { const id=Math.max(...windows.keys())+1; const win={id,type:'normal',state:'normal',focused:false,tabs:[{id:20+(id-2)*1000,windowId:id,url:v.url,active:true}]}; windows.set(id,win); return win; }),
       update: vi.fn(async (id: number, v: any) => Object.assign(windows.get(id),v)), onRemoved:{addListener:()=>{}},onFocusChanged:{addListener:()=>{}} },
   };
-  const context = vm.createContext({chrome,Date,Math,URL,Set,Promise,scrapingTabs:new Set(),activeReaderTabs:new Set(),cycling:false,
+  const context = vm.createContext({chrome,Date,Math,URL,Set,Promise,setTimeout,clearTimeout,scrapingTabs:new Set(),activeReaderTabs:new Set(),cycling:false,
     loadConfig:async()=>({apiBase:'https://owner.example'}),base:(cfg:{apiBase:string})=>cfg.apiBase,currentFbUserId:async()=>'12345',
     sleep:async()=>{},withScrapeWindowLock:async(fn:any)=>fn()});
   vm.runInContext(readFileSync('extension/focus.js','utf8'),context);
+  vm.runInContext(readFileSync("extension/tab-lifecycle.js", "utf8"), context);
   vm.runInContext(source.slice(source.indexOf('/** Activate only'),source.indexOf('// Lazy loading stalled')),context);
   vm.runInContext(source.slice(source.indexOf('const BOOT_ID ='),source.indexOf('async function closeOrphanReaders(')),context);
   vm.runInContext(source.slice(source.indexOf('async function openReader('),source.indexOf('function sameReaderUrl(')),context);
   vm.runInContext(source.slice(source.indexOf('async function closeOrphanReaders('),source.indexOf('async function openReader(')),context);
   vm.runInContext(source.slice(source.indexOf('function sameReaderUrl('),source.indexOf('// Scroll and read one feed')),context);
   vm.runInContext(source.slice(source.indexOf('function isFacebookTab('),source.indexOf('async function quietReason(')),context);
-  return { owner, windows, session, local, chrome, updates, context, open:()=> (context.openReader as any)('https://www.facebook.com/groups/123',true) };
+  return { owner, windows, session, local, chrome, updates, context, open:async()=> { const reader=await context.openReader('https://www.facebook.com/groups/123',true); context.activeReaderTabs.delete(reader.tabId); return reader; } };
 }
 it('keeps MY-BOT selected during deep collection and wake pulses',async()=>{
   const h=harness(); const reader=await h.open();
@@ -51,7 +52,7 @@ it('closes the unused reader and blank container without touching personal tabs'
   await h.context.closeReader(reader);
   expect(h.chrome.tabs.remove).toHaveBeenCalledWith(reader.tabId);
   expect(h.chrome.tabs.remove).toHaveBeenCalledWith(20);
-  expect(h.session.scrapeWindow).toBeUndefined();
+  expect(h.session.scrapeWindow).toBeNull();
   expect(h.owner.tabs.map((tab:{id:number})=>tab.id)).toEqual([10,11]);
 });
 
@@ -70,14 +71,77 @@ it('preserves personal tabs moved into the collector window when work finishes',
   expect(h.chrome.tabs.remove).not.toHaveBeenCalledWith(99);
 });
 
+it('remembers old blank containers after switching to a new window and keeps personal tabs',async()=>{
+  const h=harness();const first=await h.open();
+  h.windows.get(2).tabs.push({id:99,windowId:2,url:'https://example.com/personal',active:true});
+  const second=await h.open();expect(second.windowId).toBe(3);
+  await h.context.closeReader(first);await h.context.closeReader(second);
+  expect(h.chrome.tabs.remove).toHaveBeenCalledWith(20);
+  expect(h.chrome.tabs.remove).toHaveBeenCalledWith(1020);
+  expect(h.chrome.tabs.remove).not.toHaveBeenCalledWith(99);
+  expect(h.windows.get(2).tabs.map((tab:{id:number})=>tab.id)).toEqual([99]);
+  expect(h.session.scrapeContainers).toEqual({});
+});
+
 it('retries a failed close on the next cleanup rather than forgetting the tab',async()=>{
   const h=harness();const reader=await h.open();
   h.chrome.tabs.remove.mockRejectedValueOnce(new Error('temporary browser error'));
   await h.context.closeReader(reader);
   expect(h.session.readers[String(reader.tabId)]).toMatchObject({closing:true});
+  h.session.readers[String(reader.tabId)].closeAfter=0;
   await h.context.closeOrphanReaders();
   expect(h.session.readers[String(reader.tabId)]).toBeUndefined();
   expect(h.chrome.tabs.remove).toHaveBeenCalledWith(20);
+});
+
+it('does not forget a reader after temporary lookup failure and respects retry spacing',async()=>{
+  const h=harness();const reader=await h.open();
+  const get=h.chrome.tabs.get;h.chrome.tabs.get=async()=>{throw Error('temporary');};
+  await h.context.closeReader(reader);
+  expect(h.session.readers[String(reader.tabId)]).toMatchObject({closing:true,closeAttempts:1});
+  h.chrome.tabs.get=get;
+  await h.context.closeOrphanReaders();
+  expect(h.chrome.tabs.remove).not.toHaveBeenCalledWith(reader.tabId);
+  h.session.readers[String(reader.tabId)].closeAfter=0;
+  await h.context.closeOrphanReaders();
+  expect(h.chrome.tabs.remove).toHaveBeenCalledWith(reader.tabId);
+});
+
+it('keeps the blank container reference when lookup is unknown and retries it later',async()=>{
+  const h=harness();await h.open();
+  h.session.readers={};
+  const get=h.chrome.tabs.get;h.chrome.tabs.get=async()=>{throw Error('temporary');};
+  await h.context.closeIdleScrapeWindow({});
+  expect(h.session.scrapeWindow).toMatchObject({tabId:20,closing:true});
+  h.chrome.tabs.get=get;h.session.scrapeWindow.closeAfter=0;
+  await h.context.closeIdleScrapeWindow({});
+  expect(h.chrome.tabs.remove).toHaveBeenCalledWith(20);
+});
+
+it.each(['success','timeout','outbox-full','offline'])('runs full-text open/read/close end to end: %s',async(outcome)=>{
+  const h=harness(); const target='https://www.facebook.com/groups/123/posts/8888/';
+  const backlog:Record<string,unknown>={[target]:{groupId:'g',addedAt:1}};
+  const durable:unknown[]=[];
+  Object.assign(h.context,{fullTextBudget:10,FULL_TEXT_BUDGET_MS:30000,postKey:(url:string)=>url,
+    loadConfig:async()=>({apiBase:'https://owner.example',token:'synthetic'}),
+    loadFullTextBacklog:async()=>backlog,updateFullTextBacklog:async(fn:any)=>fn(backlog),
+    sourceKind:()=> 'group',cleanPost:(post:unknown)=>post,
+    waitComplete:async()=>{if(outcome==='timeout')throw Error('synthetic timeout');},injectReaders:async()=>{},
+    readPage:async()=>({posts:[{url:target,text:'synthetic full text',truncated:false}]}),
+    sendPosts:async(_cfg:unknown,_url:string,posts:unknown[])=>{if(outcome==='outbox-full')throw Error('storage full');durable.push(...posts);return outcome==='offline'?null:{ok:true};},
+  });
+  h.chrome.storage.local.get=async(defaults:any)=>({...defaults,...h.local});
+  (h.chrome.storage.local as any).set=async(value:object)=>Object.assign(h.local,value);
+  vm.runInContext(source.slice(source.indexOf('async function readFullTexts('),source.indexOf('async function waitForGrowth(')),h.context);
+  vm.runInContext(source.slice(source.indexOf('async function processFullTextQueue('),source.indexOf('let cycling = false;')),h.context);
+  await h.context.processFullTextQueue({apiBase:'https://owner.example',token:'synthetic'},[{id:'g',url:'synthetic'}]);
+  expect(Object.keys(h.session.readers)).toHaveLength(0);
+  expect(h.windows.get(2).tabs).toHaveLength(0);
+  expect(h.owner.tabs.map((tab:{id:number})=>tab.id)).toEqual([10,11]);
+  expect(h.updates).not.toHaveBeenCalled(); // Initial navigation is reused, never reloaded.
+  expect(h.context.activeReaderTabs.size).toBe(0);
+  if(['timeout','outbox-full'].includes(outcome))expect(backlog[target]).toBeDefined();
+  else {expect(backlog[target]).toBeUndefined();expect(durable).toHaveLength(1);}
 });
 
 it('preserves a reader tab navigated by the owner and removes only the empty container',async()=>{
@@ -97,6 +161,31 @@ it('keeps a parked continuation and an active reader during heartbeat cleanup',a
   await h.context.closeOrphanReaders();
   expect(h.chrome.tabs.remove).not.toHaveBeenCalled();
   expect(Object.keys(h.session.readers)).toHaveLength(2);
+});
+
+it('manual cleanup releases only idle owned readers and preserves active and parked cursors',async()=>{
+  const h=harness();const idle=await h.open();const active=await h.open();const parked=await h.open();
+  h.context.activeReaderTabs.add(active.tabId);
+  h.session.readers[String(parked.tabId)].continuation={url:parked.url,apiBase:'https://owner.example',fbUserId:'12345'};
+  await h.context.closeOrphanReaders({unused:true});
+  expect(h.chrome.tabs.remove).toHaveBeenCalledWith(idle.tabId);
+  expect(h.chrome.tabs.remove).not.toHaveBeenCalledWith(active.tabId);
+  expect(h.chrome.tabs.remove).not.toHaveBeenCalledWith(parked.tabId);
+});
+
+it('does not close a bot tab moved into the owner window even at the same URL',async()=>{
+  const h=harness();const reader=await h.open();const win=h.windows.get(2);
+  const tab=win.tabs.find((tab:{id:number})=>tab.id===reader.tabId);win.tabs=win.tabs.filter((tab:{id:number})=>tab.id!==reader.tabId);
+  tab.windowId=1;h.owner.tabs.push(tab);
+  await h.context.closeReader(reader);
+  expect(h.chrome.tabs.remove).not.toHaveBeenCalledWith(reader.tabId);
+  expect(h.session.tabCleanup.released).toBe(1);
+});
+
+it('bounds allocations when closing readers already fill the pool',async()=>{
+  const h=harness();await h.open();
+  h.session.readers=Object.fromEntries(Array.from({length:22},(_,i)=>[String(i),{tabId:i,closing:true}]));
+  await expect(h.open()).rejects.toThrow('รอปิดแท็บบอท');
 });
 
 it('releases paused parked tabs without deleting their durable pending recovery',async()=>{

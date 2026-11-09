@@ -8,6 +8,7 @@ vi.mock("../../src/lib/ingest", () => ({ ingestPosts: mocks.ingest }));
 vi.mock("../../src/lib/facebook-accounts", () => ({ facebookWorkAllowed: async () => true }));
 vi.mock("../../src/lib/extension-heartbeat", () => ({ countCapturedPosts: async () => undefined, noteBadExtensionToken: async () => undefined }));
 import { POST } from "../../src/app/api/v1/ingest/route";
+import { requestMetrics } from "../../src/lib/metrics";
 const source = readFileSync("extension/background.js", "utf8");
 const scrape = createRequire(import.meta.url)("../../extension/scrape.js");
 const post = (id: number) => ({ url: `https://www.facebook.com/groups/12345/posts/${id}/`, text: "synthetic post" });
@@ -53,6 +54,16 @@ it("honors the local pause switch for posts read in ordinary tabs too", async ()
   vm.runInContext(source.slice(source.indexOf("async function forwardManual("), source.indexOf("async function pollTasks(")), context);
   await vm.runInContext('forwardManual({sourceUrl:"https://www.facebook.com/groups/12345",posts:[{text:"synthetic"}]}, {})', context);
   expect(sendPosts).not.toHaveBeenCalled(); expect(postJson).not.toHaveBeenCalled();
+});
+it("measures observed-to-ingest time but does not turn future or absent browser times into zero", async () => {
+  const before = requestMetrics().capture_to_ingest?.count || 0;
+  const result = await POST(new Request("https://owner.example/api/v1/ingest", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sourceUrl: "https://www.facebook.com/groups/12345", posts: [
+      { ...post(1), observedAt: Date.now() - 500 }, { ...post(2), observedAt: Date.now() + 5000 }, post(3),
+    ] }) }));
+  expect(result.status).toBe(200);
+  expect(requestMetrics().capture_to_ingest.count).toBe(before + 1);
+  expect(requestMetrics().capture_to_ingest.p50).toBeGreaterThanOrEqual(500);
 });
 it("does not echo database exceptions into the browser or extension logs", async () => {
   mocks.ingest.mockRejectedValue(new Error("synthetic-sensitive-internal-value"));

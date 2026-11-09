@@ -42,13 +42,17 @@
     <p style="font-size:12px">เปิดเฉพาะในจอเสมือนหรือเครื่องบอท ระบบจะโฟกัสหน้าต่างอ่านเพื่อให้ Facebook โหลดต่อได้ หากเปิดใน Chrome ส่วนตัวอาจรบกวนหน้าจอ ค่าเริ่มต้นปิด ไม่เกี่ยวกับสิทธิ์ส่งคอมเมนต์</p>
     <button id="save" class="ghost">บันทึก</button>
     <p style="font-size:12px">จับคู่แล้วพร้อมรับงานคอมเมนต์ตามที่เปิดในเว็บ จัดการกฎ ข้อความ บัญชี อุปกรณ์ โควตา และหยุดส่งที่หน้าคอมเมนต์อัตโนมัติของ MY-BOT</p>
-    <p style="font-size:12px">ค่าเริ่มต้นปิด ต้องเปิดกฎและเลือกอุปกรณ์นี้บนเว็บด้วย พบ Checkpoint หรือผลไม่ชัดเจนจะหยุด ไม่ส่งซ้ำอัตโนมัติ ปิดสวิตช์นี้เพื่อหยุดรับงานใหม่</p>
+    <p style="font-size:12px">ค่าเริ่มต้นปิด ต้องเปิดกฎและเลือกอุปกรณ์นี้บนเว็บด้วย พบ Checkpoint หรือผลไม่ชัดเจนจะหยุด ไม่ส่งซ้ำอัตโนมัติ หยุดคอมเมนต์จากหน้าเว็บหรือพักบัญชี</p>
     <button id="clearCommentJournal" class="ghost">ปลดล็อกบนเครื่องหลังตรวจผลเองแล้ว</button>
     <details>
       <summary>โทเคนแบบเดิม (ใช้ได้เฉพาะแอปบนเครื่อง localhost)</summary>
       <input id="token" type="password" placeholder="วางโทเคนจากหน้าตั้งค่า" style="margin-top:6px" />
     </details>
     <div id="outboxStatus"></div>
+    <p id="tabStatus" role="status" aria-live="polite" style="margin-top:10px">กำลังตรวจแท็บบอท…</p>
+    <button id="cleanupBotTabs" class="ghost">ปิดแท็บบอทที่เลิกใช้</button>
+    <p style="font-size:12px">ปิดอัตโนมัติเมื่อจบงาน เก็บเฉพาะแท็บที่ยังต้องอ่านต่อ ไม่ปิดแท็บส่วนตัวหรือแท็บที่กำลังทำงาน หากรอปิด ระบบจะลองใหม่โดยไม่ส่งคอมเมนต์เดิมซ้ำ</p>
+    <p style="font-size:12px">แท็บเก่าที่ค้างจากการรีโหลดส่วนขยายครั้งก่อนอาจต้องปิดเองครั้งแรก ระบบจะไม่เดาว่าแท็บ Facebook ทุกใบเป็นของบอท</p>
     <button id="clearOutboxProblems" class="ghost">ลบเฉพาะรายการหมดอายุ/ถูกปฏิเสธ หลังตรวจแล้ว</button>
     <div id="status"></div>
     <script src="popup.js"></script>

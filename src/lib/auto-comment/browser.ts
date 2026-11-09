@@ -73,6 +73,10 @@ export async function scanBrowserComments(assertActive: () => Promise<void>, opt
   const initial = await readCommentControl(); if (!mayRun(initial)) return;
   const initialRules = await prisma.autoCommentRule.findMany(ruleQuery);
   if (!initialRules.length) return;
+  // Cache only for this slice. Under the control lock, refresh the ordered
+  // revision manifest for EVERY post, including live rotation counters. Admin
+  // writes use the same lock and bump revision; claim/authorize still re-read.
+  let cachedRules = initialRules;
   const sourceIds = [...new Set(initialRules.flatMap(rule => jsonList<string>(rule.sourceIdsJson)).filter(id => typeof id === "string" && id))];
   if (!sourceIds.length) return;
   const oldestEligibleAt = new Date(Date.now() - Math.max(...initialRules.map(rule => rule.maxAgeHours)) * 3600000).toISOString();
@@ -101,7 +105,17 @@ export async function scanBrowserComments(assertActive: () => Promise<void>, opt
         try {
           const post = await tx.post.findUnique({ where: { id: candidate.id }, include: { source: true } }); if (!post) return;
           await tx.autoCommentLog.createMany({ data: [{ eventKey: `observed:${control.generation}:${post.id}`, event: "observed", sourceId: post.sourceId }], skipDuplicates: true });
-          const rules = await tx.autoCommentRule.findMany(ruleQuery);
+          const rulesStarted = performance.now();
+          const manifest = await tx.autoCommentRule.findMany({
+            where: ruleQuery.where, orderBy: ruleQuery.orderBy,
+            select: { id: true, revision: true, nextTemplate: true },
+          });
+          if (fingerprint(manifest) !== fingerprint(cachedRules)) {
+            cachedRules = await tx.autoCommentRule.findMany(ruleQuery);
+          }
+          const counters = new Map(manifest.map(rule => [rule.id, rule.nextTemplate]));
+          const rules = cachedRules.map(rule => ({ ...rule, nextTemplate: counters.get(rule.id) ?? rule.nextTemplate }));
+          recordTiming("comment_scan_rules", performance.now() - rulesStarted);
           const now = new Date();
           const reasons: { ruleId: string; codes: string[] }[] = [];
           let evaluationState = "skipped";

@@ -13,23 +13,17 @@
     } finally { clearTimeout(timer); }
   }
   async function ownedCommentTab(ref) {
-    if (!ref || !Number.isInteger(ref.tabId)) return null;
-    const tab = await chrome.tabs.get(ref.tabId).catch(() => null);
-    if (!tab) return null;
-    try {
-      const actual = new URL(tab.pendingUrl || tab.url), expected = new URL(ref.url);
-      const hosts = ["www.facebook.com", "web.facebook.com", "facebook.com", "m.facebook.com"];
-      if (actual.href === "about:blank" || (actual.protocol === "https:" && hosts.includes(actual.hostname) && hosts.includes(expected.hostname) &&
-        actual.pathname.replace(/\/$/, "") === expected.pathname.replace(/\/$/, ""))) return tab;
-    } catch { /* Navigated elsewhere: ownership belongs to the owner now. */ }
-    return null;
+    return root.MyBotTabs.inspect(ref, root.MyBotTabs.samePostUrl);
   }
   async function closeCommentTab(ref) {
     if (!ref) return;
-    const tab = await ownedCommentTab(ref);
-    if (tab) await chrome.tabs.remove(tab.id); // Keep the session reference if removal fails.
+    if (ref.closing && !root.MyBotTabs.due(ref)) return;
+    const outcome = await root.MyBotTabs.close(ref, root.MyBotTabs.samePostUrl);
     const stored = await chrome.storage.session.get({ commentTab: null });
-    if (stored.commentTab?.tabId === ref.tabId && stored.commentTab?.jobId === ref.jobId) await chrome.storage.session.set({ commentTab: null });
+    if (stored.commentTab?.tabId === ref.tabId && stored.commentTab?.jobId === ref.jobId) {
+      await chrome.storage.session.set({ commentTab: outcome === "retry" ? root.MyBotTabs.retry(stored.commentTab) : null });
+      await root.MyBotTabs.note(outcome);
+    }
   }
   async function run(deps, options = {}) {
     if (busy) return; busy = true;
@@ -70,7 +64,7 @@
       if (!await root.MyBotFocus.take(job.id)) { await report("not_sent"); return; }
       remaining();
       const tab = await chrome.tabs.create({ url: job.externalUrl, active: true }); tabId = tab.id;
-      owned = { jobId: job.id, tabId, url: job.externalUrl };
+      owned = { jobId: job.id, tabId, windowId: tab.windowId, url: job.externalUrl };
       await chrome.storage.session.set({ commentTab: owned });
       await deps.waitComplete(tabId, Math.min(25000, remaining()));
       if (tab.windowId !== undefined) await chrome.windows.update(tab.windowId, { focused: true });
@@ -130,9 +124,9 @@
       if (!pendingReport) {
         let observed = null;
         if (journal.state === "sending" && journal.job && Date.now() - journal.at < 10 * 60000) {
-          const tab = owned?.jobId === journal.id ? await ownedCommentTab(owned) : null;
-          if (tab?.id !== undefined) {
-            observed = await pageAction(tab.id, "reconcile", journal.job);
+          const result = owned?.jobId === journal.id ? await ownedCommentTab(owned) : null;
+          if (result?.state === "owned") {
+            observed = await pageAction(result.tab.id, "reconcile", journal.job);
           }
         }
         pendingReport = { outcome: observed?.ok ? "observed" : journal.state === "sending" ? "uncertain" : journal.state === "authorizing" ? "not_sent" : "failed", ...(observed?.commentUrl ? { commentUrl: observed.commentUrl } : {}) };
@@ -159,5 +153,5 @@
       }
     } finally { draining = false; }
   }
-  root.MyBotCommentWorker = { run, recover, drain };
+  root.MyBotCommentWorker = { run, recover, drain, isBusy: () => busy };
 })(typeof globalThis !== "undefined" ? globalThis : this);

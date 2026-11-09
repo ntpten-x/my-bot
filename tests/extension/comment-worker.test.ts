@@ -21,6 +21,7 @@ function harness(enabled = true, failAuthorize = false, authorizeDelay = 0) {
     remove: async (key: string) => { delete stored[key]; },
   } } }, MyBotBrowserComment: { action: () => undefined } });
   vm.runInContext(readFileSync("extension/focus.js", "utf8"), context);
+  vm.runInContext(readFileSync("extension/tab-lifecycle.js", "utf8"), context);
   vm.runInContext(readFileSync("extension/comment-worker.js", "utf8"), context);
   const worker = context.MyBotCommentWorker as { run(deps: object): Promise<boolean | undefined>; recover(deps: object): Promise<void>; drain(deps: object): Promise<void> };
   const deps = { loadConfig: async () => ({ apiBase: "https://owner.example", token: "mbd_synthetic", paused: false }), base: (cfg: { apiBase: string }) => cfg.apiBase,
@@ -175,9 +176,21 @@ it('retries tab removal without resending a completed comment',async()=>{
   const h=harness();h.tabs.remove.mockRejectedValueOnce(new Error('temporary browser error'));
   await h.worker.run(h.deps);
   expect(h.session.commentTab).toMatchObject({tabId:1});
-  await h.worker.recover(h.deps);
+  h.advance(30_001); await h.worker.recover(h.deps);
   expect(h.session.commentTab).toBeNull();expect(h.tabs.remove).toHaveBeenCalledTimes(2);
   expect(h.execute.mock.calls.filter(([call])=>call.args[0]==='send')).toHaveLength(1);
+});
+
+it('keeps comment ownership after a temporary tab lookup failure and retries without sending',async()=>{
+  const h=harness();h.session.commentTab={jobId:'old',tabId:1,url:'https://www.facebook.com/groups/12345/posts/8888/'};
+  h.tabs.get.mockRejectedValueOnce(new Error('temporary'));
+  await h.worker.recover(h.deps);
+  expect(h.session.commentTab).toMatchObject({tabId:1,closing:true,closeAttempts:1});
+  await h.worker.recover(h.deps);
+  expect(h.tabs.remove).not.toHaveBeenCalled();
+  h.advance(30_001);await h.worker.recover(h.deps);
+  expect(h.tabs.remove).toHaveBeenCalledWith(1);expect(h.session.commentTab).toBeNull();
+  expect(h.postJson).not.toHaveBeenCalled();expect(h.execute).not.toHaveBeenCalled();
 });
 
 it('leaves a bot-created comment tab alone once the owner has navigated it elsewhere',async()=>{

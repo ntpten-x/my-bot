@@ -26,6 +26,7 @@ import {
   scrubSecrets,
   section,
   supabaseLabel,
+  tabLifecycleCheck,
   thaiAgo,
   thaiDuration,
   versionLevel,
@@ -180,6 +181,7 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
     "extension_last_seen",
     "extension_reading",
     "extension_capture",
+    "extension_tab_status",
     "extension_bad_token_at",
     "notify_last_discord",
     "notify_last_line",
@@ -361,6 +363,7 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
         detail: `แหล่งเกินเวลานัด ${overdue.length} · รอนานสุด ${Math.round(maxOverdue / 60_000)} นาที${fresh && capture.oldestPendingAt ? ` · ข้อมูลรอส่งเก่าสุด ${thaiAgo(Math.max(0, now - capture.oldestPendingAt))}` : ""}`,
       };
     })(),
+    tabLifecycleCheck(map.extension_tab_status, EXPECTED_EXTENSION_VERSION, now),
     {
       key: "ext-last-post",
       label: "โพสต์ล่าสุดที่ได้รับจาก Facebook",

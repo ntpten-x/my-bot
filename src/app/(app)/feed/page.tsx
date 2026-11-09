@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button, Input, Select } from "@/components/ui";
 import { LeadCard } from "@/components/lead-card";
 import { ApiError, api } from "@/components/api";
@@ -147,19 +147,22 @@ export default function FeedPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [sound, setSound] = useState(true);
+  const loadSequence = useRef(0);
 
   const load = useCallback(async (nextPage: number, nextFilters: Filters) => {
+    const sequence = ++loadSequence.current;
     setLoading(true);
     setError("");
     try {
       const data = await api<{ posts: Lead[]; total: number; searchScope?: string }>(`/api/posts?${queryFrom(nextFilters, nextPage)}`);
+      if (sequence !== loadSequence.current) return;
       setPosts(data.posts);
       setTotal(data.total);
       setSearchScope(data.searchScope ?? "");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "โหลดฟีดไม่สำเร็จ");
+      if (sequence === loadSequence.current) setError(err instanceof ApiError ? err.message : "โหลดฟีดไม่สำเร็จ");
     } finally {
-      setLoading(false);
+      if (sequence === loadSequence.current) setLoading(false);
     }
   }, []);
 
@@ -199,11 +202,14 @@ export default function FeedPage() {
   }
 
   useEffect(() => {
-    const stream = new EventSource("/api/v1/stream");
     if (!ready) return;
+    const stream = new EventSource("/api/v1/stream");
     stream.onmessage = (event) => {
-      const data = JSON.parse(event.data) as { type: string; posts?: Lead[] };
-      if (data.type !== "posts" || !data.posts?.length) return;
+      let data: { type: string; posts?: Lead[] };
+      try { data = JSON.parse(event.data); } catch { return; }
+      if (!data || typeof data.type !== "string") return;
+      if (data.type === "hello") { void load(page, filters); return; } // Reconnect repairs gaps with the normal filtered query.
+      if (data.type !== "posts" || !Array.isArray(data.posts) || !data.posts.length) return;
       const interesting = data.posts.filter((post) => !post.isAd && !post.forbiddenHit && !post.duplicateOfId);
       if (sound && interesting.length) beep();
       if (typeof Notification !== "undefined" && Notification.permission === "granted") {

@@ -48,7 +48,7 @@ function harness(pages: Page[], local: Storage = {}, session: Storage = {}) {
   });
   class Clock extends Date { static now() { return now; } }
   const context = vm.createContext({
-    Date: Clock, Math, Set, Map, URL, Promise, crypto: globalThis.crypto, BOOT_ID: "new-boot", READER_MAX_AGE_MS: 900000,
+    Date: Clock, Math, Set, Map, URL, Promise, setTimeout, clearTimeout, crypto: globalThis.crypto, BOOT_ID: "new-boot", READER_MAX_AGE_MS: 900000,
     cycling: false, scrapingTabs: new Set(), activeReaderTabs: new Set(), MyBotScrape: scrape,
     chrome: { storage: { local: storage(local), session: storage(session) },
       runtime: { getManifest: () => ({ version: "1.11.0" }) }, windows: { get: async () => ({ state: "normal" }) },
@@ -81,6 +81,7 @@ function harness(pages: Page[], local: Storage = {}, session: Storage = {}) {
   // Pure helpers must share the VM clock, so dated fixtures do not age with wall time.
   vm.runInContext(readFileSync("extension/scrape.js", "utf8"), context);
   vm.runInContext(readFileSync("extension/focus.js", "utf8"), context);
+  vm.runInContext(readFileSync("extension/tab-lifecycle.js", "utf8"), context);
   vm.runInContext(source.slice(source.indexOf("const OUTBOX_MAX ="), source.indexOf("async function countSent")), context);
   vm.runInContext(source.slice(source.indexOf("async function closeOrphanReaders("), source.indexOf("async function openReader(")), context);
   vm.runInContext(source.slice(source.indexOf("function sameReaderUrl("), source.indexOf("// Scroll and read one feed")), context);
@@ -91,6 +92,7 @@ function harness(pages: Page[], local: Storage = {}, session: Storage = {}) {
     pause: () => { paused = true; }, offline: (value: boolean) => { offline = value; }, rejectOutbox: (value: boolean) => { rejectOutbox = value; },
     slowSleep: (value = 100_000) => { sleepJump = value; },
     onReload: (value: Page[]) => { reloadPages = value; },
+    setPages: (value: Page[]) => { pages = value; },
     now: () => now,
     advance: (ms: number) => { now += ms; },
     run: (target = group, options = {freshness:false}) => (context.scrapeGroup as any)(cfg, target, {}, options),
@@ -172,6 +174,28 @@ describe("continuous read-only collection", () => {
     await h.run();
     for (let i = 0; i < 3 && !h.accepted.has("p:4"); i++) await h.run();
     expect([...h.accepted.keys()].sort()).toEqual(["p:1","p:2","p:3","p:4"]);
+  });
+
+  it("recycles a DOM stalled for three slices but keeps recovery for the next deep pass", async () => {
+    const h = harness([{ posts: [], loading: true }]);
+    await h.run(); await h.run();
+    expect(h.tabs.size).toBe(1);
+    await h.run();
+    expect(h.tabs.size).toBe(0);
+    expect(Object.keys(h.local.coverageRecovery)).toHaveLength(1);
+    h.setPages([{ posts: [post(1), post(2), post(3)] }]);
+    await h.run();
+    expect(h.openReader).toHaveBeenCalledTimes(2);
+    expect([...h.accepted.keys()].sort()).toEqual(["p:1", "p:2", "p:3"]);
+  });
+  it("does not recycle a deep cursor making progress through already known posts", async () => {
+    const pages = Array.from({ length: 200 }, (_, index) => ({ posts: [post(index * 3 + 1), post(index * 3 + 2), post(index * 3 + 3)] }));
+    const h = harness(pages);
+    const target = { ...group, knownKeys: pages.flatMap(page => page.posts.map(post => scrape.postKey(post.url))) };
+    await h.run(target); await h.run(target); await h.run(target);
+    expect(h.openReader).toHaveBeenCalledTimes(1);
+    expect(h.accepted.size).toBe(0);
+    expect(Object.values(h.session.readers)[0]).toMatchObject({ stalledSlices: 0 });
   });
 
   it("adopts parked readers after a service-worker boot change", async () => {

@@ -29,6 +29,23 @@ export function section(id: string, title: string, checks: Check[]): Section {
   return { id, title, checks, level: worstLevel(checks.map((check) => check.level)) };
 }
 
+export function tabLifecycleCheck(raw: string | undefined, expectedVersion: string, now = Date.now()): Check {
+  const check: Check = { key: "ext-tab-lifecycle", label: "แท็บบอท (อุปกรณ์ที่รายงานล่าสุด)", level: "off",
+    value: "รอข้อมูลแท็บจากส่วนขยายรุ่นปัจจุบัน", detail: "ไม่มีข้อมูลสดไม่ได้หมายความว่าไม่มีแท็บค้าง" };
+  try {
+    const tabs = JSON.parse(raw || "null");
+    if (!tabs || tabs.version !== expectedVersion) return check;
+    const age = now - Date.parse(tabs.at);
+    if (!Number.isFinite(age) || age < 0 || age >= 180_000 ||
+      !["activeReaders", "activeComments", "parkedReaders", "closing", "idleReaders", "released"].every(key => Number.isInteger(tabs[key]) && tabs[key] >= 0)) return check;
+    return { ...check, level: tabs.closing || tabs.idleReaders ? "warn" : "ok",
+      value: `กำลังอ่าน ${tabs.activeReaders} · คอมเมนต์ ${tabs.activeComments} · รออ่านต่อ ${tabs.parkedReaders} · รอปิด ${tabs.closing}`,
+      detail: `รอเก็บกวาด ${tabs.idleReaders} · คืนให้เจ้าของแล้ว ${tabs.released} (ในเซสชันนี้)`,
+      hint: tabs.closing ? "Chrome ยังไม่ยืนยันการปิด ระบบจะลองใหม่ ไม่ต้องเริ่มส่งคอมเมนต์เดิมซ้ำ"
+        : "แท็บรออ่านต่อเก็บตำแหน่งเดิมไว้ งานเสร็จจะปิดอัตโนมัติ สั่งเก็บกวาดได้จากป๊อปอัป โดยไม่ปิดแท็บส่วนตัว" };
+  } catch { return check; }
+}
+
 export function ageMs(iso: string | Date | null | undefined, now = Date.now()) {
   if (!iso) return null;
   const time = iso instanceof Date ? iso.getTime() : new Date(iso).getTime();

@@ -6,7 +6,7 @@ export function percentiles(values: number[]) {
   const at = (p: number) => sorted.length ? Math.round(sorted[Math.max(0, Math.ceil(sorted.length * p) - 1)]) : null;
   return { count: sorted.length, p50: at(0.5), p95: at(0.95) };
 }
-export function recordTiming(name: "ingest" | "search" | "comment_scan" | "comment_prepare" | "comment_scan_transaction" | "comment_scan_lock", ms: number) {
+export function recordTiming(name: "ingest" | "search" | "comment_scan" | "comment_prepare" | "comment_scan_transaction" | "comment_scan_lock" | "comment_scan_rules" | "capture_to_ingest", ms: number) {
   const rows = samples.get(name) ?? [];
   rows.push(Math.max(0, ms));
   if (rows.length > 200) rows.shift();
