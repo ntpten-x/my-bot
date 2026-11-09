@@ -3,13 +3,19 @@ param([Parameter(Mandatory = $true)][string]$SecretPath)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+$LocalePath = Join-Path $PSScriptRoot '../../desktop/strings.th.json'
+$Locale = if (Test-Path -LiteralPath $LocalePath) { Get-Content -LiteralPath $LocalePath -Raw -Encoding UTF8 | ConvertFrom-Json } else { $null }
+function Text-For([string]$Name, [string]$Fallback) {
+    if ($Locale -and $Locale.$Name) { return [string]$Locale.$Name }
+    return $Fallback
+}
 $form = New-Object Windows.Forms.Form
-$form.Text = 'MY-BOT - Set local viewer password'
+$form.Text = Text-For 'passwordTitle' 'MY-BOT - Set local viewer password'
 $form.Size = New-Object Drawing.Size(460, 260)
 $form.StartPosition = 'CenterScreen'
 $form.TopMost = $true
 $label = New-Object Windows.Forms.Label
-$label.Text = 'Set 8 characters (letters, numbers or symbols, no spaces). Do not reuse your Facebook password.'
+$label.Text = Text-For 'passwordPrompt' 'Set 8 characters (letters, numbers or symbols, no spaces). Do not reuse your Facebook password.'
 $label.SetBounds(20, 15, 410, 45)
 $form.Controls.Add($label)
 $password = New-Object Windows.Forms.TextBox
@@ -18,7 +24,7 @@ $password.MaxLength = 8
 $password.SetBounds(20, 70, 400, 25)
 $form.Controls.Add($password)
 $confirmLabel = New-Object Windows.Forms.Label
-$confirmLabel.Text = 'Confirm password:'
+$confirmLabel.Text = Text-For 'passwordConfirm' 'Confirm password:'
 $confirmLabel.SetBounds(20, 105, 400, 20)
 $form.Controls.Add($confirmLabel)
 $confirm = New-Object Windows.Forms.TextBox
@@ -27,10 +33,10 @@ $confirm.MaxLength = 8
 $confirm.SetBounds(20, 130, 400, 25)
 $form.Controls.Add($confirm)
 $save = New-Object Windows.Forms.Button
-$save.Text = 'Save'
+$save.Text = Text-For 'passwordSave' 'Save'
 $save.SetBounds(240, 175, 85, 28)
 $cancel = New-Object Windows.Forms.Button
-$cancel.Text = 'Cancel'
+$cancel.Text = Text-For 'cancel' 'Cancel'
 $cancel.SetBounds(335, 175, 85, 28)
 $cancel.DialogResult = [Windows.Forms.DialogResult]::Cancel
 $form.Controls.AddRange(@($save, $cancel))
@@ -38,7 +44,7 @@ $form.AcceptButton = $save
 $form.CancelButton = $cancel
 $save.Add_Click({
     if ($password.Text -notmatch '^[!-~]{8}$' -or $password.Text -cne $confirm.Text) {
-        [Windows.Forms.MessageBox]::Show('Enter matching passwords with exactly 8 printable ASCII characters, without spaces.', 'MY-BOT') | Out-Null
+        [Windows.Forms.MessageBox]::Show((Text-For 'passwordMismatch' 'Enter matching passwords with exactly 8 printable ASCII characters, without spaces.'), 'MY-BOT') | Out-Null
         return
     }
     $form.DialogResult = [Windows.Forms.DialogResult]::OK

@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$(id -u)" == '0' && "${WSL_DISTRO_NAME:-}" == 'MYBOT-Desktop-V1' ]] || { echo 'Use the dedicated MY-BOT distribution only.' >&2; exit 1; }
+BUNDLE_DIR="${1:?Missing package directory}"
+# Package integrity was checked by Windows before this script was invoked.
+source /etc/os-release
+[[ "$ID" == 'debian' && "${VERSION_ID%%.*}" -ge 13 ]] || { echo 'The packaged runtime requires Debian 13 or later.' >&2; exit 1; }
+export DEBIAN_FRONTEND=noninteractive
+if ! command -v flock >/dev/null 2>&1; then
+  apt-get update -qq
+  apt-get install -y --no-install-recommends util-linux
+fi
+install -d -m 0755 /opt/mybot-desktop
+touch /opt/mybot-desktop/update.lock
+chmod 0644 /opt/mybot-desktop/update.lock
+exec 8>/opt/mybot-desktop/update.lock
+flock -xn 8 || { echo 'Stop the Desktop service before updating. Runtime was not changed.' >&2; exit 1; }
+apt-get update -qq
+apt-get install -y --no-install-recommends ca-certificates chromium chromium-sandbox nodejs python3 xvfb xauth x11-utils x11-xserver-utils openbox x11vnc novnc websockify util-linux dbus-user-session systemd
+python3 - "$BUNDLE_DIR" <<'PY'
+import hashlib, json, pathlib, sys
+root = pathlib.Path(sys.argv[1]).resolve()
+package = json.loads((root / 'package.json').read_text())
+assert package['format'] == 1 and package['name'] == 'MY-BOT Desktop'
+for item in package['files']:
+    target = (root / item['path']).resolve()
+    assert target.is_relative_to(root) and target.is_file()
+    assert hashlib.sha256(target.read_bytes()).hexdigest() == item['sha256']
+PY
+node -e 'if(Number(process.versions.node.split(".")[0])<20)process.exit(1)'
+if ! id mybot >/dev/null 2>&1; then useradd --create-home --shell /bin/bash mybot; fi
+install -d -m 0700 -o mybot -g mybot /var/lib/mybot-desktop /var/lib/mybot-desktop/bot-desktop
+install -d -m 0755 /opt/mybot-desktop/releases
+[[ ! -e /etc/mybot-desktop-owner || "$(cat /etc/mybot-desktop-owner)" == 'MYBOT-Desktop-V1' ]] || exit 1
+printf '%s\n' 'MYBOT-Desktop-V1' > /etc/mybot-desktop-owner
+node --input-type=module - "$BUNDLE_DIR" <<'JS'
+import fs from 'node:fs';
+import path from 'node:path';
+import {pathToFileURL} from 'node:url';
+import {execFileSync} from 'node:child_process';
+const bundle=process.argv[2], metadata=JSON.parse(fs.readFileSync(path.join(bundle,'package.json'),'utf8'));
+if(!/^[a-f0-9]{24}$/.test(metadata.releaseId))throw Error('Invalid release');
+const url=new URL(metadata.serverOrigin);
+if(url.protocol!=='https:'||url.username||url.password||url.pathname!=='/'||url.search||url.hash)throw Error('Invalid server');
+// Write mutable per-user settings as that user, never follow their symlinks as root.
+execFileSync('runuser',['-u','mybot','--',process.execPath,'--input-type=module','-e',`
+  import fs from 'node:fs';
+  const state='/var/lib/mybot-desktop/bot-desktop/workstation-config.json', origin=process.argv[1];
+  if(fs.existsSync(state)&&JSON.parse(fs.readFileSync(state,'utf8')).serverOrigin!==origin)throw Error('Use the original server; pairing was not changed.');
+  fs.writeFileSync(state,JSON.stringify({mode:'remote',serverOrigin:origin}),{mode:0o600});
+`,url.origin],{stdio:'inherit'});
+const release='/opt/mybot-desktop/releases/'+metadata.releaseId;
+if(!fs.existsSync(release))fs.cpSync(path.join(bundle,'runtime'),release,{recursive:true});
+// Stable public extension key keeps the identity across immutable release directories.
+const {workstationUnit}=await import(pathToFileURL(path.join(release,'scripts/lib/workstation-service.mjs')));
+const unitDir='/etc/systemd/user';fs.mkdirSync(unitDir,{recursive:true});
+fs.writeFileSync(path.join(unitDir,'mybot-workstation.service'),workstationUnit('/opt/mybot-desktop/current','/usr/bin/node',{dataRoot:'/var/lib/mybot-desktop'}));
+const temporary='/opt/mybot-desktop/current.next';
+try{fs.unlinkSync(temporary)}catch(error){if(error.code!=='ENOENT')throw error;}
+fs.symlinkSync(release,temporary);fs.renameSync(temporary,'/opt/mybot-desktop/current');
+JS
+chmod -R go-w /opt/mybot-desktop/releases
+cat > /etc/wsl.conf <<'CONF'
+[boot]
+systemd=true
+[user]
+default=mybot
+CONF
+# Applies only inside the new dedicated distribution, not the owner's existing WSL.
+install -d -m 0755 /var/lib/systemd/linger
+touch /var/lib/systemd/linger/mybot
+printf '%s\n' 'PASS: dedicated collector runtime installed. No local web, database or AI worker installed.'

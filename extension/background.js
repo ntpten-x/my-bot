@@ -1785,10 +1785,12 @@ async function pollTasks() {
   }
 }
 
-function armAlarms() {
-  chrome.alarms.create("mybot-tick", { periodInMinutes: 1 });
-  chrome.alarms.create("mybot-tasks", { periodInMinutes: 0.5 });
-  chrome.alarms.create("mybot-heartbeat", { periodInMinutes: 1 });
+function armAlarms(existing = []) {
+  for (const [name, periodInMinutes] of [["mybot-tick", 1], ["mybot-tasks", 0.5], ["mybot-heartbeat", 1]]) {
+    if (!existing.some(alarm => alarm.name === name && alarm.periodInMinutes === periodInMinutes)) {
+      void chrome.alarms.create(name, { periodInMinutes }).catch(() => undefined);
+    }
+  }
 }
 
 chrome.runtime.onInstalled.addListener((details) => {
@@ -1826,7 +1828,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 // A fresh service worker (after Chrome stopped the old one) closes readers the old one left open
 // and makes sure the alarms exist.
 void closeOrphanReaders().catch(() => undefined);
-void chrome.alarms.getAll().then((alarms) => { if (alarms.length < 3) armAlarms(); }).catch(() => undefined);
+void chrome.alarms.getAll().then(alarms => armAlarms(alarms)).catch(() => undefined);
 
 async function handleTabLifecycleMessage(message, sender) {
   if (sender.url !== chrome.runtime.getURL("popup.html") || !["bot-tabs-status", "bot-tabs-cleanup"].includes(message?.type)) return null;

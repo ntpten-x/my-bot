@@ -2,14 +2,15 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { expect, it, vi } from "vitest";
 
-function harness() {
+function harness(desktop = false) {
   const local: Record<string, unknown> = { apiBase: "https://owner.example", paused: true };
   const session: Record<string, unknown> = {};
   const area = (data: Record<string, unknown>) => ({ get: async (defaults: object) => ({ ...defaults, ...structuredClone(data) }), set: async (value: object) => Object.assign(data, structuredClone(value)), remove: async (key: string) => { delete data[key]; } });
   const tabs = { create: vi.fn(async (value: object) => ({ id: 10, ...value })), get: vi.fn(async () => ({ id: 1 })) };
   const deps = { loadConfig: async () => local, base: (cfg: { apiBase: string }) => cfg.apiBase, syncCustomBridge: vi.fn(async () => undefined), ready: vi.fn(async () => undefined) };
   const context = vm.createContext({ URL, Date, Uint8Array, TextEncoder, crypto: globalThis.crypto,
-    fetch: async () => ({ json: async () => ({ apiBase: "http://localhost:8001" }) }),
+    fetch: async (url: string) => ({ ok: !url.endsWith('desktop-config.json') || desktop,
+      json: async () => url.endsWith('desktop-config.json') ? { dedicatedReaderDesktop: desktop } : { apiBase: "http://localhost:8001" } }),
     chrome: { runtime: { getURL: (file: string) => `chrome-extension://synthetic/${file}` }, tabs, storage: { local: area(local), session: area(session) } },
   });
   vm.runInContext(readFileSync("extension/connect.js", "utf8"), context);
@@ -71,6 +72,20 @@ it("opens the bundled server automatically on a fresh install without credential
   expect(h.local.apiBase).toBe("http://localhost:8001");
   expect(h.tabs.create).toHaveBeenCalledWith({ url: "http://localhost:8001/settings/extension", active: true });
   expect(h.local.token).toBeUndefined();
+  expect(h.local.dedicatedReaderDesktop).toBeUndefined();
+});
+
+it('opts into isolated display focus only on a fresh Desktop install, preserving update/pairing controls', async () => {
+  const h = harness(true); await h.connect.installed({ reason: 'install' }, h.deps);
+  expect(h.local.dedicatedReaderDesktop).toBe(true);
+  expect(h.local.paused).toBe(true);
+  expect(h.local.token).toBeUndefined();
+  const updated = harness(true); updated.local.dedicatedReaderDesktop = false;
+  await updated.connect.installed({ reason: 'update' }, updated.deps);
+  expect(updated.local.dedicatedReaderDesktop).toBe(false);
+  const paired = harness(true); paired.local.token = 'synthetic-existing';
+  await paired.connect.installed({ reason: 'install' }, paired.deps);
+  expect(paired.local.dedicatedReaderDesktop).toBeUndefined();
 });
 
 it("serializes enrollment tabs and rejects completion after a server change", async () => {

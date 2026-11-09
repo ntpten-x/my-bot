@@ -6,7 +6,7 @@
 
 ใช้ **จอเสมือน Xvfb + Openbox ใน WSL2** ให้ Chromium แบบมีหน้าจอปกติและส่วนขยายทำงานในจอนั้น เจ้าของดู/ควบคุมผ่าน noVNC บน Windows เมื่อต้องล็อกอินหรือตรวจสอบ แล้วปิดหรือย่อหน้าต่าง viewer ได้ โดยจอเสมือนยังอยู่ เบราว์เซอร์ไม่ได้รันแบบ headless และไม่ได้ปลอม DOM visibility; ไม่ปิด browser sandbox ไม่เปลี่ยน audio devices/OS sound settings
 
-เว็บและ worker ใช้การติดตั้งใน WSL เดิม ไม่สร้าง worker อีกตัว `http://localhost:8001` จาก Chromium ใน WSL จึงชี้แอปเดิมได้ ไม่ต้องเปิด HTTP ผ่าน IP หรือนำ device token ออกนอก localhost หากใช้เว็บบนโฮสต์อื่นต้องใช้ HTTPS ตามเดิม
+เว็บใช้การติดตั้งใน WSL เดิม ส่วน worker ใช้โฮสต์หลักที่มีอยู่ (เช่น Render) ไม่สร้าง worker อีกตัว `http://localhost:8001` จาก Chromium ใน WSL จึงชี้แอปเดิมได้ ไม่ต้องเปิด HTTP ผ่าน IP หรือนำ device token ออกนอก localhost หากใช้เว็บบนโฮสต์อื่นต้องใช้ HTTPS ตามเดิม
 
 ## การติดตั้งครั้งแรก
 
@@ -49,7 +49,7 @@ npm run browser:desktop -- --url https://your-mybot.example
 - ให้ Windows และ WSL ตื่นอยู่ ไม่สั่ง `wsl --shutdown` ไม่ปิด terminal ของตัว supervisor และไม่ให้เครื่อง sleep การย่อ Chrome ฝั่ง Windowsหรือ viewer ไม่ปิด Xvfb
 - ภายในจอเสมือน **อย่าย่อ Chromium หรือหน้าต่างบอท** เพราะยังมีข้อจำกัดเมื่อย่อหน้าต่างของเบราว์เซอร์เอง เพิ่ม Facebook/MY-BOT ใน Always keep these sites active ตามคู่มือ Chrome เพื่อลดการ discard
 - ตัว supervisor จอง display `:93`, VNC loopback `5905`, noVNC loopback `6085` หากถูกใช้อยู่จะหยุดโดยไม่ปิดโปรเซสอื่น `flock` ป้องกันเปิด supervisor ซ้อน
-- แต่ละโปรเซสทำงานในกลุ่มที่ supervisor สร้างไว้ หากส่วนประกอบใดหยุด จะหยุดชุดจอเสมือนและให้ตรวจสอบก่อนเปิดใหม่ ไม่ restart browser กลางงานส่งคลุมเครืออัตโนมัติ
+- แต่ละโปรเซสทำงานในกลุ่มที่ supervisor สร้างไว้ หาก viewer หรือ window manager หยุด จะลองกู้เฉพาะส่วนนั้นสูงสุด 5 ครั้งโดยไม่ปิด Chromium หาก Chromium หรือ Xvfb หยุด จะหยุดชุดจอเสมือนและให้ตรวจสอบก่อนเปิดใหม่ ไม่ restart browser กลางงานส่งคลุมเครืออัตโนมัติ
 - ก่อนหยุด ให้พักงานตามปกติและตรวจงานที่กำลังส่ง จากนั้น `Ctrl+C` ใน terminal ของ supervisor จะปิดเฉพาะชุดจอเสมือนนี้ ไม่ปิดเว็บ/worker หรือ Chrome ส่วนตัว ไม่รับประกันยกเลิก click ที่ได้รับ grant ไปแล้วทันที
 - `data/bot-desktop/` มี Xauthority และรหัส VNC ส่วน `data/desktop-browser-profile/` มี login/device token ทั้งคู่ถูก gitignore ห้ามพิมพ์รหัสลง logs/แชต หรือรวมในแบ็กอัปทั่วไป
 

@@ -4,6 +4,7 @@ import { dispatchNotification } from "./notify";
 import { getSettings, upsertSettings, type AppSettings } from "./settings";
 import { EXTENSION_SOURCE_TYPES } from "./scrape-plan";
 import { classifyAvailability } from "./ai/run";
+import { EXPECTED_EXTENSION_VERSION } from "./extension-heartbeat";
 
 export type WatchLevel = "ok" | "warn" | "bad" | "off";
 export type WatchCondition = { key: string; label: string; level: WatchLevel; message: string; hint: string };
@@ -26,6 +27,14 @@ export type WatchFacts = {
   workerLastTickAt: number | null;
   dbTransientErrors: number;
   dbError: string | null;
+  collection?: {
+    fbLoggedIn: boolean | null;
+    quietReason: string;
+    pendingPosts: number;
+    oldestPendingAt: number | null;
+    overdueSources: number;
+    captureKnown?: boolean;
+  };
 };
 
 export type WatchThresholds = Pick<AppSettings, "watchNoPostsHours" | "watchExtOfflineMinutes" | "watchParseSpikePct">;
@@ -54,15 +63,32 @@ export function assessWatch(facts: WatchFacts, t: WatchThresholds): WatchConditi
     if (!online) {
       add("extension", "ส่วนขยาย Chrome", "bad", facts.lastHeartbeatAt ? `ส่วนขยายออฟไลน์ ${Math.round(offlineMs / 60_000)} นาที` : "ยังไม่เคยได้รับสัญญาณจากส่วนขยาย", "เปิด Chrome ที่ติดตั้งส่วนขยาย ตรวจว่าโทเคนตรงกันและเปิดใช้งานอยู่");
     } else if (facts.extensionEnabled === false) {
-      add("extension", "ส่วนขยาย Chrome", "bad", "การดึงอัตโนมัติถูกปิดอยู่ในส่วนขยาย", "เปิดหน้าตั้งค่าส่วนขยายแล้วติ๊ก \"เปิดใช้งาน\"");
+      add("extension", "ส่วนขยาย Chrome", "off", "เจ้าของพักการเก็บโพสต์อยู่", "กลับมาเก็บต่อได้จากส่วนขยาย โดยข้อมูลค้างยังถูกเก็บไว้");
     } else if (facts.extensionErrors24h >= 20 || facts.extensionOutbox > 0) {
       add("extension", "ส่วนขยาย Chrome", "warn", `ข้อผิดพลาด 24 ชม. ${facts.extensionErrors24h} ครั้ง, รอส่ง ${facts.extensionOutbox} ชุด`, "ดูบันทึกข้อผิดพลาดของส่วนขยายในหน้าภาพรวม ถ้ารอส่งค้าง ตรวจว่าเซิร์ฟเวอร์ออนไลน์");
     } else add("extension", "ส่วนขยาย Chrome", "ok", "ออนไลน์และเปิดดึงอัตโนมัติ");
 
     const postAge = facts.lastExtensionPostAt ? facts.now - facts.lastExtensionPostAt : Infinity;
-    if (online && facts.extensionEnabled !== false && postAge > t.watchNoPostsHours * HOUR) {
+    if (online && facts.extensionEnabled !== false && !facts.collection?.quietReason && postAge > t.watchNoPostsHours * HOUR) {
       add("posts", "โพสต์ใหม่", "bad", facts.lastExtensionPostAt ? `ไม่มีโพสต์ใหม่จากกลุ่มที่เปิดไว้ ${Math.round(postAge / HOUR)} ชั่วโมง` : "ยังไม่มีโพสต์จากกลุ่มที่เปิดไว้", "ตรวจว่า Facebook ยังล็อกอินอยู่ และลองกด \"ดึงตอนนี้\" ในส่วนขยาย");
     } else add("posts", "โพสต์ใหม่", "ok", "มีโพสต์เข้ามาตามปกติ");
+
+    const collection = facts.collection;
+    if (online && facts.extensionEnabled !== false && collection) {
+      if (collection.fbLoggedIn === false) {
+        add("facebook", "การเข้าสู่ระบบ Facebook", "bad", "ส่วนขยายตรวจพบว่ายังไม่ได้เข้าสู่ระบบ Facebook", "เปิดจอ VNC แล้วเข้าสู่ระบบหรือจัดการหน้าตรวจสอบด้วยตนเอง บอทจะตรวจใหม่เอง");
+      } else if (collection.fbLoggedIn === true) add("facebook", "การเข้าสู่ระบบ Facebook", "ok", "เข้าสู่ระบบอยู่");
+      if (collection.quietReason) {
+        add("collection", "การเก็บโพสต์", "off", collection.quietReason);
+      } else if (collection.fbLoggedIn === true) {
+        const pendingAge = collection.oldestPendingAt ? facts.now - collection.oldestPendingAt : 0;
+        if (collection.pendingPosts > 0 && pendingAge > 15 * 60_000) {
+          add("collection", "การเก็บโพสต์", "bad", `มีโพสต์รอส่ง ${collection.pendingPosts} รายการ ค้างเกิน 15 นาที`, "ตรวจเว็บและสถานะการเชื่อมต่อส่วนขยาย ข้อมูลค้างยังถูกเก็บไว้และระบบจะลองส่งใหม่เอง");
+        } else if (collection.overdueSources > 0) {
+          add("collection", "การเก็บโพสต์", "bad", `มี ${collection.overdueSources} แหล่งที่เลยกำหนดและไม่มีรอบอ่านเกิน 15 นาที`, "ตรวจจอ VNC ว่า Facebook ขอให้เข้าสู่ระบบหรือตรวจสอบบัญชีหรือไม่ อย่าล้างโปรไฟล์หรือคิวข้อมูล");
+        } else if (collection.captureKnown !== false) add("collection", "การเก็บโพสต์", "ok", `ไม่มีข้อมูลค้างนาน · รอส่ง ${collection.pendingPosts} รายการ`);
+      }
+    }
 
     const spike = t.watchParseSpikePct / 100;
     const r = facts.parseRecent;
@@ -121,19 +147,40 @@ async function collectFacts(now: number, settings: AppSettings): Promise<WatchFa
       coalesce(sum(CASE WHEN length(trim(p."text")) < 5 THEN 1 ELSE 0 END), 0)::int AS notext
     FROM "Post" p JOIN "Source" s ON s."id" = p."sourceId"
     WHERE s."type"::text = ANY(${types}::text[]) AND p."createdAt" >= ${from} AND p."createdAt" < ${to}`;
-  const [enabledSources, heartbeat, lastPost, recent, base, providers, pending, tick] = await Promise.all([
+  const [enabledSources, heartbeat, lastPost, recent, base, providers, pending, tick, collectionRow, overdueSources] = await Promise.all([
     prisma.source.count({ where: { type: { in: [...EXTENSION_SOURCE_TYPES] }, enabled: true } }),
-    prisma.extensionHeartbeat.findFirst({ orderBy: { lastSeenAt: "desc" } }),
+    prisma.extensionHeartbeat.findFirst({ where: { version: EXPECTED_EXTENSION_VERSION }, orderBy: { lastSeenAt: "desc" } }),
     prisma.post.findFirst({ where: { source: { type: { in: [...EXTENSION_SOURCE_TYPES] } } }, orderBy: { createdAt: "desc" }, select: { createdAt: true } }),
     parseQuery(recentSince, new Date(now + 60_000)),
     parseQuery(baseSince, recentSince),
     classifyAvailability(settings),
     prisma.aiJob.findFirst({ where: { status: "pending" }, orderBy: { createdAt: "asc" }, select: { createdAt: true } }),
     prisma.setting.findUnique({ where: { key: "worker_last_tick" } }),
+    prisma.setting.findUnique({ where: { key: "extension_collection_status" } }),
+    prisma.source.count({ where: {
+      type: { in: [...EXTENSION_SOURCE_TYPES] }, enabled: true,
+      nextRunAt: { lt: new Date(now - 15 * 60_000) },
+      OR: [{ lastRunAt: null }, { lastRunAt: { lt: new Date(now - 15 * 60_000) } }],
+    } }),
   ]);
-  const legacySeen = await prisma.setting.findUnique({ where: { key: "extension_last_seen" } });
-  const seenTimes = [heartbeat?.lastSeenAt?.getTime() ?? 0, legacySeen?.value ? new Date(legacySeen.value).getTime() || 0 : 0];
-  const lastSeen = Math.max(...seenTimes);
+  const lastSeen = heartbeat?.lastSeenAt?.getTime() ?? 0;
+  let collection: WatchFacts["collection"];
+  try {
+    const runtime = JSON.parse(collectionRow?.value || "null");
+    const age = now - Date.parse(runtime?.at);
+    if (heartbeat && runtime?.installId === heartbeat.id && runtime?.version === EXPECTED_EXTENSION_VERSION && age >= 0 && age < 3 * 60_000 && now - lastSeen < 3 * 60_000) {
+      const checkedAge = now - (heartbeat.fbCheckedAt?.getTime() ?? 0);
+      const oldest = Number(runtime.capture?.oldestPendingAt);
+      collection = {
+        fbLoggedIn: checkedAge >= 0 && checkedAge < 3 * 60_000 ? heartbeat.fbLoggedIn : null,
+        quietReason: String(runtime.quietReason || "").slice(0, 160),
+        pendingPosts: Math.max(0, Number(runtime.capture?.pendingPosts) || 0),
+        oldestPendingAt: Number.isFinite(oldest) && oldest > 0 && oldest <= now ? oldest : null,
+        overdueSources,
+        captureKnown: runtime.capture != null,
+      };
+    }
+  } catch { /* Missing/malformed telemetry is unknown, not healthy. */ }
   const transientDelta = dbErrorStats.transient - lastDbTransient;
   lastDbTransient = dbErrorStats.transient;
   const tickAt = tick?.value ? new Date(tick.value).getTime() : NaN;
@@ -155,6 +202,7 @@ async function collectFacts(now: number, settings: AppSettings): Promise<WatchFa
     workerLastTickAt: Number.isFinite(tickAt) ? tickAt : null,
     dbTransientErrors: Math.max(0, transientDelta),
     dbError: null,
+    collection,
   };
 }
 

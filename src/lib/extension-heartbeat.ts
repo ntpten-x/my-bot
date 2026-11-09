@@ -4,7 +4,7 @@ import { upsertSettings } from "./settings";
 import { touchExtension } from "./extension-status";
 
 // Version this MY-BOT build expects from extension/manifest.json (tests keep the two in sync).
-export const EXPECTED_EXTENSION_VERSION = "1.11.17";
+export const EXPECTED_EXTENSION_VERSION = "1.11.19";
 
 export function isCurrentExtensionVersion(version: string | null | undefined) {
   return String(version || "").trim() === EXPECTED_EXTENSION_VERSION;
@@ -175,6 +175,13 @@ export async function recordHeartbeat(input: HeartbeatInput, deviceId?: string) 
   if (input.runtime?.capture) {
     await upsertSettings({ extension_capture: JSON.stringify({ ...input.runtime.capture, at: now.toISOString() }) });
   }
+  // Scope collection diagnostics to the exact heartbeat; stale or other-version
+  // runtime must never be interpreted as current progress or an intentional pause.
+  await upsertSettings({ extension_collection_status: JSON.stringify({
+    installId: row.id, version: row.version, at: now.toISOString(),
+    quietReason: input.runtime?.quietReason ?? "",
+    capture: input.runtime?.capture ?? null,
+  }) });
   if (input.runtime?.tabs) {
     await upsertSettings({ extension_tab_status: JSON.stringify({ ...input.runtime.tabs, version: row.version, at: now.toISOString() }) });
   }

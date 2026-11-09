@@ -27,6 +27,15 @@
     const stored = await chrome.storage.local.get({ token: "" });
     if (stored.token) return;
     await chrome.storage.local.set({ apiBase: await installOrigin() });
+    // Only the separately downloaded Desktop package contains this public marker.
+    // Installation is explicit consent to focus its isolated virtual display; it
+    // does not grant comment permission or change an existing profile on updates.
+    try {
+      const response = await fetch(chrome.runtime.getURL("desktop-config.json"));
+      if (response.ok && (await response.json()).dedicatedReaderDesktop === true) {
+        await chrome.storage.local.set({ dedicatedReaderDesktop: true });
+      }
+    } catch { /* Normal Chrome extension package has no Desktop marker. */ }
     await deps.syncCustomBridge().catch(() => undefined);
     await open(deps);
   }

@@ -152,6 +152,10 @@ export default function SettingsPage() {
           <span className="font-semibold">ส่วนขยาย Chrome: ดาวน์โหลดและจับคู่ →</span>
           <span className="mt-1 block text-muted">ติดตั้ง/อัปเดตส่วนขยาย สร้างรหัสจับคู่ และจัดการอุปกรณ์</span>
         </Link>
+        <Link href="/settings/desktop" className="block rounded-2xl border border-line bg-card p-4 text-sm shadow-sm hover:bg-paper">
+          <span className="font-semibold">MY-BOT Desktop: บอททำงานในจอแยก</span>
+          <span className="mt-1 block text-muted">ส่วนเสริม Windows แบบเลือกติดตั้ง สำหรับเก็บโพสต์โดยไม่บังหน้าจอ รุ่นทดลอง</span>
+        </Link>
         <Link href="/settings/security" className="block rounded-2xl border border-line bg-card p-4 text-sm shadow-sm hover:bg-paper">
           <span className="font-semibold">ความปลอดภัย: เปลี่ยนรหัสผ่าน →</span>
           <span className="mt-1 block text-muted">ตรวจความแข็งแรงของรหัสผ่านสำหรับการใช้งานบนคลาวด์</span>

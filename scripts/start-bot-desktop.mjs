@@ -10,11 +10,21 @@ import { findBrowser } from './lib/bot-browser.mjs';
 import { profileInUse } from './lib/browser-profile.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const dataRoot = process.env.MYBOT_DATA_ROOT || path.join(root, 'data');
 const children = [];
 let stopping = false;
+const recoveryTimers = new Set();
+const componentState = {};
+let stateWrite = Promise.resolve();
+function recordComponent(name, phase) {
+  componentState[name] = phase;
+  const state = JSON.stringify({ at: new Date().toISOString(), phase: Object.values(componentState).some(value => ['review', 'recovering'].includes(value)) ? 'degraded' : 'running', components: componentState });
+  stateWrite = stateWrite.catch(() => undefined).then(() => writeFile(path.join(dataRoot, 'bot-desktop/components.json'), state, { mode: 0o600 })).catch(() => undefined);
+}
 function shutdown(code) {
   if (stopping) return;
   stopping = true;
+  for (const timer of recoveryTimers) clearTimeout(timer);
   // Signal only process groups created by this supervisor; no PID files or global pkill.
   for (const child of [...children].reverse()) {
     try { process.kill(-child.pid, 'SIGTERM'); } catch { /* Already exited. */ }
@@ -27,13 +37,38 @@ function shutdown(code) {
   Promise.all(children.map(child => child.exitCode !== null || child.signalCode !== null ? null : new Promise(resolve => child.once('exit', resolve))))
     .then(() => clearTimeout(timer));
 }
-function start(name, executable, args, env) {
+function start(name, executable, args, env, failures = 0) {
+  if (stopping) throw new Error('The desktop is stopping.');
   const child = spawn(executable, args, { cwd: root, env, detached: true, stdio: name === 'Browser' ? 'ignore' : ['ignore', 'ignore', 'pipe'], shell: false });
-  let diagnostics = '';
-  child.stderr?.on('data', chunk => { diagnostics = (diagnostics + chunk.toString()).slice(-3000); });
+  const startedAt = Date.now();
+  // Do not log browser output or authority/profile contents.
+  child.stderr?.resume();
   children.push(child);
-  child.once('error', () => { console.error(`${name} could not start.`); shutdown(1); });
-  child.once('exit', (code, signal) => { if (!stopping) { console.error(`${name} stopped (${signal || code}). The desktop was stopped; inspect the session before restarting.`); if (diagnostics) console.error(diagnostics); shutdown(1); } });
+  recordComponent(name, 'running');
+  let finished = false;
+  const exited = () => {
+    if (finished) return;
+    finished = true;
+    const index = children.indexOf(child);
+    if (index >= 0) children.splice(index, 1);
+    if (stopping) return;
+    // Viewer/window manager recovery does not recreate Chrome or touch its journal.
+    if (['Desktop viewer', 'Web viewer', 'Window manager'].includes(name)) {
+      const attempts = Date.now() - startedAt > 60_000 ? 1 : failures + 1;
+      recordComponent(name, attempts > 5 ? 'review' : 'recovering');
+      if (attempts > 5) { console.error(`${name} needs owner review after 5 retries. Chrome was left running.`); return; }
+      const delay = Math.min(60_000, 1000 * 2 ** (attempts - 1));
+      console.error(`${name} stopped; retrying in ${delay / 1000}s without restarting Chrome.`);
+      const timer = setTimeout(() => { recoveryTimers.delete(timer); if (!stopping) start(name, executable, args, env, attempts); }, delay);
+      recoveryTimers.add(timer);
+    } else {
+      recordComponent(name, 'review');
+      console.error(`${name} stopped. Inspect the session before restarting; uncertain sends are not retried.`);
+      shutdown(1);
+    }
+  };
+  child.once('error', exited);
+  child.once('exit', exited);
   return child;
 }
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -64,7 +99,8 @@ try {
     throw new Error('Unknown or incomplete option. Use --help.');
   }
   if (process.platform !== 'linux') throw new Error('Run this command inside WSL/Linux, not Windows Node.js.');
-  const plan = desktopPlan(root, url);
+  const plan = desktopPlan(root, url, { dataRoot,
+    extensionPath: process.env.MYBOT_DESKTOP_PACKAGE === '1' ? path.join(root, 'extension') : undefined });
   const missing = [];
   for (const name of ['Xvfb', 'xauth', 'xdpyinfo', 'xset', 'openbox', 'x11vnc', 'websockify', 'flock']) {
     const found = await Promise.all((process.env.PATH || '').split(path.delimiter).filter(Boolean)

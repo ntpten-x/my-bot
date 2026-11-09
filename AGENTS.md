@@ -63,6 +63,8 @@ Done when `npm run doctor` has no FAIL, `GET http://127.0.0.1:8001/api/v1/health
 | `npm test` / `npm run build` | Tests, then Prisma generate and Next build |
 | `npm run doctor` | Local health report |
 | `npm run browser:desktop` | WSL virtual display; `--password` is interactive owner input, `--check` is read-only |
+| `npm run bot:start` / `npm run bot:status` / `npm run bot:stop` | WSL workstation supervisor: web + isolated desktop, no extra worker |
+| `npm run bot:install-service` | Install the WSL systemd user supervisor; Windows logon launcher is separate |
 | `npm run browser:bot` | Launch isolated persistent Chrome profile on the bot workstation; docs/BOT-WORKSTATION.th.md |
 | `npm run db:migrate` | `prisma migrate deploy` |
 | `npm run db:seed` | Categories, keywords, demo source (disabled) |
@@ -164,3 +166,11 @@ Full-text opens its known target once and keeps matching session ownership. Shar
 ## Visible feed capture (extension 1.11.16)
 
 Visible personal group/Marketplace tabs observe relevant DOM mutations with a 500ms coalesced wake, stable post keys, bounded pending/seen caches and <=40 transport batches. Acknowledge only durable enqueue; preserve pending until accepted and original observedAt on retry. Background dedupe is per post/content/server/token/account, never a per-source 20-second drop gate. Managed readers keep their existing checkpoint path. Do not change quiet/account/quotas, default group intervals or use clicks/private Facebook APIs to claim instant detection. Capture-to-ingest timing is browser-clock-dependent and is not publish-to-capture latency. SSE uses createdAt/id keyset pagination, serial polls and abort/cancel cleanup; reconnect repairs with a full filtered fetch. See docs/LIVE-CAPTURE-1.11.16.th.md.
+
+## Workstation supervision (extension 1.11.18)
+
+`bot:start` supervises local web and the isolated desktop without starting a worker. Adopted existing services are monitored, never killed. Only owned web processes may be restarted after bounded health checks/backoff. Recover viewer/Openbox processes without reopening Chromium; Chromium/Xvfb loss latches for owner review and `bot:resume-desktop`, never automatic comment retry. Repair MV3 alarms by name/period, not count. Watchdog collection runtime must match the fresh heartbeat install/version; intentional pauses are off, missing telemetry is unknown. Keep user service and Windows WSL logon launcher scoped to MY-BOT. See docs/AUTONOMOUS-WORKSTATION.th.md.
+
+## Optional Desktop package (extension 1.11.19)
+
+`/settings/desktop` and authenticated `/api/desktop-download` package a production-only Windows 11 x64 preview collector, never an app/database/worker installation. Bundle only allowlisted public runtime files and origin, never credentials. Installer owns only `MYBOT-Desktop-V1`; do not touch existing distros, change the default distro, globally shut down WSL or change OS power/audio settings. Keep mutable profiles outside immutable releases, retain stable extension public identity, and preserve pairing/pause on update. Desktop focus opt-in applies only to a fresh explicitly installed Desktop package. Missing remote configuration fails closed and must never start localhost services. Keep the preview label until pristine-Windows and real read-only Facebook acceptance. See docs/MYBOT-DESKTOP.th.md.

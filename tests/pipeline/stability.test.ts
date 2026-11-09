@@ -39,8 +39,19 @@ describe("watchdog assessment", () => {
   });
   it("flags an offline extension and auto-fetch off", () => {
     expect(level({ lastHeartbeatAt: NOW - 31 * 60_000 }, "extension")).toBe("bad");
-    expect(level({ extensionEnabled: false }, "extension")).toBe("bad");
+    expect(level({ extensionEnabled: false }, "extension")).toBe("off");
     expect(level({ extensionOutbox: 3 }, "extension")).toBe("warn");
+  });
+  it('alerts on verified login loss, old pending delivery and overdue sources, respecting owner pauses', () => {
+    const collection = { fbLoggedIn: true, quietReason: '', pendingPosts: 3, oldestPendingAt: NOW - 16 * 60_000, overdueSources: 0 };
+    expect(level({ collection }, 'collection')).toBe('bad');
+    expect(level({ collection: { ...collection, oldestPendingAt: NOW - 60_000 } }, 'collection')).toBe('ok');
+    expect(level({ collection: { ...collection, pendingPosts: 0, overdueSources: 2 } }, 'collection')).toBe('bad');
+    expect(level({ collection: { ...collection, quietReason: 'ช่วงพักที่เจ้าของตั้งไว้' } }, 'collection')).toBe('off');
+    expect(level({ collection: { ...collection, fbLoggedIn: false } }, 'facebook')).toBe('bad');
+    expect(level({ collection: { ...collection, fbLoggedIn: null } }, 'facebook')).toBeUndefined();
+    expect(level({ collection, extensionEnabled: false }, 'collection')).toBeUndefined();
+    expect(level({ collection, lastHeartbeatAt: NOW - 3600_000 }, 'collection')).toBeUndefined();
   });
   it("flags no posts only while the extension is online", () => {
     expect(level({ lastExtensionPostAt: NOW - 7 * 3600_000 }, "posts")).toBe("bad");
