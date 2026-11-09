@@ -147,7 +147,7 @@ it("refreshes newly connected accounts without clearing the unsaved draft", asyn
   expect(container.querySelector<HTMLSelectElement>("#comment-type")!.value).toBe("roblox");
 });
 
-const savedRule = () => ({ id: "saved", revision: 4, name: "Roblox ชุดประจำ", typeInfo: { id: "roblox", name: "Roblox", categoryName: "เกม" }, enabled: true, sourceIds: ["group"], templates: [{ body: "ข้อความแรก" }, { body: "ข้อความที่สอง" }], selectionMode: "random", startMinute: 0, endMinute: 1440, days: [0, 1, 2, 3, 4, 5, 6], maxAgeHours: 6, areaCooldownSec: 60, browserDeviceId: "device", browserFbUserId: "123456", browserConsent: true, keywords: "", excludeKeywords: "", keywordMode: "any", priority: 0, deliveryMode: "extension", requireAi: false, messageMode: "template", pausedReason: "" });
+const savedRule = () => ({ id: "saved", revision: 4, name: "Roblox ชุดประจำ", typeInfo: { id: "roblox", name: "Roblox", categoryName: "เกม" }, enabled: true, sourceIds: ["group"], templates: [{ body: "ข้อความแรก" }, { body: "ข้อความที่สอง" }], selectionMode: "random", startMinute: 0, endMinute: 1440, days: [0, 1, 2, 3, 4, 5, 6], maxAgeHours: 6, areaCooldownSec: 60, browserDeviceId: "device", browserFbUserId: "123456", browserConsent: true, keywords: "roblox", excludeKeywords: "", keywordMode: "any", priority: 0, deliveryMode: "extension", requireAi: false, messageMode: "template", pausedReason: "" });
 it("lists a type with its own switch and opens the same editor with saved values", async () => {
   const original = vi.mocked(fetch).getMockImplementation()!;
   const rule = savedRule();

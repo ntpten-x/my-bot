@@ -25,7 +25,7 @@ it("treats extension template keyword rules as immediate bots", () => {
   expect(isKeywordBotRule({ ...base, messageMode: "ai_draft" })).toBe(false);
 });
 
-it("lets keyword bots match truncated posts once required words are already present", () => {
+it("waits for full text before matching keyword bots", () => {
   const post = {
     truncated: true,
     text: "หาช่างแอร์ด่วน…",
@@ -37,7 +37,40 @@ it("lets keyword bots match truncated posts once required words are already pres
     duplicateOfId: null,
     dismissed: false,
   };
-  expect(explainCommentRule(base, post).matched).toBe(true);
-  expect(explainCommentRule({ ...base, requireAi: true }, post).matched).toBe(false);
-  expect(explainCommentRule({ ...base, keywords: "" }, post).matched).toBe(false);
+  const truncated = explainCommentRule(base, post);
+  expect(truncated.matched).toBe(false);
+  expect(truncated.checks.find((check) => check.code === "full_text")?.passed).toBe(false);
+  expect(explainCommentRule(base, { ...post, truncated: false }).matched).toBe(true);
+});
+
+it("rejects empty keyword lists for keyword bots", () => {
+  const post = {
+    truncated: false,
+    text: "หาช่างแอร์ด่วน",
+    sourceId: "src",
+    createdAt: new Date(),
+    postedAt: new Date(),
+    isAd: false,
+    forbiddenHit: false,
+    duplicateOfId: null,
+    dismissed: false,
+  };
+  const empty = explainCommentRule({ ...base, keywords: "" }, post);
+  expect(empty.matched).toBe(false);
+  expect(empty.checks.find((check) => check.code === "keywords")?.passed).toBe(false);
+});
+
+it("does not match when exclusions appear only after full text expands", () => {
+  const card = {
+    truncated: false,
+    text: "หาช่างแอร์ด่วน ได้แล้วครับ ไม่ต้องแล้ว",
+    sourceId: "src",
+    createdAt: new Date(),
+    postedAt: new Date(),
+    isAd: false,
+    forbiddenHit: false,
+    duplicateOfId: null,
+    dismissed: false,
+  };
+  expect(explainCommentRule({ ...base, excludeKeywords: "ได้แล้ว" }, card).matched).toBe(false);
 });

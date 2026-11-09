@@ -73,10 +73,23 @@ export async function POST(request: Request) {
     const deviceKey = createHash("sha256").update(request.headers.get("authorization") || "").digest("hex");
     const stored = await prisma.post.findMany({ where: { externalUrl: { in: data.posts.map(post => normalizeUrl(post.url)) } }, select: { externalUrl: true } });
     const urls = new Set(stored.map(post => post.externalUrl));
-    const receipts = data.posts.map(post => ({ itemId: post.itemId!, outcome: urls.has(normalizeUrl(post.url)) ? "accepted" : "skipped" as const }));
-    await prisma.ingestReceipt.createMany({ data: receipts.map(receipt => ({ ...receipt, deviceKey, batchId })), skipDuplicates: true });
+    const outcomes = (result.ok && "itemOutcomes" in result && result.itemOutcomes && typeof result.itemOutcomes === "object")
+      ? result.itemOutcomes as Record<string, string>
+      : {};
+    const receipts = data.posts.map(post => {
+      const url = normalizeUrl(post.url);
+      const accepted = urls.has(url);
+      const reason = outcomes[url] || (accepted ? "accepted" : "skipped");
+      return { itemId: post.itemId!, outcome: accepted ? "accepted" as const : "skipped" as const, reason };
+    });
+    await prisma.ingestReceipt.createMany({ data: receipts.map(({ itemId, outcome }) => ({ itemId, outcome, deviceKey, batchId })), skipDuplicates: true });
     const persisted = await prisma.ingestReceipt.findMany({ where: { deviceKey, batchId }, select: { itemId: true, outcome: true } });
-    return withCors(json({ ...publicResult, batchId, receipts: persisted }));
+    const reasonByItem = new Map(receipts.map(row => [row.itemId, row.reason]));
+    return withCors(json({
+      ...publicResult,
+      batchId,
+      receipts: persisted.map(row => ({ ...row, reason: reasonByItem.get(row.itemId) || row.outcome })),
+    }));
   } catch (error) {
     const code = error && typeof error === "object" && "code" in error ? error.code : "";
     const schemaMissing = code === "P2021" || code === "P2022";

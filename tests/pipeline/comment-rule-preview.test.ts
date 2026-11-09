@@ -28,10 +28,10 @@ describe("shared rule explanations", () => {
     expect(explainCommentRule(rule, { ...post, ...change }, now).matched).toBe(false);
     expect(matchesCommentRule(rule, { ...post, ...change }, now)).toBe(false);
   });
-  it("retains any/all, no-keyword and overnight Bangkok behavior", () => {
+  it("retains any/all matching and overnight Bangkok windows; empty keywords never match keyword bots", () => {
     expect(matchesCommentRule(rule, post, now)).toBe(true);
     expect(matchesCommentRule({ ...rule, keywordMode: "any" }, { ...post, text: "แอร์" }, now)).toBe(true);
-    expect(matchesCommentRule({ ...rule, keywords: "" }, { ...post, text: "อื่น ๆ" }, now)).toBe(true);
+    expect(matchesCommentRule({ ...rule, keywords: "" }, { ...post, text: "อื่น ๆ" }, now)).toBe(false);
     const overnight = { ...rule, startMinute: 1320, endMinute: 120, daysJson: "[1]" };
     expect(explainCommentRule(overnight, post, new Date("2026-11-02T18:00:00Z")).matched).toBe(true);
     expect(explainCommentRule(overnight, post, new Date("2026-11-02T19:00:00Z")).checks.find(check => check.code === "window")?.passed).toBe(false);

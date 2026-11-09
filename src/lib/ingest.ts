@@ -163,20 +163,27 @@ export async function ingestPosts(
   const prepared = [];
   let tooOld = 0;
   let outsideSource = 0;
+  const itemOutcomes = new Map<string, string>();
   for (const raw of input.posts) {
     const text = raw.text?.replace(/\u0000/g, "").trim().slice(0, 8000);
-    if (!text || text.length < 4 || !raw.url) continue;
+    if (!text || text.length < 4 || !raw.url) {
+      if (raw.url) itemOutcomes.set(normalizeUrl(raw.url), "invalid");
+      continue;
+    }
+    const url = normalizeUrl(raw.url);
     if (!postBelongsToSource(raw.url, source)) {
       outsideSource += 1;
+      itemOutcomes.set(url, "outside_source");
       continue;
     }
     const postedAt = parseDate(raw.postedAt);
     if (!isWithinMaxAge(postedAt, settings.maxPostAgeHours)) {
       tooOld += 1;
+      itemOutcomes.set(url, "too_old");
       continue;
     }
     const lead = prepareLead({ text, url: raw.url }, rules, catalog);
-    prepared.push({ raw: { ...raw, text }, lead, url: normalizeUrl(raw.url), postedAt });
+    prepared.push({ raw: { ...raw, text }, lead, url, postedAt });
   }
 
   const existing = prepared.length
@@ -232,6 +239,7 @@ export async function ingestPosts(
       if (isExpansionOf(old.text, item.raw.text)) expanded += 1;
       old.text = item.raw.text; old.contentHash = item.lead.hash; old.textRevision += 1;
       revisedIds.push(old.id);
+      itemOutcomes.set(item.url, "revised");
     }
   }
 
@@ -249,15 +257,22 @@ export async function ingestPosts(
         select: { contentHash: true, externalUrl: true },
       })
     : [];
+  const tombstoneUrls = new Set<string>();
   for (const row of removed) {
     seenHash.add(row.contentHash);
-    if (row.externalUrl) seenUrl.add(row.externalUrl);
+    if (row.externalUrl) {
+      seenUrl.add(row.externalUrl);
+      tombstoneUrls.add(row.externalUrl);
+    }
   }
   let duplicates = 0;
   const fresh = [];
   for (const item of prepared) {
     if (seenHash.has(item.lead.hash) || seenUrl.has(item.url)) {
       duplicates += 1;
+      if (!itemOutcomes.has(item.url)) {
+        itemOutcomes.set(item.url, tombstoneUrls.has(item.url) ? "tombstone" : "duplicate");
+      }
       continue;
     }
     seenHash.add(item.lead.hash);
@@ -300,8 +315,15 @@ export async function ingestPosts(
       }
       return owned;
     });
+    const ownedIds = new Set(inserted.map(post => post.id));
+    for (const row of data) {
+      if (ownedIds.has(row.id)) itemOutcomes.set(row.externalUrl, "accepted");
+      else {
+        duplicates += 1;
+        itemOutcomes.set(row.externalUrl, "duplicate");
+      }
+    }
     createdIds.push(...inserted.map(post => post.id));
-    duplicates += data.length - inserted.length;
   }
   recordTiming("ingest_store", performance.now() - storeStarted);
 
@@ -319,6 +341,7 @@ export async function ingestPosts(
     sourceId: source.id,
     actor: input.actor,
   };
+  const publicOutcomes = Object.fromEntries(itemOutcomes);
 
   if (options.deferFinalize) {
     return {
@@ -330,6 +353,7 @@ export async function ingestPosts(
       tooOld: core.tooOld,
       outsideSource: core.outsideSource,
       source: core.source,
+      itemOutcomes: publicOutcomes,
       _finalize: () => finalizeIngest(core),
     };
   }
@@ -345,6 +369,7 @@ export async function ingestPosts(
     tooOld,
     outsideSource,
     source: canonicalSourceUrl(source.url),
+    itemOutcomes: publicOutcomes,
   };
   } finally { recordTiming("ingest", performance.now() - started); }
 }

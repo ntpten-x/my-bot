@@ -27,7 +27,12 @@ export const autoCommentRuleSchema = z.object({
   .refine(data => data.deliveryMode !== "extension" || !data.enabled || !data.browserConsent || Boolean(data.browserDeviceId && data.browserFbUserId && data.browserConsent && data.sourceIds.length), "ต้องเลือกอุปกรณ์ บัญชี และยืนยันสิทธิ์ใช้งานกลุ่มก่อนเปิดกฎ")
   .refine(data => data.messageMode !== "ai_draft" || data.requireAi, "ข้อความ AI ต้องรอผลวิเคราะห์ก่อน")
   .refine(data => data.messageMode === "ai_draft" || (data.templates.length > 0 || Boolean(data.typeProductId && data.replyTemplateIds?.length)), "ต้องมีข้อความสำเร็จรูปอย่างน้อยหนึ่งข้อความ")
-  .refine(data => Boolean(data.pageId) || data.sourceIds.length > 0, "ต้องเลือกแหล่งข้อมูลหรือกำหนด Page ID ใน Allowlist");
+  .refine(data => Boolean(data.pageId) || data.sourceIds.length > 0, "ต้องเลือกแหล่งข้อมูลหรือกำหนด Page ID ใน Allowlist")
+  .refine(data => {
+    if (!data.enabled) return true;
+    if (data.intentMode !== "keyword" || data.messageMode !== "template" || data.deliveryMode !== "extension") return true;
+    return data.keywords.split(/[,\n]/).map(word => word.trim()).filter(Boolean).length > 0;
+  }, "กฎคอมเมนต์คำสำคัญต้องมีคำสำคัญอย่างน้อยหนึ่งคำก่อนเปิดใช้งาน");
 export const commentControlSchema = z.object({
   action: z.enum(["start", "pause", "stop", "emergency", "reset"]).optional(),
   dryRun: z.literal(false).optional(), hourlyLimit: z.number().int().min(1).max(50).optional(),

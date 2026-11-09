@@ -119,8 +119,9 @@ describe("assist extension helpers", () => {
 describe("extension safety policy", () => {
   const code = (file: string) =>
     readFileSync(path.join(ext, file), "utf8")
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/(^|[^:])\/\/.*$/gm, "$1");
+      // Only strip whole-line JSDoc/block comments. Never treat Chrome globs like "https://facebook.com/*" as comments.
+      .replace(/^\s*\/\*[\s\S]*?\*\/\s*$/gm, "")
+      .replace(/(^|[^:"'])\/\/.*$/gm, "$1");
 
   it.each(["assist.js", "bridge.js", "background.js", "content.js", "identity.js", "scrape.js", "parser.js", "selectors.js", "popup.js"])("%s never clicks, presses keys, submits or calls GraphQL", (file) => {
     const src = code(file);
@@ -151,7 +152,7 @@ describe("extension safety policy", () => {
       commands: Record<string, { suggested_key?: { default?: string } }>;
       permissions: string[];
     };
-    expect(manifest.version).toBe("1.11.23");
+    expect(manifest.version).toBe("1.11.24");
     expect(manifest.permissions).not.toContain("cookies");
     expect(manifest.permissions).not.toContain("webRequest");
     expect(Object.keys(manifest.commands).sort()).toEqual(["mark-sent", "mark-skip"]);

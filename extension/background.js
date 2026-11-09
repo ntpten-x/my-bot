@@ -186,11 +186,23 @@ async function errorSummary() {
 
 // ---- Outbox: posts that could not reach MY-BOT wait here (chrome.storage) and are re-sent later ----
 const OUTBOX_MAX = 200;
+const OUTBOX_MAX_PER_ORIGIN = 200;
+const OUTBOX_MAX_TOTAL = 400;
 const OUTBOX_MAX_AGE_MS = 72 * 3600000;
 const CAPTURE_JOURNAL_MAX = 400;
+const JOURNAL_CHUNK = 40;
 let outboxLock = Promise.resolve();
 function withOutboxLock(fn) {
   const task = outboxLock.then(fn); outboxLock = task.catch(() => undefined); return task;
+}
+/** Chrome period alarms cannot be under 30s; one-shot wakes drain comment work right after ingest. */
+function nudgeCommentDrain() {
+  try {
+    if (!chrome?.alarms?.create) return;
+    void chrome.alarms.create("mybot-comment-nudge", { when: Date.now() + 750 }).catch(() => undefined);
+  } catch {
+    // Unit harnesses and paused workers may lack alarms.
+  }
 }
 // Serialize chrome.storage read-modify-write for parallel scrapes (backlog / sweeps / reader window).
 let backlogLock = Promise.resolve();
@@ -243,81 +255,120 @@ function mergeJournalPosts(existing, incoming) {
     const prevText = String(prev.text || "");
     byUrl.set(String(post.url), nextText.length >= prevText.length ? { ...prev, ...post, text: nextText } : { ...post, ...prev, text: prevText });
   }
-  return [...byUrl.values()].slice(0, 40);
+  // Never truncate here — chunks below keep every unique URL durable.
+  return [...byUrl.values()];
+}
+function chunkJournalPosts(posts, meta) {
+  const list = (posts || []).filter((post) => post?.url && typeof post.text === "string");
+  const chunks = [];
+  for (let offset = 0; offset < list.length; offset += JOURNAL_CHUNK) {
+    chunks.push({
+      id: outboxId(),
+      sourceUrl: meta.sourceUrl,
+      posts: list.slice(offset, offset + JOURNAL_CHUNK),
+      fbUserId: meta.fbUserId || null,
+      apiBase: meta.apiBase || null,
+      at: Date.now(),
+    });
+  }
+  return chunks;
+}
+function outboxOriginCount(outbox, apiBase) {
+  return (outbox || []).filter((row) => (row.apiBase || null) === (apiBase || null)).length;
+}
+function outboxHasRoom(outbox, apiBase) {
+  return outbox.length < OUTBOX_MAX_TOTAL && outboxOriginCount(outbox, apiBase) < OUTBOX_MAX_PER_ORIGIN;
 }
 /** Durable pre-outbox journal so visible-tab captures survive tab/Chrome restart before outbox admission. */
 async function appendCaptureJournalUnlocked(item) {
   const journal = await loadCaptureJournal();
-  const posts = (Array.isArray(item.posts) ? item.posts : []).filter((post) => post?.url && typeof post.text === "string").slice(0, 40);
+  // Keep every post from the caller; JOURNAL_CHUNK only shapes durable storage rows / transport batches.
+  const posts = (Array.isArray(item.posts) ? item.posts : []).filter((post) => post?.url && typeof post.text === "string");
   if (!posts.length) return { pending: journal.reduce((sum, row) => sum + (row.posts?.length || 0), 0), added: 0 };
   const apiBase = item.apiBase || null;
   const sourceUrl = item.sourceUrl;
   const fbUserId = item.fbUserId || null;
   const match = (row) => row && row.sourceUrl === sourceUrl && (row.apiBase || null) === apiBase && (row.fbUserId || null) === fbUserId;
-  const idx = journal.findIndex(match);
-  if (idx >= 0) {
-    journal[idx] = { ...journal[idx], posts: mergeJournalPosts(journal[idx].posts, posts), at: Date.now() };
-  } else {
-    if (journal.length >= CAPTURE_JOURNAL_MAX) {
-      const stats = await chrome.storage.local.get({ journalRejectedItems: 0 });
-      await chrome.storage.local.set({ journalRejectedItems: (stats.journalRejectedItems || 0) + posts.length, captureJournalPending: journal.reduce((sum, row) => sum + (row.posts?.length || 0), 0) });
-      await rememberError("สมุดจับภาพเต็ม หยุดรับเพิ่มจนกว่าจะส่งเข้าคิวได้");
-      throw new Error("capture journal full");
-    }
-    journal.push({ id: outboxId(), sourceUrl, posts, fbUserId, apiBase, at: Date.now() });
+  const prior = [];
+  const others = [];
+  for (const row of journal) (match(row) ? prior : others).push(row);
+  let merged = [];
+  for (const row of prior) merged = mergeJournalPosts(merged, row.posts);
+  const before = merged.length;
+  merged = mergeJournalPosts(merged, posts);
+  const added = Math.max(0, merged.length - before);
+  const chunks = chunkJournalPosts(merged, { sourceUrl, fbUserId, apiBase });
+  if (others.length + chunks.length > CAPTURE_JOURNAL_MAX) {
+    const stats = await chrome.storage.local.get({ journalRejectedItems: 0 });
+    await chrome.storage.local.set({
+      journalRejectedItems: (stats.journalRejectedItems || 0) + posts.length,
+      captureJournalPending: journal.reduce((sum, row) => sum + (row.posts?.length || 0), 0),
+    });
+    await rememberError("สมุดจับภาพเต็ม หยุดรับเพิ่มจนกว่าจะส่งเข้าคิวได้");
+    throw new Error("capture journal full");
   }
-  const pending = journal.reduce((sum, row) => sum + (row.posts?.length || 0), 0);
-  await chrome.storage.local.set({ captureJournal: journal, captureJournalPending: pending });
-  return { pending, added: posts.length };
+  const next = others.concat(chunks);
+  const pending = next.reduce((sum, row) => sum + (row.posts?.length || 0), 0);
+  await chrome.storage.local.set({ captureJournal: next, captureJournalPending: pending });
+  return { pending, added };
 }
 async function promoteCaptureJournalUnlocked() {
   let journal = await loadCaptureJournal();
   let outbox = await loadOutbox();
   if (!journal.length) {
-    await chrome.storage.local.set({ captureJournalPending: 0, outboxBlocked: outbox.length >= OUTBOX_MAX });
+    await chrome.storage.local.set({ captureJournalPending: 0, outboxBlocked: outbox.length >= OUTBOX_MAX_TOTAL });
     return { promoted: 0, remaining: 0, lastQueued: null };
   }
   const kept = [];
   let promoted = 0;
   let lastQueued = null;
   for (const entry of journal) {
-    const posts = (Array.isArray(entry.posts) ? entry.posts : []).filter((post) => post?.url && typeof post.text === "string").slice(0, 40);
+    const posts = (Array.isArray(entry.posts) ? entry.posts : []).filter((post) => post?.url && typeof post.text === "string");
     if (!posts.length) continue;
-    if (outbox.length >= OUTBOX_MAX) {
+    const apiBase = entry.apiBase || null;
+    if (!outboxHasRoom(outbox, apiBase)) {
       kept.push({ ...entry, posts });
       continue;
     }
+    const batch = posts.slice(0, JOURNAL_CHUNK);
+    const rest = posts.slice(JOURNAL_CHUNK);
     const queued = {
       sourceUrl: entry.sourceUrl,
-      posts: posts.map((post) => ({ ...post, itemId: post.itemId || outboxId() })),
+      posts: batch.map((post) => ({ ...post, itemId: post.itemId || outboxId() })),
       fbUserId: entry.fbUserId || null,
-      apiBase: entry.apiBase || null,
+      apiBase,
       batchId: outboxId(),
       at: entry.at || Date.now(),
     };
     outbox.push(queued);
     lastQueued = queued;
-    promoted += posts.length;
+    promoted += batch.length;
+    if (rest.length) kept.push({ ...entry, id: outboxId(), posts: rest, at: entry.at || Date.now() });
   }
   const remaining = kept.reduce((sum, row) => sum + (row.posts?.length || 0), 0);
+  const currentBlocked = !outboxHasRoom(outbox, lastQueued?.apiBase || null) && remaining > 0;
   await chrome.storage.local.set({
     outbox,
     captureJournal: kept,
     captureJournalPending: remaining,
-    outboxBlocked: outbox.length >= OUTBOX_MAX || remaining > 0,
+    outboxBlocked: outbox.length >= OUTBOX_MAX_TOTAL || currentBlocked || remaining > 0,
   });
   return { promoted, remaining, lastQueued };
 }
 async function queueOutbox(item) {
   return withOutboxLock(async () => {
-    await appendCaptureJournalUnlocked(item);
+    const appended = await appendCaptureJournalUnlocked(item);
     const promoted = await promoteCaptureJournalUnlocked();
     if (promoted.lastQueued) return promoted.lastQueued;
-    const stats = await chrome.storage.local.get({ outboxRejectedItems: 0 });
-    await chrome.storage.local.set({ outboxBlocked: true, outboxRejectedItems: (stats.outboxRejectedItems || 0) + (item.posts?.length || 0) });
-    await rememberError("คิวข้อมูลเต็ม เก็บไว้ในสมุดจับภาพแล้ว จะส่งต่อเมื่อมีช่องว่าง");
     // Journal write already durable — callers may acknowledge. Transport waits for promote.
-    return { batchId: null, journalOnly: true, posts: item.posts, sourceUrl: item.sourceUrl, fbUserId: item.fbUserId || null, apiBase: item.apiBase || null, at: Date.now() };
+    await chrome.storage.local.set({ outboxBlocked: true });
+    if (appended.added > 0) {
+      await rememberError("คิวข้อมูลเต็ม เก็บไว้ในสมุดจับภาพแล้ว จะส่งต่อเมื่อมีช่องว่าง");
+      return { batchId: null, journalOnly: true, posts: item.posts, sourceUrl: item.sourceUrl, fbUserId: item.fbUserId || null, apiBase: item.apiBase || null, at: Date.now() };
+    }
+    const stats = await chrome.storage.local.get({ outboxRejectedItems: 0 });
+    await chrome.storage.local.set({ outboxRejectedItems: (stats.outboxRejectedItems || 0) + (item.posts?.length || 0) });
+    throw new Error("capture journal full");
   });
 }
 async function drainCaptureJournal() {
@@ -335,7 +386,7 @@ async function flushOutbox(cfg, options = {}) {
       const item = await withOutboxLock(async () => {
         const outbox = await loadOutbox();
         // Keep the total storage cap, but drain this server even if another server owns the head.
-        await chrome.storage.local.set({ outboxBlocked: outbox.length >= OUTBOX_MAX });
+        await chrome.storage.local.set({ outboxBlocked: outbox.length >= OUTBOX_MAX_TOTAL });
         return outbox.find(entry => !entry.problem && (!entry.apiBase || entry.apiBase === base(cfg)));
       });
       if (!item) break;
@@ -357,8 +408,9 @@ async function flushOutbox(cfg, options = {}) {
         if (!response.ok) entries[index].problem = `http_${response.status}`;
         else if (item.batchId) { entries[index].posts = entries[index].posts.filter(post => !ack.has(post.itemId)); if (!entries[index].posts.length) entries.splice(index, 1); }
         else entries.splice(index, 1); // compatibility for batches saved by older extension
-        await chrome.storage.local.set({ outbox: entries, outboxBlocked: entries.length >= OUTBOX_MAX });
+        await chrome.storage.local.set({ outbox: entries, outboxBlocked: entries.length >= OUTBOX_MAX_TOTAL });
       });
+      if (response.ok && ack.size) nudgeCommentDrain();
       if (!response.ok) {
         // Permanent client errors: keep in outbox marked, but do not re-alert every heartbeat.
         if (response.status === 404 || response.status === 400) {
@@ -1837,6 +1889,7 @@ async function cycle() {
     await rememberError(`รอบอ่านอัตโนมัติไม่สำเร็จ: ${String(error && error.message ? error.message : error).slice(0, 160)}`).catch(() => undefined);
   } finally {
     await releaseRunLock();
+    try { nudgeCommentDrain(); } catch { /* cycle harnesses may omit the outbox helper */ }
   }
 }
 
@@ -1929,7 +1982,11 @@ async function forwardManual(message, sender) {
   const result = await work;
   // Durable receipt is immediate; transport has its own bounded, restart-safe outbox.
   const latest = await loadConfig();
-  if (!latest.paused && !latest.accountPaused && latest.token === cfg.token && base(latest) === base(cfg)) void flushOutbox(latest).catch(() => undefined);
+  if (!latest.paused && !latest.accountPaused && latest.token === cfg.token && base(latest) === base(cfg)) {
+    void flushOutbox(latest).then(() => nudgeCommentDrain()).catch(() => undefined);
+  } else {
+    nudgeCommentDrain();
+  }
   return result;
 }
 
@@ -1958,6 +2015,9 @@ async function pollTasks() {
   }
 }
 
+function commentWorkerDeps() {
+  return { loadConfig, postJson, currentFbUserId, base, waitComplete, sleep, rememberError };
+}
 function armAlarms(existing = []) {
   for (const [name, periodInMinutes] of [["mybot-tick", 1], ["mybot-tasks", 0.5], ["mybot-heartbeat", 1]]) {
     if (!existing.some(alarm => alarm.name === name && alarm.periodInMinutes === periodInMinutes)) {
@@ -1988,13 +2048,13 @@ chrome.runtime.onStartup.addListener(() => {
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "mybot-tick" || alarm.name === DUE_ALARM) void cycle();
   if (alarm.name === "mybot-tasks") void pollTasks();
-  if (alarm.name === "mybot-tasks") {
-    const deps = { loadConfig, postJson, currentFbUserId, base, waitComplete, sleep, rememberError };
-    void globalThis.MyBotCommentWorker.drain(deps).catch(() => undefined);
+  if (alarm.name === "mybot-tasks" || alarm.name === "mybot-comment-nudge") {
+    void globalThis.MyBotCommentWorker.drain(commentWorkerDeps()).catch(() => undefined);
   }
   if (alarm.name === "mybot-heartbeat") {
     void heartbeat();
     void closeOrphanReaders({ unused: true }).catch(() => undefined);
+    nudgeCommentDrain();
   }
 });
 

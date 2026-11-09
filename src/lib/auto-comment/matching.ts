@@ -47,10 +47,12 @@ export function explainCommentRule(rule: MatchRule, post: MatchPost, now = new D
   const intent = commentIntent(post);
   const keywordBot = isKeywordBotRule(rule);
   const smart = Boolean(rule.intentMode && rule.intentMode !== "keyword");
-  const keywordsPass = !required.length || (rule.keywordMode === "all" ? matchedKeywords.length === required.length : matchedKeywords.length > 0);
-  // Keyword bots may act on a truncated card once required keywords already match.
-  // Empty keyword lists still require full text so we do not comment every truncated post.
-  const fullTextPass = !post.truncated || (keywordBot && required.length > 0 && keywordsPass);
+  // Keyword bots must declare at least one keyword; empty lists never match live work.
+  const keywordsPass = keywordBot
+    ? required.length > 0 && (rule.keywordMode === "all" ? matchedKeywords.length === required.length : matchedKeywords.length > 0)
+    : !required.length || (rule.keywordMode === "all" ? matchedKeywords.length === required.length : matchedKeywords.length > 0);
+  // Always wait for full text so hidden exclusions / ads are visible before queueing.
+  const fullTextPass = !post.truncated;
   const checks = [
     { code: "enabled", label: "กฎเปิดใช้งาน", passed: rule.enabled },
     { code: "not_paused", label: "กฎไม่ถูกพัก", passed: !rule.pausedReason },
@@ -67,7 +69,9 @@ export function explainCommentRule(rule: MatchRule, post: MatchPost, now = new D
     { code: "window", label: "อยู่ในวันและเวลาทำงาน (Asia/Bangkok)", passed: inCommentWindow(rule, now) },
     { code: "age", label: "อายุโพสต์อยู่ในช่วงที่รับได้", passed: Number.isFinite(age) && age >= -3600_000 && age <= rule.maxAgeHours * 3600_000 },
     { code: "excluded", label: "ไม่พบคำยกเว้น", passed: !excludedKeywords.length },
-    { code: "keywords", label: rule.keywordMode === "all" ? "พบคำสำคัญครบทุกคำ" : "พบคำสำคัญอย่างน้อยหนึ่งคำ หรือไม่ได้กำหนดคำ", passed: keywordsPass },
+    { code: "keywords", label: keywordBot
+      ? (rule.keywordMode === "all" ? "พบคำสำคัญครบทุกคำ" : "พบคำสำคัญอย่างน้อยหนึ่งคำ")
+      : (rule.keywordMode === "all" ? "พบคำสำคัญครบทุกคำ" : "พบคำสำคัญอย่างน้อยหนึ่งคำ หรือไม่ได้กำหนดคำ"), passed: keywordsPass },
   ];
   return { intent, matched: checks.every(check => check.passed), checks, matchedKeywords, excludedKeywords };
 }

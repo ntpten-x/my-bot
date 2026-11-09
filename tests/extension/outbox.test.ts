@@ -50,12 +50,22 @@ it("releases global backpressure after draining this server from a full mixed qu
   expect(h.stored.outboxBlocked).toBe(false);
 });
 
-it("keeps the storage limit active when all queued batches belong to another server", async () => {
+it("does not block the current origin when only another server filled its per-origin cap", async () => {
   const h = harness(200);
   h.stored.outbox = Array.from({ length: 200 }, () => ({ apiBase: "https://other.example", posts: [], at: Date.now() }));
   await h.flush();
   expect(h.postJson).not.toHaveBeenCalled();
   expect(h.stored.outbox).toHaveLength(200);
+  // Foreign origin at 200 must not freeze capture for the current apiBase.
+  expect(h.stored.outboxBlocked).toBe(false);
+});
+
+it("keeps the global storage limit active when total outbox capacity is exhausted", async () => {
+  const h = harness(200);
+  h.stored.outbox = Array.from({ length: 400 }, () => ({ apiBase: "https://other.example", posts: [], at: Date.now() }));
+  await h.flush();
+  expect(h.postJson).not.toHaveBeenCalled();
+  expect(h.stored.outbox).toHaveLength(400);
   expect(h.stored.outboxBlocked).toBe(true);
 });
 

@@ -45,6 +45,32 @@ describe("auto comment matching and fail-closed settings", () => {
     expect(mayRun({ ...defaultControl, state: "running", emergency: true }, now)).toBe(false);
     expect(mayRun({ ...defaultControl, state: "running", cooldownUntil: "2027-01-01" }, now)).toBe(false);
     expect(autoCommentRuleSchema.safeParse({ name: "x", templates: ["hello"] }).success).toBe(false);
+    expect(autoCommentRuleSchema.safeParse({
+      name: "keyword-live",
+      enabled: true,
+      deliveryMode: "extension",
+      intentMode: "keyword",
+      messageMode: "template",
+      templates: ["สนใจครับ"],
+      sourceIds: ["src"],
+      browserDeviceId: "device",
+      browserFbUserId: "123456",
+      browserConsent: true,
+      keywords: "",
+    }).success).toBe(false);
+    expect(autoCommentRuleSchema.safeParse({
+      name: "keyword-live",
+      enabled: true,
+      deliveryMode: "extension",
+      intentMode: "keyword",
+      messageMode: "template",
+      templates: ["สนใจครับ"],
+      sourceIds: ["src"],
+      browserDeviceId: "device",
+      browserFbUserId: "123456",
+      browserConsent: true,
+      keywords: "หาช่าง",
+    }).success).toBe(true);
   });
 });
 

@@ -148,13 +148,12 @@ export async function scanBrowserComments(assertActive: () => Promise<void>, opt
             if (!target) codes.push("unsupported_target");
             const deadline = (post.postedAt ?? post.createdAt).getTime() + rule.maxAgeHours * 3600_000;
             if (codes.includes("type_scope") && deadline > now.getTime()) nextEvaluateAt = new Date(Math.min(deadline + 1, now.getTime() + 60_000));
-            // Keyword bots that already matched required words may proceed on truncated cards.
-            // Other rules still wait for a durable full-text capture.
-            if (post.truncated && deadline > now.getTime() && !isKeywordBotRule(rule)
-              && !codes.some(code => ["source", "source_disabled", "type_scope", "before_start", "age", "unsupported_target"].includes(code))) {
+            // Truncated cards wait for full text so exclusions/ads hidden behind "see more" are known.
+            const fatalTruncation = ["source", "source_disabled", "type_scope", "before_start", "age", "unsupported_target", "enabled", "not_paused", "not_ad", "not_forbidden", "not_duplicate", "not_dismissed", "excluded", "no_template"];
+            if (post.truncated && deadline > now.getTime() && !codes.some(code => fatalTruncation.includes(code))) {
               evaluationState = "waiting_full_text";
               nextEvaluateAt = new Date(Math.min(deadline + 1, now.getTime() + 60_000));
-              reasons.push({ ruleId: rule.id, codes: ["full_text"] });
+              reasons.push({ ruleId: rule.id, codes: codes.includes("full_text") ? codes : [...codes, "full_text"] });
               break;
             }
             const aiRelevant = rule.requireAi && codes.every(code => ["not_ad", "intent", "window"].includes(code));
