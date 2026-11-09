@@ -1,10 +1,12 @@
-﻿import { prisma } from "../prisma";
+import { Prisma } from "@prisma/client";
+import { prisma } from "../prisma";
 
 /**
  * Duplicates (same text posted again or in another group) take the original's labels and ad flag,
  * so one copy cannot be "seller 44" while the other is an ad scored 8. Posts the owner relabelled are kept.
  */
-export async function syncDuplicateLabels() {
+export async function syncDuplicateLabels(postIds?: string[]) {
+  if (postIds && !postIds.length) return 0;
   return prisma.$executeRaw`
     UPDATE "Post" AS d SET
       "categoryId" = o."categoryId",
@@ -19,6 +21,7 @@ export async function syncDuplicateLabels() {
       "aiProvider" = 'dup:' || COALESCE(o."aiProvider", 'rules')
     FROM "Post" AS o
     WHERE d."duplicateOfId" = o."id"
+      ${postIds ? Prisma.sql`AND (d."id" IN (${Prisma.join(postIds)}) OR o."id" IN (${Prisma.join(postIds)}))` : Prisma.empty}
       AND COALESCE(d."aiProvider", '') <> 'owner'
       AND (d."categoryId" IS DISTINCT FROM o."categoryId"
         OR d."subcategoryId" IS DISTINCT FROM o."subcategoryId"

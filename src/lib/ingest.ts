@@ -1,6 +1,6 @@
 import { prisma } from "./prisma";
 import { getSettings } from "./settings";
-import { enqueueAiJobs } from "./ai/queue";
+import { randomUUID } from "node:crypto";
 import { aiCacheKey } from "./pipeline/classify";
 import { prepareLead } from "./pipeline/prepare";
 import { canonicalSourceUrl, normalizeUrl } from "./pipeline/normalize";
@@ -54,10 +54,6 @@ function cleanImages(images: string[] | undefined) {
     .slice(0, 6);
 }
 
-function isUniqueError(error: unknown) {
-  return typeof error === "object" && error !== null && "code" in error && (error as { code: string }).code === "P2002";
-}
-
 export async function ingestPosts(input: {
   sourceUrl: string;
   posts: IncomingPost[];
@@ -71,11 +67,11 @@ export async function ingestPosts(input: {
     return { ok: true as const, skipped: true, reason: "แหล่งนี้ถูกปิดไว้", inserted: 0, duplicates: 0 };
   }
 
-  const settings = await getSettings();
+  const [settings, keywords, { rows, catalog }] = await Promise.all([
+    getSettings(), prisma.keyword.findMany(), loadCatalogFromDb(),
+  ]);
   // Marketplace listings are always offers to sell; never let keyword rules or AI turn them into buyer leads or ads.
   const marketplace = source.type === "facebook_marketplace";
-  const keywords = await prisma.keyword.findMany();
-  const { rows, catalog } = await loadCatalogFromDb();
   const rules = keywords.map((keyword) => ({
     word: keyword.word,
     type: keyword.type === "forbidden" ? ("forbidden" as const) : ("watch" as const),
@@ -176,41 +172,37 @@ export async function ingestPosts(input: {
   }
 
   const createdIds: string[] = [];
-  for (const item of fresh) {
-    const ids = resolveCategoryIds(rows, item.lead.categorySlug, item.lead.subcategorySlug);
-    try {
-      const post = await prisma.$transaction(async tx => {
-        const created = await tx.post.create({
-        data: {
-          sourceId: source.id,
-          externalUrl: item.url,
-          authorName: (item.raw.authorName || "").slice(0, 200),
-          text: item.raw.text.slice(0, 8000),
-          normalizedText: item.lead.normalizedText.slice(0, 8000),
-          truncated: isTruncatedText(item.raw.text),
-          contentHash: item.lead.hash,
-          postedAt: item.postedAt ?? parseDate(item.raw.postedAt),
-          imagesJson: JSON.stringify(cleanImages(item.raw.images)),
-          categoryId: ids.categoryId,
-          subcategoryId: ids.subcategoryId,
-          intent: marketplace ? "seller" : item.lead.intent,
-          province: item.lead.province,
-          isAd: marketplace ? false : item.lead.isAd,
-          keywordHitsJson: JSON.stringify(item.lead.watch),
-          forbiddenHit: item.lead.forbidden.length > 0,
-          suggestedReply: item.lead.suggestedReply,
-          aiProvider: "rules",
-        },
-      });
-        await tx.aiJob.create({ data: { postId: created.id } });
-        return created;
-      });
-      createdIds.push(post.id);
-    } catch (error) {
-      if (isUniqueError(error)) duplicates += 1;
-      else throw error;
-    }
+  recordTiming("ingest_prepare", performance.now() - started);
+  const storeStarted = performance.now();
+  // One bounded transaction per transport-sized batch. Insert posts and their AI
+  // jobs atomically; skipDuplicates also handles concurrent capture of the same URL.
+  for (let offset = 0; offset < fresh.length; offset += 40) {
+    const data = fresh.slice(offset, offset + 40).map(item => {
+      const ids = resolveCategoryIds(rows, item.lead.categorySlug, item.lead.subcategorySlug);
+      return {
+        id: randomUUID(), sourceId: source.id, externalUrl: item.url,
+        authorName: (item.raw.authorName || "").slice(0, 200),
+        text: item.raw.text.slice(0, 8000), normalizedText: item.lead.normalizedText.slice(0, 8000),
+        truncated: isTruncatedText(item.raw.text), contentHash: item.lead.hash,
+        postedAt: item.postedAt, imagesJson: JSON.stringify(cleanImages(item.raw.images)),
+        categoryId: ids.categoryId, subcategoryId: ids.subcategoryId,
+        intent: marketplace ? "seller" : item.lead.intent, province: item.lead.province,
+        isAd: marketplace ? false : item.lead.isAd,
+        keywordHitsJson: JSON.stringify(item.lead.watch), forbiddenHit: item.lead.forbidden.length > 0,
+        suggestedReply: item.lead.suggestedReply, aiProvider: "rules",
+      };
+    });
+    const inserted = await prisma.$transaction(async tx => {
+      await tx.post.createMany({ data, skipDuplicates: true });
+      const owned = await tx.post.findMany({ where: { id: { in: data.map(row => row.id) } }, select: { id: true } });
+      if (owned.length) await tx.aiJob.createMany({ data: owned.map(post => ({ postId: post.id })) });
+      return owned;
+    });
+    createdIds.push(...inserted.map(post => post.id));
+    duplicates += data.length - inserted.length;
   }
+  recordTiming("ingest_store", performance.now() - storeStarted);
+  const enrichStarted = performance.now();
 
   if (revisedIds.length) {
     await assignProducts(revisedIds);
@@ -220,7 +212,7 @@ export async function ingestPosts(input: {
   if (createdIds.length) {
     await collapseIdenticalTexts(fresh.map((item) => item.lead.normalizedText));
     await assignProducts(createdIds).catch((error) => console.error("[products]", error));
-    await syncDuplicateLabels().catch((error) => console.error("[dup-labels]", error));
+    await syncDuplicateLabels(createdIds).catch((error) => console.error("[dup-labels]", error));
   }
   const uniqueIds = createdIds.length
     ? (
@@ -231,7 +223,7 @@ export async function ingestPosts(input: {
       ).map((post) => post.id)
     : [];
   duplicates += createdIds.length - uniqueIds.length;
-  if (uniqueIds.length) await enqueueAiJobs(uniqueIds);
+  // Jobs already exist from the insertion transaction; do not upsert each one again.
 
   await prisma.source.update({
     where: { id: source.id },
@@ -252,6 +244,8 @@ export async function ingestPosts(input: {
     },
   });
 
+  recordTiming("ingest_enrich", performance.now() - enrichStarted);
+  const notifyStarted = performance.now();
   if (uniqueIds.length) {
     await applyAutomationRules(uniqueIds).catch((error) => console.error("[automation]", error));
     const ready = await prisma.post.findMany({
@@ -267,6 +261,7 @@ export async function ingestPosts(input: {
     }
   }
 
+  recordTiming("ingest_notify", performance.now() - notifyStarted);
   return {
     ok: true as const,
     inserted: uniqueIds.length,

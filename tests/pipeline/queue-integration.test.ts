@@ -90,6 +90,37 @@ async function ingest(count = 2) {
 }
 
 describe.skipIf(!fixture.enabled)("real Postgres ingest → queue → provider → completion", () => {
+  it("atomically stores transport-sized batches with exactly one durable job per new post", async () => {
+    expect((await ingest(40)).inserted).toBe(40);
+    expect(await prisma.post.count()).toBe(40);
+    expect(await prisma.aiJob.count()).toBe(40);
+    const repeated = await ingest(40);
+    expect(repeated.inserted).toBe(0);
+    expect(repeated.duplicates).toBe(40);
+    expect(await prisma.aiJob.count()).toBe(40);
+    expect(network).not.toHaveBeenCalled();
+  });
+
+  it("rolls the whole batch back if durable AI enqueue fails", async () => {
+    await prisma.$executeRawUnsafe(`CREATE FUNCTION "${fixture.schema}".reject_ai_enqueue() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic enqueue failure'; END $$`);
+    await prisma.$executeRawUnsafe(`CREATE TRIGGER reject_ai_enqueue BEFORE INSERT ON "AiJob" FOR EACH ROW EXECUTE FUNCTION "${fixture.schema}".reject_ai_enqueue()`);
+    try {
+      await expect(ingest(3)).rejects.toThrow();
+      expect(await prisma.post.count()).toBe(0);
+      expect(await prisma.aiJob.count()).toBe(0);
+    } finally {
+      await prisma.$executeRawUnsafe('DROP TRIGGER reject_ai_enqueue ON "AiJob"');
+      await prisma.$executeRawUnsafe(`DROP FUNCTION "${fixture.schema}".reject_ai_enqueue()`);
+    }
+  });
+
+  it("deduplicates competing batches without losing or duplicating AI jobs", async () => {
+    const outcomes = await Promise.all([ingest(4), ingest(4)]);
+    expect(outcomes.reduce((sum, row) => sum + row.inserted, 0)).toBe(4);
+    expect(await prisma.post.count()).toBe(4);
+    expect(await prisma.aiJob.count()).toBe(4);
+  });
+
   it("keeps request ingestion free of embedding calls and completes each AI job", async () => {
     process.env.MYBOT_PROCESS = "web";
     expect((await ingest()).inserted).toBe(2);

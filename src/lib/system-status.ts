@@ -42,7 +42,7 @@ export function tabLifecycleCheck(raw: string | undefined, expectedVersion: stri
       value: `กำลังอ่าน ${tabs.activeReaders} · คอมเมนต์ ${tabs.activeComments} · รออ่านต่อ ${tabs.parkedReaders} · รอปิด ${tabs.closing}`,
       detail: `รอเก็บกวาด ${tabs.idleReaders} · คืนให้เจ้าของแล้ว ${tabs.released} (ในเซสชันนี้)`,
       hint: tabs.closing ? "Chrome ยังไม่ยืนยันการปิด ระบบจะลองใหม่ ไม่ต้องเริ่มส่งคอมเมนต์เดิมซ้ำ"
-        : "แท็บรออ่านต่อเก็บตำแหน่งเดิมไว้ งานเสร็จจะปิดอัตโนมัติ สั่งเก็บกวาดได้จากป๊อปอัป โดยไม่ปิดแท็บส่วนตัว" };
+        : "งานเสร็จปิดแท็บทันที แท็บรออ่านต่อจะปิดเมื่อพักเกิน 5 นาที หรือสั่งเก็บกวาดจากป๊อปอัป โดยยังเก็บข้อมูลกู้คืนและไม่ปิดแท็บส่วนตัว" };
   } catch { return check; }
 }
 

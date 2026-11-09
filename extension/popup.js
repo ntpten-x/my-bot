@@ -136,7 +136,7 @@ void showOutbox();
 function showTabStatus(tabs) {
   document.getElementById("tabStatus").textContent = tabs
     ? `กำลังอ่าน ${tabs.activeReaders} · คอมเมนต์ ${tabs.activeComments} · รออ่านต่อ ${tabs.parkedReaders} · รอปิด ${tabs.closing} · รอเก็บกวาด ${tabs.idleReaders} · คืนให้เจ้าของแล้ว ${tabs.released}`
-      + (tabs.closing ? " — Chrome ยังไม่ยืนยันการปิด ระบบจะลองใหม่" : tabs.parkedReaders ? " — เก็บตำแหน่งเพื่ออ่านต่อ ไม่ใช่แท็บที่ลืมปิด" : "")
+      + (tabs.closing ? " — Chrome ยังไม่ยืนยันการปิด ระบบจะลองใหม่" : tabs.parkedReaders ? " — เก็บตำแหน่งอ่านต่อ ปิดอัตโนมัติเมื่อพักเกิน 5 นาที หรือกดเก็บกวาดได้" : "")
     : "ยังอ่านสถานะแท็บบอทไม่ได้ ลองเปิดป๊อปอัปใหม่";
 }
 function refreshTabStatus(type = "bot-tabs-status") {

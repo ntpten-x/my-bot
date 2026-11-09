@@ -16,7 +16,7 @@ export type RouterProvider = {
   usageDay: string | null;
 };
 
-export type FailureKind = "rate" | "quota" | "auth" | "server" | "timeout" | "bad-request" | "other";
+export type FailureKind = "rate" | "quota" | "auth" | "server" | "timeout" | "bad-request" | "invalid-response" | "other";
 export type Failure = { kind: FailureKind; cooldownMs: number; message: string };
 
 /** Error thrown by provider callers. `hint` is a short keyword scan of the body, never the body itself. */
@@ -30,6 +30,10 @@ export class AiCallError extends Error {
     super(message);
     this.name = "AiCallError";
   }
+}
+
+export class AiResponseError extends Error {
+  constructor() { super("คำตอบ AI ไม่มีรายการ JSON ที่ใช้ได้"); this.name = "AiResponseError"; }
 }
 
 /** Capacity is unavailable; waiting (including a 429/quota response) is not a job failure. */
@@ -66,6 +70,7 @@ export function classifyFailure(error: unknown, now: Date, resetHourUtc = 0): Fa
   const untilReset = nextReset(now, resetHourUtc).getTime() - now.getTime();
   const name = error instanceof Error ? error.name : "";
   const raw = error instanceof Error ? error.message : String(error);
+  if (error instanceof AiResponseError) return { kind: "invalid-response", cooldownMs: COOLDOWN.serverMs, message: error.message };
   if (error instanceof AiCallError) {
     const { status, retryAfterMs, hint } = error;
     if (status === 429 && retryAfterMs > 0) {
@@ -88,7 +93,7 @@ export function classifyFailure(error: unknown, now: Date, resetHourUtc = 0): Fa
   if (/fetch failed|ECONNREFUSED|ENOTFOUND|ECONNRESET|network/i.test(raw)) {
     return { kind: "server", cooldownMs: COOLDOWN.timeoutMs, message: "เชื่อมต่อผู้ให้บริการไม่ได้" };
   }
-  // Unknown errors (bad JSON, empty answer) skip to the next provider without a cooldown.
+  // Other application errors skip to the next provider without a cooldown.
   return { kind: "other", cooldownMs: 0, message: raw.slice(0, 160) || "ผิดพลาด" };
 }
 

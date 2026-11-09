@@ -7,7 +7,7 @@ import { resolveOllamaBaseUrl, OLLAMA_KEEP_ALIVE, ollamaReachable } from "./olla
 import { extractAiItems } from "./parse";
 import { AI_SYSTEM, userPrompt } from "./prompt";
 import { presetById, type ProviderKind } from "./provider-presets";
-import { AiCallError, bodyHint, guardedCall, orderAvailable, sharedMinuteWindow, type RouterProvider, type RouterStore } from "./router";
+import { AiCallError, AiResponseError, bodyHint, guardedCall, orderAvailable, sharedMinuteWindow, type RouterProvider, type RouterStore } from "./router";
 import { decryptSecret, encryptSecret, hasKeySecret, maskSecret } from "./secret-box";
 
 const CALL_TIMEOUT_MS = 20_000;
@@ -115,9 +115,16 @@ async function postJson(url: string, init: RequestInit, timeoutMs: number) {
 export type ChatResult = { text: string; tokens: number };
 
 /** One chat call in the provider's own wire format. `json` asks for a JSON object answer. */
-export async function chatOnce(row: CallRow, system: string, user: string, options: { json?: boolean; maxTokens?: number } = {}): Promise<ChatResult> {
+export async function chatOnce(row: CallRow, system: string, user: string, options: { json?: boolean; maxTokens?: number; timeoutMs?: number } = {}): Promise<ChatResult> {
   const key = row.apiKeyEnc ? decryptSecret(row.apiKeyEnc) : "";
   const kind = row.kind as ProviderKind;
+  // JSON-mode negotiation shares one deadline; a 400 must not double the wait.
+  const deadline = Date.now() + (options.timeoutMs ?? (kind === "ollama" ? OLLAMA_TIMEOUT_MS : CALL_TIMEOUT_MS));
+  const remaining = () => {
+    const ms = deadline - Date.now();
+    if (ms <= 0) throw new DOMException("หมดเวลารอคำตอบ", "TimeoutError");
+    return ms;
+  };
   const base = (row.baseUrl || presetById(row.preset).baseUrl).replace(/\/+$/, "");
   if (!row.model && kind !== "ollama") throw new AiCallError("ยังไม่ได้ใส่ชื่อโมเดล", 400);
   if (kind === "ollama") {
@@ -133,7 +140,7 @@ export async function chatOnce(row: CallRow, system: string, user: string, optio
         messages: [{ role: "system", content: system }, { role: "user", content: user }],
         options: { temperature: 0.2, ...(options.maxTokens ? { num_predict: options.maxTokens } : {}) },
       }),
-    }, OLLAMA_TIMEOUT_MS);
+    }, remaining());
     return { text: String(data.message?.content ?? ""), tokens: Number(data.prompt_eval_count ?? 0) + Number(data.eval_count ?? 0) };
   }
   if (!key) throw new AiCallError("ยังไม่ได้ใส่ API key", 401);
@@ -145,7 +152,7 @@ export async function chatOnce(row: CallRow, system: string, user: string, optio
         contents: [{ role: "user", parts: [{ text: `${system}\n\n${user}` }] }],
         generationConfig: { temperature: 0.2, ...(options.json ? { responseMimeType: "application/json" } : {}), ...(options.maxTokens ? { maxOutputTokens: options.maxTokens } : {}) },
       }),
-    }, CALL_TIMEOUT_MS);
+    }, remaining());
     const text = (data.candidates?.[0]?.content?.parts ?? []).map((part: { text?: string }) => part.text ?? "").join("\n");
     return { text, tokens: Number(data.usageMetadata?.totalTokenCount ?? 0) };
   }
@@ -160,7 +167,7 @@ export async function chatOnce(row: CallRow, system: string, user: string, optio
         ...(options.maxTokens ? { max_tokens: options.maxTokens } : {}),
         messages: [{ role: "system", content: system }, { role: "user", content: user }],
       }),
-    }, CALL_TIMEOUT_MS);
+    }, remaining());
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let data: Record<string, any>;
   try {
@@ -204,22 +211,27 @@ export async function routedClassifyAttempts(settings: AppSettings, store: Route
     name: `${row.preset === "custom" ? "ai" : row.preset}:${row.name}`.slice(0, 60),
     classify: (batch: ClassifyInput[], tree: CatNode[]) =>
       guardedCall(row, "classify", { store }, async () => {
-        const result = await chatOnce(row, AI_SYSTEM, userPrompt(batch, tree), { json: true });
-        const items = asItems(result.text);
-        if (!items.length) throw new Error("ตอบกลับว่างหรืออ่าน JSON ไม่ได้");
+        const result = await chatOnce(row, AI_SYSTEM, userPrompt(batch, tree), {
+          json: true, maxTokens: Math.min(8192, 768 + batch.length * 512),
+          timeoutMs: row.kind === "ollama" ? OLLAMA_TIMEOUT_MS : 12_000,
+        });
+        let items: LooseAiItem[];
+        try { items = asItems(result.text).filter(item => batch.some(post => post.id === item.id)); }
+        catch { throw new AiResponseError(); }
+        if (!items.length) throw new AiResponseError();
         return { value: items, tokens: result.tokens };
       }),
   }));
   return { providers, managedPresets: allRows.map(row => row.preset), errors: skipped.map((item) => ({ name: item.name, message: item.reason, deferred: true, retryAt: item.retryAt })) };
 }
 
-/** Owner pressed "ทดสอบ": one tiny real call. Success clears a cooldown; failure only notes the error. */
+/** A probe records health without bypassing an active routing cooldown or quota. */
 export async function testProviderRow(row: CallRow & Pick<AiProvider, "id" | "resetHourUtc">) {
   const start = Date.now();
   try {
     const result = await chatOnce(row, "Reply with JSON only.", 'Return {"ok":true,"word":"สวัสดี"}', { json: true, maxTokens: 40 });
     const latencyMs = Date.now() - start;
-    await prisma.aiProvider.update({ where: { id: row.id }, data: { lastLatencyMs: latencyMs, cooldownUntil: null, cooldownReason: null, lastError: null } });
+    await prisma.aiProvider.update({ where: { id: row.id }, data: { lastLatencyMs: latencyMs, lastError: null } });
     return { ok: true, latencyMs, message: `ตอบกลับใน ${latencyMs} ms`, sample: result.text.replace(/\s+/g, " ").slice(0, 80), tokens: result.tokens };
   } catch (error) {
     const latencyMs = Date.now() - start;

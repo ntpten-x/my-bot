@@ -727,20 +727,35 @@ async function withReaderForeground(reader, work) {
 }
 
 // Lazy loading stalled: scroll up a little and back to the bottom so the feed asks for more (scrollTop only).
-async function nudgeScroll(tabId, kind = "group") {
-  await executeReaderScript({
+async function nudgeScroll(tabId, kind = "group", deadlineMs = Date.now() + 5000) {
+  const remaining = () => {
+    const ms = Math.min(5000, deadlineMs - Date.now());
+    if (ms <= 0) throw new Error("หมดเวลากู้ฟีด เก็บตำแหน่งไว้รออ่านต่อ");
+    return ms;
+  };
+  const firstBudget = remaining();
+  const [snapshot] = await executeReaderScript({
     target: { tabId },
     args: [kind],
     func: pageKind => {
       const page = globalThis.MyBotScrape.scrollRoot(document, pageKind);
       const before = page.scrollTop;
       page.scrollTop = Math.max(0, before - 400);
-      setTimeout(() => {
-        page.scrollTop = before + Math.max(window.innerHeight || 0, 800);
-      }, 300);
-      return true;
+      return { before, distance: Math.max(window.innerHeight || 0, 800) };
     },
-  });
+  }, firstBudget);
+  const position = snapshot?.result;
+  if (!position || !Number.isFinite(position.before) || !Number.isFinite(position.distance)) return;
+  // Page timers freeze in background Facebook tabs. Finish both relative scrolls
+  // from the extension host so recovery does not stop after scrolling upward.
+  await sleep(Math.min(300, remaining()));
+  const secondBudget = remaining();
+  await executeReaderScript({
+    target: { tabId }, args: [kind, position],
+    func: (pageKind, previous) => {
+      globalThis.MyBotScrape.scrollRoot(document, pageKind).scrollTop = previous.before + previous.distance;
+    },
+  }, secondBudget);
 }
 
 const READER_FILES = ["selectors.js", "fbtime.js", "parser.js", "identity.js", "scrape.js"];
@@ -869,9 +884,12 @@ async function closeOrphanReaders(options = {}) {
     if (Date.now() >= deadlineMs) break;
     if (activeReaderTabs.has(reader.tabId)) continue;
     const saved = reader.continuation;
+    // The DOM cursor is useful only while we actually resume it. Durable recovery
+    // and pending posts were saved before parking; do not leave abandoned tabs forever.
+    const parkedExpired = saved && (options.parked || Date.now() - (reader.at || 0) >= 5 * 60_000);
     let ownershipChanged = false;
     // MV3 can restart while a feed is parked. Adopt the saved tab instead of closing it.
-    if (!reader.closing && !cfg.paused && !cfg.accountPaused && saved && saved.apiBase === base(cfg) && saved.fbUserId === fbUserId && Date.now() - reader.at < 2 * 3600_000) {
+    if (!parkedExpired && !reader.closing && !cfg.paused && !cfg.accountPaused && saved && saved.apiBase === base(cfg) && saved.fbUserId === fbUserId) {
       const inspected = await globalThis.MyBotTabs.inspect(reader, sameReaderUrl, { deadlineMs });
       if (inspected.state === "owned") {
         scrapingTabs.add(reader.tabId);
@@ -880,7 +898,7 @@ async function closeOrphanReaders(options = {}) {
       if (inspected.state === "retry") continue;
       ownershipChanged = true;
     }
-    const orphan = ownershipChanged || reader.closing || cfg.paused || cfg.accountPaused || reader.boot !== BOOT_ID ||
+    const orphan = parkedExpired || ownershipChanged || reader.closing || cfg.paused || cfg.accountPaused || reader.boot !== BOOT_ID ||
       (options.unused && !saved) || Date.now() - (reader.at || 0) > READER_MAX_AGE_MS;
     if (!orphan) continue;
     if (reader.closing && !globalThis.MyBotTabs.due(reader)) continue;
@@ -945,24 +963,33 @@ function recoveryKey(cfg, group, fbUserId) {
   return JSON.stringify([base(cfg), fbUserId, group.url]);
 }
 
-async function loadContinuation(cfg, group, url) {
+async function loadContinuation(cfg, group, url, options = {}) {
   const fbUserId = await currentFbUserId();
-  const stored = await chrome.storage.session.get({ readers: {} });
-  for (const reader of Object.values(stored.readers || {})) {
-    if (reader.closing) continue;
-    const saved = reader.continuation;
-    if (!saved || saved.sourceUrl !== group.url || saved.apiBase !== base(cfg) || saved.fbUserId !== fbUserId) continue;
-    const inspected = await globalThis.MyBotTabs.inspect(reader, sameReaderUrl);
-    if (inspected.state === "retry") throw new Error("Chrome ยังอ่านข้อมูลแท็บเดิมไม่ได้ เก็บตำแหน่งอ่านไว้รอลองใหม่");
-    if (inspected.state !== "owned" || inspected.tab.discarded || !sameReaderUrl(inspected.tab.pendingUrl || inspected.tab.url, url)) {
-      // A discarded/navigated tab cannot preserve the DOM cursor. Keep the durable recovery flag.
-      await closeReader(reader);
-      return null;
+  let invalidReader;
+  // Resuming and cleanup share the same lock. Claim before releasing it, so a
+  // popup/heartbeat cannot close the tab between lookup and active registration.
+  const resumed = await withScrapeWindowLock(async () => {
+    const stored = await chrome.storage.session.get({ readers: {} });
+    for (const reader of Object.values(stored.readers || {})) {
+      if (reader.closing) continue;
+      const saved = reader.continuation;
+      if (!saved || saved.sourceUrl !== group.url || saved.apiBase !== base(cfg) || saved.fbUserId !== fbUserId) continue;
+      const inspected = await globalThis.MyBotTabs.inspect(reader, sameReaderUrl);
+      if (inspected.state === "retry") throw new Error("Chrome ยังอ่านข้อมูลแท็บเดิมไม่ได้ เก็บตำแหน่งอ่านไว้รอลองใหม่");
+      if (inspected.state !== "owned" || inspected.tab.discarded || !sameReaderUrl(inspected.tab.pendingUrl || inspected.tab.url, url)) {
+        invalidReader = reader;
+        return null;
+      }
+      const run = globalThis.MyBotScrape.restoreRun(saved.run);
+      scrapingTabs.add(reader.tabId);
+      if (options.claim) activeReaderTabs.add(reader.tabId);
+      return { reader, run };
     }
-    scrapingTabs.add(reader.tabId);
-    return { reader, run: globalThis.MyBotScrape.restoreRun(saved.run) };
-  }
-  return null;
+    return null;
+  });
+  // closeReader takes this lock itself. Never nest it, and keep durable recovery.
+  if (invalidReader) await closeReader(invalidReader);
+  return resumed;
 }
 
 async function saveContinuation(cfg, group, reader, run) {
@@ -1055,7 +1082,7 @@ async function botTabStatus() {
 }
 
 async function cleanupBotTabs() {
-  await closeOrphanReaders({ unused: true });
+  await closeOrphanReaders({ unused: true, parked: true });
   // Recovery only reports/reconciles; this path never claims, authorizes or sends.
   await globalThis.MyBotCommentWorker.recover({ loadConfig, base, postJson });
   return botTabStatus();
@@ -1108,7 +1135,7 @@ async function readFeed(reader, kind, plan, knownKeys, result, options = {}) {
       run.stoppedBy = "";
       run.emptySteps = 0;
       await wakeReaderTab(reader, 450);
-      await nudgeScroll(tabId, kind);
+      await nudgeScroll(tabId, kind, feedDeadline);
       await sleep(remaining(1200));
       state = await waitForGrowth(tabId, kind, state.count, remaining(3000), [...run.seen].slice(-1000));
       return consume(await readPage(tabId, kind), false);
@@ -1174,7 +1201,7 @@ async function readFeed(reader, kind, plan, knownKeys, result, options = {}) {
     if (stop && stop !== "end") break;
     for (let retry = 0; !state.grew && retry < 1 && remaining(1) > 0; retry += 1) {
       run.stalls += 1;
-      await nudgeScroll(tabId, kind);
+      await nudgeScroll(tabId, kind, feedDeadline);
       state = await waitForGrowth(tabId, kind, before, remaining(2500), [...run.seen].slice(-1000));
     }
     if (!state.grew || stop === "end") {
@@ -1278,7 +1305,7 @@ async function scrapeGroupPass(cfg, group, remote, options) {
   void heartbeat();
   try {
     const url = Scrape.scrapeUrl(group.url, kind);
-    const continuation = options.head ? null : await loadContinuation(cfg, group, url);
+    const continuation = options.head ? null : await loadContinuation(cfg, group, url, { claim: true });
     reader = continuation?.reader || await openReader(url, !options.head);
     activeReaderTabs.add(reader.tabId);
     reader.fbUserId = fbUserId;

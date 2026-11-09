@@ -23,6 +23,8 @@ function harness(pages: Page[], local: Storage = {}, session: Storage = {}) {
   let paused = false;
   let sleepJump = 0;
   let reloadPages: Page[] | null = null;
+  let lookupWait: Promise<void> | undefined;
+  let lookupEntered: (() => void) | undefined;
   const tabs = new Map<number, { id: number; url: string; cursor: number; windowId: number; ephemeral: boolean }>();
   const accepted = new Map<string, number>();
   const sent: number[] = [];
@@ -52,7 +54,7 @@ function harness(pages: Page[], local: Storage = {}, session: Storage = {}) {
     cycling: false, scrapingTabs: new Set(), activeReaderTabs: new Set(), MyBotScrape: scrape,
     chrome: { storage: { local: storage(local), session: storage(session) },
       runtime: { getManifest: () => ({ version: "1.11.0" }) }, windows: { get: async () => ({ state: "normal" }) },
-      tabs: { get: async (id: number) => { const tab = tabs.get(id); if (!tab) throw Error("missing tab"); return { ...tab, status: "complete" }; },
+      tabs: { get: async (id: number) => { if (lookupWait) { lookupEntered?.(); await lookupWait; } const tab = tabs.get(id); if (!tab) throw Error("missing tab"); return { ...tab, status: "complete" }; },
         reload, remove: async (id: number) => { tabs.delete(id); }, update: async () => {} },
     },
     base: () => cfg.apiBase, loadConfig: async () => ({ ...cfg, paused }), currentFbUserId: async () => "12345",
@@ -87,7 +89,7 @@ function harness(pages: Page[], local: Storage = {}, session: Storage = {}) {
   vm.runInContext(source.slice(source.indexOf("function sameReaderUrl("), source.indexOf("// Scroll and read one feed")), context);
   vm.runInContext(source.slice(source.indexOf("async function readFeed("), source.indexOf("async function processFullTextQueue(")), context);
   return {
-    local, session, tabs, accepted, sent, events, errors, openReader, reload,
+    local, session, tabs, accepted, sent, events, errors, openReader, reload, active: context.activeReaderTabs as Set<number>,
     reports: context.reportRun as ReturnType<typeof vi.fn>,
     pause: () => { paused = true; }, offline: (value: boolean) => { offline = value; }, rejectOutbox: (value: boolean) => { rejectOutbox = value; },
     slowSleep: (value = 100_000) => { sleepJump = value; },
@@ -96,12 +98,60 @@ function harness(pages: Page[], local: Storage = {}, session: Storage = {}) {
     now: () => now,
     advance: (ms: number) => { now += ms; },
     run: (target = group, options = {freshness:false}) => (context.scrapeGroup as any)(cfg, target, {}, options),
-    recover: () => (context.closeOrphanReaders as any)(),
+    claim: () => context.loadContinuation(cfg, group, scrape.scrapeUrl(group.url, "group"), { claim: true }),
+    blockLookup: () => {
+      let release!: () => void;
+      const entered = new Promise<void>(resolve => { lookupEntered = resolve; });
+      lookupWait = new Promise<void>(resolve => { release = () => { lookupWait = undefined; resolve(); }; });
+      return { entered, release };
+    },
+    recover: (options = {}) => (context.closeOrphanReaders as any)(options),
     flush: () => (context.flushOutbox as any)(cfg),
   };
 }
 
 describe("continuous read-only collection", () => {
+  it("releases an abandoned parked tab after five minutes, retaining durable recovery", async () => {
+    const h = harness(Array.from({ length: 100 }, (_, i) => ({ posts: [post(i * 3 + 1), post(i * 3 + 2), post(i * 3 + 3)] })));
+    await h.run();
+    expect(h.tabs.size).toBe(1);
+    const recovery = structuredClone(h.local.coverageRecovery);
+    h.advance(5 * 60_000 + 1);
+    await h.recover();
+    expect(h.tabs.size).toBe(0);
+    expect(h.local.coverageRecovery).toEqual(recovery);
+  });
+  it("explicit cleanup releases parked tabs immediately without dropping pending posts", async () => {
+    const h = harness(Array.from({ length: 100 }, (_, i) => ({ posts: [post(i * 3 + 1), post(i * 3 + 2), post(i * 3 + 3)] })));
+    await h.run();
+    const recovery = structuredClone(h.local.coverageRecovery);
+    await h.recover({ parked: true });
+    expect(h.tabs.size).toBe(0);
+    expect(h.local.coverageRecovery).toEqual(recovery);
+  });
+  it("never expires a reader while its current pass is active", async () => {
+    const h = harness(Array.from({ length: 100 }, (_, i) => ({ posts: [post(i * 3 + 1), post(i * 3 + 2), post(i * 3 + 3)] })));
+    await h.run();
+    const reader: any = Object.values(h.session.readers)[0];
+    h.active.add(reader.tabId);
+    h.advance(6 * 60_000);
+    await h.recover({ parked: true });
+    expect(h.tabs.size).toBe(1);
+  });
+  it("serializes resuming a cursor against simultaneous explicit cleanup", async () => {
+    const h = harness(Array.from({ length: 100 }, (_, i) => ({ posts: [post(i * 3 + 1), post(i * 3 + 2), post(i * 3 + 3)] })));
+    await h.run();
+    const gate = h.blockLookup();
+    const claim = h.claim();
+    await gate.entered;
+    const cleanup = h.recover({ parked: true });
+    gate.release();
+    const resumed = await claim;
+    await cleanup;
+    expect(resumed).not.toBeNull();
+    expect(h.tabs.size).toBe(1);
+    expect(h.active.has(resumed.reader.tabId)).toBe(true);
+  });
   it("uses the caller's deadline and verifies no progress across short slices", async () => {
     const h = harness([{posts:[post(1),post(2),post(3)]}]);
     let result;
