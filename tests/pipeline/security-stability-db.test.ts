@@ -78,7 +78,8 @@ describe.skipIf(!fixture.enabled)("isolated Postgres security and recovery", () 
     expect(revised.textRevision).toBe(post.textRevision + 1);
     expect(revised.embeddingConfig).toBe("");
     expect(revised.ocrText).toBe("");
-    expect((await prisma.aiJob.findUniqueOrThrow({ where: { postId: post.id } })).status).toBe("pending");
+    // rules-only classify skips the LLM queue; revision still invalidates caches above.
+    expect((await prisma.aiJob.findUniqueOrThrow({ where: { postId: post.id } })).status).toBe("skipped");
   });
 
   it("rolls back every deletion/insert if a late table has an invalid foreign key", async () => {

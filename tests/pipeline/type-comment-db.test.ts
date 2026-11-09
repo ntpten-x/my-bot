@@ -27,7 +27,7 @@ async function setup() {
   await prisma.fbAccount.create({ data: { id: "99887766" } });
   await prisma.setting.create({ data: { key: `extension_runtime_${device.id}`, value: JSON.stringify({ fbUserId: "99887766", at: new Date().toISOString() }) } });
   const messages = await Promise.all(["ข้อความหนึ่ง", "ข้อความสอง"].map((body, index) => prisma.replyTemplate.create({ data: { name: `ข้อความ ${index}`, body, categoryId: category.id, productId: product.id } })));
-  const input = autoCommentRuleSchema.parse({ name: "Roblox", enabled: true, typeProductId: product.id, replyTemplateIds: messages.map(row => row.id), sourceIds: [source.id], selectionMode: "random", deliveryMode: "extension", browserDeviceId: device.id, browserFbUserId: "99887766", browserConsent: true });
+  const input = autoCommentRuleSchema.parse({ name: "Roblox", enabled: true, typeProductId: product.id, replyTemplateIds: messages.map(row => row.id), sourceIds: [source.id], selectionMode: "random", deliveryMode: "extension", keywords: "Roblox", browserDeviceId: device.id, browserFbUserId: "99887766", browserConsent: true });
   return { category, product, source, device, messages, input };
 }
 describe.skipIf(!fixture.enabled)("type-specific browser rules in disposable Postgres", () => {

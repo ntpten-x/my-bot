@@ -349,6 +349,8 @@ describe.skipIf(!fixture.enabled)("comment queue efficiency", () => {
 
   it("still slices AI-gated preparation across worker deadlines", async () => {
     const s = await setup({ requireAi: true });
+    // Setup post starts without a provider; mark every source post ready before the AI prepare hop.
+    await prisma.post.update({ where: { id: s.post.id }, data: { aiProvider: "ollama" } });
     await prisma.post.createMany({ data: Array.from({ length: 8 }, (_, i) => ({
       sourceId: s.source.id,
       externalUrl: `https://www.facebook.com/groups/12345/posts/${9300 + i}/`,
