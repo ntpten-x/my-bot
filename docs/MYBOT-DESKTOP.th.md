@@ -1,6 +1,6 @@
 # MY-BOT Desktop — ส่วนเสริมจอแยกสำหรับ production
 
-รุ่นแรก **0.1.0-preview / extension 1.11.19** รองรับ Windows 11 x64 เป็นทางเลือก ไม่บังคับผู้ใช้ทั่วไปติดตั้ง แพ็กเกจยังเป็น ZIP พร้อมตัวติดตั้ง PowerShell ไม่ใช่ EXE ที่ลงลายเซ็นแล้ว ต้องตรวจรับบน Windows เครื่องใหม่ก่อนแจกเป็นรุ่นทั่วไป
+รุ่นปัจจุบัน **0.1.1-preview / extension 1.11.19** รองรับ Windows 11 x64 เป็นทางเลือก ไม่บังคับผู้ใช้ทั่วไปติดตั้ง แพ็กเกจยังเป็น ZIP พร้อมตัวติดตั้ง PowerShell ไม่ใช่ EXE ที่ลงลายเซ็นแล้ว ต้องตรวจรับบน Windows เครื่องใหม่ก่อนแจกเป็นรุ่นทั่วไป
 
 ## ทำไมจึงคุ้มสำหรับรุ่นแรก
 
@@ -23,6 +23,7 @@
 
 - `src/lib/desktop-package.ts` สร้าง ZIP จาก allowlist ไฟล์ runtime และ extension เท่านั้น มี checksum รายไฟล์และ release ID ที่ผูกกับ origin ไม่รวม `.env`, `data/`, backups, Prisma, Node dependencies หรือ worker
 - `desktop/Install.ps1` ตรวจ checksum ก่อนรันไฟล์ ตั้ง ownership record ของ distro เพื่อ resume การติดตั้งที่สะดุด และปฏิเสธ distro ชื่อชนกันที่ยืนยันเจ้าของไม่ได้ ตรวจพอร์ต viewer ไม่ให้แย่งจอเดิมและใช้ mutex กัน installer ซ้อน
+- ตั้งแต่ 0.1.1 เลือกพอร์ตว่างอัตโนมัติ เริ่มจากคู่ 5915/6095 สูงสุด 20 คู่ และจำไว้ใน install-state.json กับ workstation-config.json ใช้ค่านี้ทั้ง VNC, noVNC, health, ทางลัด และ X display จึงอยู่ร่วมกับจอเดิม 5905/6085 ได้ ไม่ฆ่าโปรเซสที่ใช้พอร์ตอื่น `Install.ps1 -CheckPorts` ตรวจชุดไฟล์และเลือกพอร์ตโดยไม่ติดตั้ง
 - `desktop/provision.sh` ทำงาน root เฉพาะ distro ที่กำหนด ติดตั้งโปรแกรมใน immutable release ที่ root เป็นเจ้าของ ใช้ผู้ใช้ `mybot` สำหรับ Chromium ไม่ปิด sandbox เขียนค่าที่ผู้ใช้แก้ได้ด้วยสิทธิ์ผู้ใช้นั้นแทน root
 - `/opt/mybot-desktop/current` ชี้ runtime รุ่นปัจจุบัน แยกข้อมูลคงอยู่ที่ `/var/lib/mybot-desktop` และโปรไฟล์ `/var/lib/mybot-desktop/desktop-browser-profile` ไม่เก็บโปรไฟล์ในโฟลเดอร์ดาวน์โหลดหรือ release
 - `desktop/extension-key.txt` เป็น **public key** สำหรับ Chrome extension identity เพื่อคง ID ข้าม release path ไม่ใช่ API credential และไม่ใช่ private signing key ไม่มี private key ในชุดติดตั้ง ไม่ใช่การลงลายเซ็น EXE/CRX

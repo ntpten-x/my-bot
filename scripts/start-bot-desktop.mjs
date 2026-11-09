@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { desktopPlan, desktopEnvironment } from './lib/bot-desktop.mjs';
 import { findBrowser } from './lib/bot-browser.mjs';
 import { profileInUse } from './lib/browser-profile.mjs';
+import { desktopPorts } from './lib/workstation.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dataRoot = process.env.MYBOT_DATA_ROOT || path.join(root, 'data');
@@ -99,7 +100,10 @@ try {
     throw new Error('Unknown or incomplete option. Use --help.');
   }
   if (process.platform !== 'linux') throw new Error('Run this command inside WSL/Linux, not Windows Node.js.');
-  const plan = desktopPlan(root, url, { dataRoot,
+  let config = {};
+  try { config = JSON.parse(await readFile(path.join(dataRoot, 'bot-desktop/workstation-config.json'), 'utf8')); }
+  catch (error) { if (error.code !== 'ENOENT') throw new Error('Invalid Desktop port configuration.'); }
+  const plan = desktopPlan(root, url, { dataRoot, ...desktopPorts(config),
     extensionPath: process.env.MYBOT_DESKTOP_PACKAGE === '1' ? path.join(root, 'extension') : undefined });
   const missing = [];
   for (const name of ['Xvfb', 'xauth', 'xdpyinfo', 'xset', 'openbox', 'x11vnc', 'websockify', 'flock']) {
@@ -116,8 +120,8 @@ try {
     console.log(`Desktop dependencies: ${missing.length ? `MISSING: ${missing.join(', ')}` : 'PASS'}`);
     console.log(`Local viewer password: ${passwordOk ? 'PASS' : 'MISSING or insecure permissions; run --password'}`);
     let viewerReady = false;
-    if (await isListening(5905)) {
-      try { viewerReady = (await fetch('http://127.0.0.1:6085/vnc.html', { method: 'HEAD', redirect: 'error', signal: AbortSignal.timeout(1500) })).ok; } catch {}
+    if (await isListening(plan.vncPort)) {
+      try { viewerReady = (await fetch(`http://127.0.0.1:${plan.viewerPort}/vnc.html`, { method: 'HEAD', redirect: 'error', signal: AbortSignal.timeout(1500) })).ok; } catch {}
     }
     console.log(`Desktop service: ${viewerReady ? `RUNNING: ${plan.viewer}` : 'NOT RUNNING: run npm run browser:desktop after password setup'}`);
     console.log('App/database/pairing/Facebook login and real feed progress require separate checks.');
@@ -152,8 +156,8 @@ try {
       await chmod(plan.password, 0o600);
     } else {
       if (!passwordOk) throw new Error('Set the viewer password locally first: npm run browser:desktop -- --password');
-      for (const port of [5905, 6085]) if (await isListening(port)) throw new Error(`Port ${port} is already in use; no existing process was changed.`);
-      try { await access('/tmp/.X11-unix/X93'); throw new Error('Display :93 already exists; no existing display was changed.'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      for (const port of [plan.vncPort, plan.viewerPort]) if (await isListening(port)) throw new Error(`Port ${port} is already in use; no existing process was changed.`);
+      try { await access(`/tmp/.X11-unix/X${plan.display.slice(1)}`); throw new Error(`Display ${plan.display} already exists; no existing display was changed.`); } catch (error) { if (error.code !== 'ENOENT') throw error; }
       if (await profileInUse(path.join(plan.profile, 'SingletonLock'))) throw new Error('The desktop browser profile is already open. Close that profile first.');
       await mkdir(plan.profile, { recursive: true, mode: 0o700 });
       const env = desktopEnvironment(process.env, plan);
@@ -170,9 +174,9 @@ try {
       await sleep(750);
       if (stopping) throw new Error('Window manager stopped before startup.');
       start('Desktop viewer', 'x11vnc', plan.vnc, env);
-      await waitFor(() => isListening(5905), 'Desktop viewer');
+      await waitFor(() => isListening(plan.vncPort), 'Desktop viewer');
       start('Web viewer', 'websockify', plan.proxy, env);
-      await waitFor(() => isListening(6085), 'Web viewer');
+      await waitFor(() => isListening(plan.viewerPort), 'Web viewer');
       start('Browser', browser, plan.chrome, env);
       console.log(`Bot desktop started. Open ${plan.viewer} and enter your local viewer password.`);
       console.log('Keep this WSL process running. You may close/minimize the viewer; do not minimize Chrome inside it. No automation settings were changed.');

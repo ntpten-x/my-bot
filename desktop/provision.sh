@@ -2,6 +2,8 @@
 set -euo pipefail
 [[ "$(id -u)" == '0' && "${WSL_DISTRO_NAME:-}" == 'MYBOT-Desktop-V1' ]] || { echo 'Use the dedicated MY-BOT distribution only.' >&2; exit 1; }
 BUNDLE_DIR="${1:?Missing package directory}"
+VNC_PORT="${2:?Missing VNC port}"
+VIEWER_PORT="${3:?Missing viewer port}"
 # Package integrity was checked by Windows before this script was invoked.
 source /etc/os-release
 [[ "$ID" == 'debian' && "${VERSION_ID%%.*}" -ge 13 ]] || { echo 'The packaged runtime requires Debian 13 or later.' >&2; exit 1; }
@@ -33,12 +35,14 @@ install -d -m 0700 -o mybot -g mybot /var/lib/mybot-desktop /var/lib/mybot-deskt
 install -d -m 0755 /opt/mybot-desktop/releases
 [[ ! -e /etc/mybot-desktop-owner || "$(cat /etc/mybot-desktop-owner)" == 'MYBOT-Desktop-V1' ]] || exit 1
 printf '%s\n' 'MYBOT-Desktop-V1' > /etc/mybot-desktop-owner
-node --input-type=module - "$BUNDLE_DIR" <<'JS'
+node --input-type=module - "$BUNDLE_DIR" "$VNC_PORT" "$VIEWER_PORT" <<'JS'
 import fs from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {execFileSync} from 'node:child_process';
 const bundle=process.argv[2], metadata=JSON.parse(fs.readFileSync(path.join(bundle,'package.json'),'utf8'));
+const {desktopPorts}=await import(pathToFileURL(path.join(bundle,'runtime/scripts/lib/workstation.mjs')));
+const ports=desktopPorts({vncPort:Number(process.argv[3]),viewerPort:Number(process.argv[4])});
 if(!/^[a-f0-9]{24}$/.test(metadata.releaseId))throw Error('Invalid release');
 const url=new URL(metadata.serverOrigin);
 if(url.protocol!=='https:'||url.username||url.password||url.pathname!=='/'||url.search||url.hash)throw Error('Invalid server');
@@ -47,8 +51,8 @@ execFileSync('runuser',['-u','mybot','--',process.execPath,'--input-type=module'
   import fs from 'node:fs';
   const state='/var/lib/mybot-desktop/bot-desktop/workstation-config.json', origin=process.argv[1];
   if(fs.existsSync(state)&&JSON.parse(fs.readFileSync(state,'utf8')).serverOrigin!==origin)throw Error('Use the original server; pairing was not changed.');
-  fs.writeFileSync(state,JSON.stringify({mode:'remote',serverOrigin:origin}),{mode:0o600});
-`,url.origin],{stdio:'inherit'});
+  fs.writeFileSync(state,JSON.stringify({mode:'remote',serverOrigin:origin,vncPort:Number(process.argv[2]),viewerPort:Number(process.argv[3])}),{mode:0o600});
+`,url.origin,String(ports.vncPort),String(ports.viewerPort)],{stdio:'inherit'});
 const release='/opt/mybot-desktop/releases/'+metadata.releaseId;
 if(!fs.existsSync(release))fs.cpSync(path.join(bundle,'runtime'),release,{recursive:true});
 // Stable public extension key keeps the identity across immutable release directories.

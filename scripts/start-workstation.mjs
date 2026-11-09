@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { open, readFile, writeFile, rename, mkdir, chmod } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { desktopAction, portOpen, webReady, viewerReady, restartDelay, workstationConfig, WORKSTATION_INTERVAL_MS } from './lib/workstation.mjs';
+import { desktopAction, desktopPorts, portOpen, webReady, viewerReady, restartDelay, workstationConfig, WORKSTATION_INTERVAL_MS } from './lib/workstation.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dataRoot = process.env.MYBOT_DATA_ROOT || path.join(root, 'data');
@@ -36,12 +36,13 @@ async function main() {
   try { config = JSON.parse(await readFile(path.join(runtime, 'workstation-config.json'), 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw new Error('Invalid workstation configuration.'); }
   config = workstationConfig(config);
+  const ports = desktopPorts(config);
   if (process.env.MYBOT_DESKTOP_PACKAGE === '1' && config.mode !== 'remote') throw new Error('Desktop production configuration is missing. Local services were not started.');
   const current = await readJson(statusFile);
   if (args[0] === '--status') {
     console.log(JSON.stringify({ supervisor: fresh(current) ? current : { phase: 'not-running', lastStatus: current },
-      mode: config.mode, serverOrigin: config.serverOrigin,
-      webReady: await webReady(fetch, config.serverOrigin), vncListening: await portOpen(5905), viewerReady: await viewerReady() }, null, 2));
+      mode: config.mode, serverOrigin: config.serverOrigin, ...ports,
+      webReady: await webReady(fetch, config.serverOrigin), vncListening: await portOpen(ports.vncPort), viewerReady: await viewerReady(fetch, ports.viewerPort) }, null, 2));
     return;
   }
   if (['--stop', '--resume-desktop'].includes(args[0])) {
@@ -74,7 +75,7 @@ async function main() {
     throw new Error('Supervisor did not become ready. Inspect data/workstation.log.');
   }
   const state = { session: randomUUID(), phase: 'starting', at: new Date().toISOString(),
-    web: 'checking', desktop: 'checking', webRestarts: 0, desktopRestarts: 0, mode: config.mode, serverOrigin: config.serverOrigin };
+    web: 'checking', desktop: 'checking', webRestarts: 0, desktopRestarts: 0, mode: config.mode, serverOrigin: config.serverOrigin, ...ports };
   let stopping = false, firstCheck = true, desktopAttempted = false, webChild = null, desktopChild = null;
   let webFailures = 0, webRetryAt = 0, desktopExited = false, lastRequest = '';
   let webUnhealthy = 0, webStartedAt = 0, webTerminating = false;
@@ -144,8 +145,8 @@ async function main() {
           state.web = 'starting';
         }
       }
-      const vnc = await portOpen(5905), viewer = await viewerReady();
-      const action = desktopExited ? 'review' : desktopAction({ firstCheck, vnc, viewer, attempted: desktopAttempted });
+      const vnc = await portOpen(ports.vncPort), viewer = await viewerReady(fetch, ports.viewerPort);
+      const action = desktopExited ? 'review' : desktopAction({ firstCheck, vnc, viewer, attempted: desktopAttempted, allowExisting: process.env.MYBOT_DESKTOP_PACKAGE !== '1' });
       if (action === 'start') {
         desktopAttempted = true;
         desktopChild = start('Isolated desktop', 'bash', ['scripts/start-bot-desktop.sh', '--url', config.serverOrigin], () => {
@@ -153,7 +154,7 @@ async function main() {
           log('Desktop stopped. Review Facebook/comment history, then run npm run bot:resume-desktop. No automatic Chrome restart.');
         });
         state.desktop = 'starting';
-      } else state.desktop = action === 'ready' ? (desktopChild ? 'running' : 'existing') : action === 'review' ? 'needs-review' : 'partial-review';
+      } else state.desktop = action === 'ready' ? (desktopChild ? 'running' : 'existing') : action === 'review' ? 'needs-review' : action === 'conflict' ? 'port-conflict-review' : 'partial-review';
       const details = await readJson(path.join(runtime, 'components.json'));
       state.desktopComponents = desktopChild && details ? details : null;
       firstCheck = false;

@@ -1,4 +1,4 @@
-param([switch]$CheckOnly)
+param([switch]$CheckOnly, [switch]$CheckPorts)
 $ErrorActionPreference = 'Stop'
 $Distro = 'MYBOT-Desktop-V1'
 $PackageDir = $PSScriptRoot
@@ -18,6 +18,8 @@ function Check-Package {
 }
 Check-Package
 if ($CheckOnly) { Write-Host 'PASS: package hashes, HTTPS server and pinned image metadata. No installation performed.'; exit 0 }
+. (Join-Path $PackageDir 'ports.ps1')
+if ($CheckPorts) { Select-DesktopPorts | ConvertTo-Json -Compress; exit 0 }
 Add-Type -AssemblyName System.Windows.Forms
 function Confirm-Install([string]$Message) {
     return [Windows.Forms.MessageBox]::Show($Message, $Texts.title, [Windows.Forms.MessageBoxButtons]::YesNo, [Windows.Forms.MessageBoxIcon]::Question) -eq [Windows.Forms.DialogResult]::Yes
@@ -60,14 +62,8 @@ try {
             if ($LASTEXITCODE -eq 0) { throw $Texts.updateBlocked }
         }
     }
-    # Do not compete with another virtual desktop, even one running in another distro.
-    foreach ($Port in @(5905, 6085)) {
-        $Client = New-Object Net.Sockets.TcpClient
-        try {
-            $Connection = $Client.ConnectAsync('127.0.0.1', $Port)
-            if ($Connection.Wait(500) -and $Client.Connected) { throw 'A viewer port is already in use. Stop that desktop before installing.' }
-        } catch [AggregateException] { } finally { $Client.Dispose() }
-    }
+    $Ports = Select-DesktopPorts -Existing $State
+    $NewState = @{ product = 'MY-BOT Desktop'; distribution = $Distro; serverOrigin = $Metadata.serverOrigin; releaseId = $Metadata.releaseId; vncPort = $Ports.vncPort; viewerPort = $Ports.viewerPort }
     New-Item -ItemType Directory -Force -Path $AppRoot | Out-Null
     $UserSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     & icacls.exe $AppRoot /inheritance:r /grant:r "*${UserSid}:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' | Out-Null
@@ -93,17 +89,19 @@ try {
         if (-not $Verified) { throw 'Operating system image could not be verified.' }
         Run-Wsl -WslArguments @('--import', $Distro, (Join-Path $AppRoot 'linux'), $ImagePath, '--version', '2')
         # Record ownership immediately so an interrupted setup can resume without adopting another distro.
-        @{ product = 'MY-BOT Desktop'; distribution = $Distro; serverOrigin = $Metadata.serverOrigin; releaseId = $Metadata.releaseId } | ConvertTo-Json | Set-Content -LiteralPath $StatePath -Encoding UTF8
+        $NewState | ConvertTo-Json | Set-Content -LiteralPath $StatePath -Encoding UTF8
     }
     Write-Host $Texts.provisioning
     $WindowsSource = $PackageDir
     $LinuxSource = ((& wsl.exe -d $Distro -u root -- wslpath -u $WindowsSource) | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or -not $LinuxSource.StartsWith('/')) { throw 'Cannot locate the downloaded package in WSL.' }
-    Run-Wsl -WslArguments @('-d', $Distro, '-u', 'root', '--', 'bash', "$LinuxSource/provision.sh", $LinuxSource)
+    Run-Wsl -WslArguments @('-d', $Distro, '-u', 'root', '--', 'bash', "$LinuxSource/provision.sh", $LinuxSource, [string]$Ports.vncPort, [string]$Ports.viewerPort)
     # Only the dedicated, owned distro is restarted; never wsl --shutdown.
     Run-Wsl -WslArguments @('--terminate', $Distro)
     Copy-Item -LiteralPath (Join-Path $PackageDir 'Control.ps1') -Destination (Join-Path $AppRoot 'Control.ps1') -Force
+    Copy-Item -LiteralPath (Join-Path $PackageDir 'ports.ps1') -Destination (Join-Path $AppRoot 'ports.ps1') -Force
     Copy-Item -LiteralPath (Join-Path $PackageDir 'strings.th.json') -Destination (Join-Path $AppRoot 'strings.th.json') -Force
+    $NewState | ConvertTo-Json | Set-Content -LiteralPath $StatePath -Encoding UTF8
     Write-Host $Texts.password
     & (Join-Path $AppRoot 'Control.ps1') -Action Password
     & (Join-Path $AppRoot 'Control.ps1') -Action Start
@@ -122,7 +120,7 @@ try {
     $StartCommand = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $AppRoot 'Control.ps1') + '" -Action Start'
     $VbsCommand = $StartCommand.Replace('"', '""')
     Set-Content -LiteralPath $Startup -Encoding Unicode -Value "Set shell = CreateObject(""Wscript.Shell"")`r`nshell.Run ""$VbsCommand"", 0, False"
-    @{ product = 'MY-BOT Desktop'; distribution = $Distro; serverOrigin = $Metadata.serverOrigin; releaseId = $Metadata.releaseId } | ConvertTo-Json | Set-Content -LiteralPath $StatePath -Encoding UTF8
+    $NewState | ConvertTo-Json | Set-Content -LiteralPath $StatePath -Encoding UTF8
     [Windows.Forms.MessageBox]::Show($Texts.done, $Texts.title) | Out-Null
     & (Join-Path $AppRoot 'Control.ps1') -Action Open
 } catch {
