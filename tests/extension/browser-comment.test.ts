@@ -77,6 +77,61 @@ describe("browser DOM delivery using SYNTHETIC pages only", () => {
     expect(await action("observe", payload, f.env)).toMatchObject({ ok: true, outcome: "observed", commentUrl: url + "?comment_id=888" });
     f.dom.window.close();
   });
+  it("collects a Thai own-profile vanity path and observes that author after send", async () => {
+    const f = fixture(`<header role="banner"><a href="/duangkamol.owner" aria-label="โปรไฟล์ของคุณ"><img alt=""></a></header>
+      <main role="main"><article role="article"><a href="/groups/12345/posts/8888/">post</a>
+      <form><textarea aria-label="เขียนความคิดเห็นที่แสดงต่อสาธารณะ..."></textarea><button type="button" aria-label="ส่ง">ส่ง</button></form>
+      </article></main>`);
+    f.doc.cookie = "c_user=99887766";
+    const prepared = await action("prepare", payload, f.env);
+    expect(prepared).toMatchObject({ ok: true });
+    expect(prepared.profiles).toEqual(expect.arrayContaining(["/duangkamol.owner"]));
+    await action("send", { ...payload, permitUntil: 2000 }, f.env);
+    const comment = f.doc.createElement("div");
+    comment.setAttribute("role", "article");
+    comment.setAttribute("aria-label", "ความคิดเห็นโดย Duangkamol Kittisakorn");
+    comment.innerHTML = '<a href="/duangkamol.owner">Duangkamol Kittisakorn</a><div dir="auto">ข้อความทดสอบ</div><a href="/groups/12345/posts/8888/?comment_id=901">21 นาที</a>';
+    f.doc.querySelector("article")!.appendChild(comment);
+    expect(await action("observe", { ...payload, profiles: prepared.profiles }, f.env)).toMatchObject({
+      ok: true, outcome: "observed", commentUrl: url + "?comment_id=901",
+    });
+    f.dom.window.close();
+  });
+  it("observes a vanity author when the banner only exposes the display name", async () => {
+    const short = { ...payload, message: "สนใจ" };
+    const f = fixture(`<header role="banner"><a href="/duangkamol.owner" aria-label="Duangkamol Kittisakorn"><img alt="profile"></a></header>
+      <main role="main"><article role="article"><a href="/groups/12345/posts/8888/">post</a>
+      <form><textarea aria-label="Write a comment"></textarea><button type="button" aria-label="Comment">Comment</button></form>
+      </article></main>`);
+    f.doc.cookie = "c_user=99887766";
+    const prepared = await action("prepare", short, f.env);
+    expect(prepared.profiles).toEqual(expect.arrayContaining(["/duangkamol.owner"]));
+    await action("send", { ...short, permitUntil: 2000 }, f.env);
+    const comment = f.doc.createElement("div");
+    comment.setAttribute("role", "article");
+    comment.innerHTML = '<a href="/duangkamol.owner">Duangkamol</a><span dir="auto">สนใจ</span><a href="/groups/12345/posts/8888/?comment_id=902">time</a>';
+    f.doc.querySelector("article")!.appendChild(comment);
+    expect(await action("observe", { ...short, profiles: prepared.profiles }, f.env)).toMatchObject({
+      ok: true, outcome: "observed", commentUrl: url + "?comment_id=902",
+    });
+    f.dom.window.close();
+  });
+  it("does not treat another member's identical short comment as own success", async () => {
+    const short = { ...payload, message: "สนใจ" };
+    const f = fixture(`<header role="banner"><a href="/duangkamol.owner" aria-label="โปรไฟล์ของคุณ"><img alt=""></a></header>
+      <main role="main"><article role="article"><a href="/groups/12345/posts/8888/">post</a>
+      <form><textarea aria-label="Write a comment"></textarea><button type="button" aria-label="Comment">Comment</button></form>
+      </article></main>`);
+    f.doc.cookie = "c_user=99887766";
+    const prepared = await action("prepare", short, f.env);
+    await action("send", { ...short, permitUntil: 2000 }, f.env);
+    const foreign = f.doc.createElement("div");
+    foreign.setAttribute("role", "article");
+    foreign.innerHTML = '<a href="/someone.else">Other</a><span dir="auto">สนใจ</span><a href="/groups/12345/posts/8888/?comment_id=903">time</a>';
+    f.doc.querySelector("article")!.appendChild(foreign);
+    expect(await action("observe", { ...short, profiles: prepared.profiles }, f.env)).toMatchObject({ outcome: "uncertain" });
+    f.dom.window.close();
+  });
   it("prepares a composer nested in the article without a form element", async () => {
     const f = fixture('<main role="main"><article role="article"><a href="/groups/12345/posts/8888/">post</a><div contenteditable="true" role="textbox" aria-label="Write a comment"></div><button type="button" aria-label="Comment">Comment</button></article></main>');
     const box = f.doc.querySelector("[contenteditable]")!;

@@ -38,6 +38,8 @@
         return fromHash ? fromHash[1] : "";
       } catch { return ""; }
     };
+    const fbHosts = new Set(["www.facebook.com", "facebook.com", "web.facebook.com", "m.facebook.com"]);
+    const reservedProfile = new Set(["home", "watch", "marketplace", "groups", "gaming", "friends", "messages", "notifications", "settings", "privacy", "help", "reels", "stories", "events", "pages", "ads", "login", "checkpoint", "share", "photo", "video"]);
     const links = container => Array.from(container.querySelectorAll("a[href]")).map(a => {
       try {
         const href = a.getAttribute("href") || "";
@@ -47,18 +49,68 @@
         return u.href;
       } catch { return ""; }
     }).filter(Boolean);
+    const profilePath = href => {
+      try {
+        const u = new URL(href, loc.href);
+        if (!fbHosts.has(u.hostname)) return "";
+        const path = u.pathname.replace(/\/$/, "") || "/";
+        if (path === "/profile.php") return u.searchParams.get("id") === payload.fbUserId ? path : "";
+        if (path === "/" + payload.fbUserId || path === "/user/" + payload.fbUserId || path.startsWith("/user/" + payload.fbUserId + "/")) return path;
+        if (/^\/[A-Za-z0-9.]{3,50}$/.test(path) && !reservedProfile.has(path.slice(1).toLowerCase())) return path;
+        return "";
+      } catch { return ""; }
+    };
+    /** Own account paths from the chrome chrome/header — needed because comments often link vanity URLs, not numeric ids. */
+    const collectOwnProfiles = () => {
+      const out = new Set();
+      for (const a of doc.querySelectorAll('[role="banner"] a[href], header a[href], [role="navigation"] a[href]')) {
+        if (!visible(a)) continue;
+        const href = a.getAttribute("href") || "";
+        const label = String(a.getAttribute("aria-label") || "").trim();
+        const path = profilePath(href);
+        if (!path) continue;
+        let u; try { u = new URL(href, loc.href); } catch { continue; }
+        const idLinked = u.searchParams.get("id") === payload.fbUserId
+          || u.pathname.replace(/\/$/, "") === "/" + payload.fbUserId
+          || u.pathname.replace(/\/$/, "").startsWith("/user/" + payload.fbUserId);
+        const labeledOwn = /^(your profile|โปรไฟล์ของคุณ|บัญชีของคุณ)$/i.test(label);
+        const namedPhoto = Boolean(label) && !/^(home|friends|menu|facebook)/i.test(label) && Boolean(a.querySelector("img, image, [role='img']"));
+        if (idLinked || labeledOwn || namedPhoto) out.add(path);
+      }
+      return [...out];
+    };
     const authorMatches = (node, profiles) => Array.from(node.querySelectorAll("a[href]")).some(author => {
       try {
         const u = new URL(author.getAttribute("href"), loc.href);
-        if (!["www.facebook.com", "facebook.com", "web.facebook.com", "m.facebook.com"].includes(u.hostname)) return false;
+        if (!fbHosts.has(u.hostname)) return false;
         const path = u.pathname.replace(/\/$/, "") || "/";
         const allowed = (profiles || []).map(profile => String(profile || "").replace(/\/$/, "")).filter(Boolean);
         if (path === "/" + payload.fbUserId) return true;
-        if (path === "/profile.php" && u.searchParams.get("id") === payload.fbUserId) return true;
+        if (path === "/profile.php") return u.searchParams.get("id") === payload.fbUserId;
         if (path === "/user/" + payload.fbUserId || path.startsWith("/user/" + payload.fbUserId + "/")) return true;
-        return allowed.includes(path);
+        return path !== "/profile.php" && allowed.includes(path);
       } catch { return false; }
     });
+    const messageInComment = (node, needle) => {
+      if (!needle || !node) return false;
+      const leaves = Array.from(node.querySelectorAll("div[dir='auto'], span[dir='auto'], span")).filter(el =>
+        !el.querySelector("div[dir='auto'], span[dir='auto'], span") && normalize(el.textContent) === needle);
+      if (leaves.length) return true;
+      return normalize(node.textContent).includes(needle);
+    };
+    const commentSurface = (from, root) => {
+      if (!from) return null;
+      const byId = from.closest("[data-commentid]");
+      if (byId && byId !== root) return byId;
+      let article = from.closest('[role="article"]');
+      while (article && article !== root) {
+        const parent = article.parentElement?.closest('[role="article"]');
+        if (!parent || parent === root) return article;
+        article = parent;
+      }
+      const item = from.closest("li");
+      return item && item !== root ? item : null;
+    };
     if (blocked()) return { ok: false, outcome: "blocked" };
     if (!matchesPage() || !payload.id || !payload.message || payload.message.length > 2000) {
       return { ok: false, outcome: "failed", reason: !matchesPage() ? "target_mismatch" : "invalid_payload" };
@@ -96,7 +148,7 @@
       const prior = memory.__mybotCommentSession;
       const ownDraft = prior && prior.id === payload.id && prior.box === box && !prior.clicked && prior.message === payload.message && normalize(box.value ?? box.textContent) === normalize(payload.message);
       if (normalize(box.value ?? box.textContent) && !ownDraft) return { ok: false, outcome: "failed", reason: "owner_draft" };
-      memory.__mybotCommentSession = { id: payload.id, box, article, before: prior?.id === payload.id ? prior.before : links(article), message: payload.message, at: now(), clicked: false };
+      memory.__mybotCommentSession = { id: payload.id, box, article, before: prior?.id === payload.id ? prior.before : links(article), message: payload.message, at: now(), clicked: false, profiles: collectOwnProfiles() };
       if (!environment && !doc.hasFocus()) return { ok: false, outcome: "failed", reason: "editor_requires_focused_tab" };
       box.focus();
       if (!ownDraft && box.tagName === "TEXTAREA") {
@@ -122,8 +174,8 @@
       });
       if (buttons.length === 0) return { ok: false, outcome: "failed", reason: "submit_not_ready" };
       if (buttons.length !== 1) return { ok: false, outcome: "failed", reason: "submit_not_unique_or_ready" };
-      memory.__mybotCommentSession = { id: payload.id, box, button: buttons[0], article, before: memory.__mybotCommentSession.before, message: payload.message, at: now(), clicked: false };
-      const profiles = Array.from(doc.querySelectorAll('[role="banner"] a[href][aria-label],header a[href][aria-label]')).filter(a => visible(a) && /^(your profile|โปรไฟล์ของคุณ)$/i.test(a.getAttribute("aria-label") || "")).map(a => new URL(a.getAttribute("href"), loc.href).pathname.replace(/\/$/, ""));
+      const profiles = [...new Set([...(memory.__mybotCommentSession.profiles || []), ...collectOwnProfiles()])];
+      memory.__mybotCommentSession = { id: payload.id, box, button: buttons[0], article, before: memory.__mybotCommentSession.before, message: payload.message, at: now(), clicked: false, profiles };
       return { ok: true, baseline: memory.__mybotCommentSession.before.length <= 500 ? memory.__mybotCommentSession.before : null, profiles };
     }
     if (kind === "reconcile") {
@@ -133,7 +185,7 @@
         try { return samePost(new URL(a.getAttribute("href"), loc.href).href, payload.externalUrl); } catch { return false; }
       }));
       const article = surfaces[0]; if (!article) return { ok: false, outcome: "uncertain" };
-      memory.__mybotCommentSession = { id: payload.id, message: payload.message, article, before: payload.baseline, profiles: payload.profiles || [], clicked: true };
+      memory.__mybotCommentSession = { id: payload.id, message: payload.message, article, before: payload.baseline, profiles: [...new Set([...(payload.profiles || []), ...collectOwnProfiles()])], clicked: true };
       kind = "observe";
     }
     const session = memory.__mybotCommentSession;
@@ -147,21 +199,23 @@
     }
     if (kind === "observe") {
       if (!session.clicked) return { ok: false, outcome: "uncertain" };
-      const profiles = session.profiles || payload.profiles || [];
+      const profiles = [...new Set([...(session.profiles || []), ...(payload.profiles || []), ...collectOwnProfiles()])];
       const needle = normalize(payload.message);
       for (const url of links(session.article)) {
         if ((session.before || []).includes(url)) continue;
         const anchor = Array.from(session.article.querySelectorAll("a[href]")).find(a => {
           try { return new URL(a.getAttribute("href"), loc.href).href === url; } catch { return false; }
         });
-        const comment = anchor?.closest('[role="article"],[data-commentid],li,div');
-        if (comment && comment !== session.article && normalize(comment.textContent).includes(needle) && authorMatches(comment, profiles)) {
+        const comment = commentSurface(anchor, session.article);
+        if (comment && messageInComment(comment, needle) && authorMatches(comment, profiles)) {
           return { ok: true, outcome: "observed", commentUrl: url };
         }
       }
       // Facebook sometimes renders a fresh comment node with data-commentid before the permalink appears.
       for (const node of Array.from(session.article.querySelectorAll("[data-commentid], [aria-label*='Comment'], [aria-label*='ความคิดเห็น']"))) {
-        if (node === session.article || !normalize(node.textContent).includes(needle) || !authorMatches(node, profiles)) continue;
+        if (node === session.article || !messageInComment(node, needle) || !authorMatches(node, profiles)) continue;
+        const nested = links(node).find(url => !(session.before || []).includes(url));
+        if (nested) return { ok: true, outcome: "observed", commentUrl: nested };
         const id = node.getAttribute("data-commentid") || "";
         if (!/^\d+$/.test(id)) continue;
         try {

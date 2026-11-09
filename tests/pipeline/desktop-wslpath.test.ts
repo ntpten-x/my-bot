@@ -30,6 +30,16 @@ it('requires exact Linux ownership before update, purge and control actions', ()
   expect(readFileSync('desktop/rollback.sh', 'utf8')).toContain('Ownership marker missing');
 });
 
+it('offers to stop a running desktop before an in-place update instead of failing silently', () => {
+  const install = readFileSync('desktop/Install.ps1', 'utf8');
+  const texts = JSON.parse(readFileSync('desktop/strings.th.json', 'utf8'));
+  expect(install).toContain('updateStopConfirm');
+  expect(install).toContain('control.sh stop');
+  expect(install).toContain('updateStopFailed');
+  expect(texts.updateStopConfirm).toMatch(/หยุดบอทแล้วติดตั้งต่อ/);
+  expect(texts.stopping).toMatch(/หยุดบอท/);
+});
+
 it('keeps searchable MY-BOT Desktop shortcuts and a confirmed purge action', () => {
   const texts = JSON.parse(readFileSync('desktop/strings.th.json', 'utf8'));
   expect(texts.viewer).toContain('MY-BOT Desktop');

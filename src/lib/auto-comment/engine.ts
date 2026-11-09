@@ -7,6 +7,7 @@ import { decryptSecret } from "../ai/secret-box";
 import { commentTarget, jsonList, matchesCommentRule, templateIndex } from "./matching";
 import { lockCommentControl, mayRun, readCommentControl, storeCommentControl, type CommentControl } from "./control";
 import { CommentApiError, facebookGateway, type CommentCredentials, type CommentGateway } from "./facebook";
+import { COMMENT_JOBS_PAGE_SIZE, commentJobsWhere } from "./job-status";
 
 const CURSOR_KEY = "auto_comment_cursor";
 const MAX_ATTEMPTS = 3;
@@ -194,22 +195,26 @@ export async function processAutoCommentQueue(options: { gateway?: CommentGatewa
   } finally { processing = false; }
 }
 
+export { commentJobsWhere };
+
 export async function autoCommentDashboard(options: {
   jobsOffset?: number;
   logsOffset?: number;
   jobsLimit?: number;
   logsLimit?: number;
+  jobFilter?: string;
 } = {}) {
   const control = await readCommentControl();
-  const jobsLimit = Math.min(200, Math.max(1, options.jobsLimit ?? 100));
+  const jobsLimit = Math.min(200, Math.max(1, options.jobsLimit ?? COMMENT_JOBS_PAGE_SIZE));
   const logsLimit = Math.min(200, Math.max(1, options.logsLimit ?? 60));
   const jobsOffset = Math.max(0, options.jobsOffset ?? 0);
   const logsOffset = Math.max(0, options.logsOffset ?? 0);
+  const jobsWhere = commentJobsWhere(options.jobFilter || "all");
   const [rules, sources, jobs, jobTotal, counts, observed, matched, logs, logTotal, evaluations, typeSetups, products, categories] = await Promise.all([
     prisma.autoCommentRule.findMany({ orderBy: { createdAt: "asc" }, include: { templates: { orderBy: { sortOrder: "asc" } } } }),
     prisma.source.findMany({ select: { id: true, name: true, type: true, enabled: true }, orderBy: { name: "asc" } }),
-    prisma.autoCommentJob.findMany({ orderBy: { createdAt: "desc" }, skip: jobsOffset, take: jobsLimit }),
-    prisma.autoCommentJob.count(),
+    prisma.autoCommentJob.findMany({ where: jobsWhere, orderBy: { createdAt: "desc" }, skip: jobsOffset, take: jobsLimit }),
+    prisma.autoCommentJob.count({ where: jobsWhere }),
     prisma.autoCommentJob.groupBy({ by: ["status"], _count: true }),
     prisma.autoCommentLog.count({ where: { event: "observed", createdAt: { gte: new Date(control.startedAt) } } }),
     prisma.autoCommentLog.count({ where: { event: "matched", createdAt: { gte: new Date(control.startedAt) } } }),

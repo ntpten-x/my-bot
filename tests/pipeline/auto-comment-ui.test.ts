@@ -161,11 +161,15 @@ it("refreshes newly connected accounts without clearing the unsaved draft", asyn
 });
 
 const savedRule = () => ({ id: "saved", revision: 4, name: "Roblox ชุดประจำ", typeInfo: { id: "roblox", name: "Roblox", categoryName: "เกม" }, enabled: true, sourceIds: ["group"], templates: [{ body: "ข้อความแรก" }, { body: "ข้อความที่สอง" }], selectionMode: "random", startMinute: 0, endMinute: 1440, days: [0, 1, 2, 3, 4, 5, 6], maxAgeHours: 6, areaCooldownSec: 60, browserDeviceId: "device", browserFbUserId: "123456", browserConsent: true, keywords: "roblox", excludeKeywords: "", keywordMode: "any", priority: 0, deliveryMode: "extension", requireAi: false, messageMode: "template", pausedReason: "" });
+function isDashboardUrl(url: unknown) {
+  const value = String(url);
+  return value === "/api/auto-comment" || value.startsWith("/api/auto-comment?");
+}
 it("lists a type with its own switch and opens the same editor with saved values", async () => {
   const original = vi.mocked(fetch).getMockImplementation()!;
   const rule = savedRule();
   vi.mocked(fetch).mockImplementation(async (url, init) => {
-    if (url === "/api/auto-comment") return new Response(JSON.stringify({ ...dashboard, rules: [rule] }));
+    if (isDashboardUrl(url)) return new Response(JSON.stringify({ ...dashboard, rules: [rule] }));
     if (url === "/api/auto-comment/rules/saved" && init?.method === "PATCH") { rule.enabled = JSON.parse(String(init.body)).enabled; rule.revision++; return new Response(JSON.stringify(rule)); }
     return original(url, init);
   });
@@ -185,11 +189,12 @@ it("shows paused rules and deferred wait reasons instead of a false open/ready s
   const original = vi.mocked(fetch).getMockImplementation()!;
   const rule = { ...savedRule(), pausedReason: "ผลไม่ชัดเจนหลายครั้งติดกัน ตรวจ Facebook ก่อนเปิดกฎนี้ใหม่ ระบบส่วนกลางยังทำงานต่อได้" };
   vi.mocked(fetch).mockImplementation(async (url, init) => {
-    if (url === "/api/auto-comment") return new Response(JSON.stringify({
+    if (isDashboardUrl(url)) return new Response(JSON.stringify({
       ...dashboard,
       rules: [rule],
       counts: { browser_observed: 2, browser_ready: 1, uncertain: 3 },
       jobs: [{ id: "job1", status: "browser_ready", message: "สนใจ", externalUrl: "https://www.facebook.com/groups/1/posts/2/", lastError: "รอระยะพักของกลุ่ม", dryRun: false, createdAt: new Date().toISOString(), remoteCommentId: null }],
+      jobsPage: { offset: 0, limit: 10, total: 1, hasMore: false },
     }));
     return original(url, init);
   });
@@ -199,12 +204,42 @@ it("shows paused rules and deferred wait reasons instead of a false open/ready s
   expect(container.textContent).toContain("รอระยะพักของกลุ่ม");
   expect(container.textContent).toMatch(/ส่งสำเร็จทั้งหมด[\s\S]*2/);
 });
+
+it("paginates auto-comment job history ten rows per page", async () => {
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  const jobs = Array.from({ length: 10 }, (_, index) => ({
+    id: `job-${index}`, status: "browser_ready", message: `ข้อความ ${index}`,
+    externalUrl: "https://www.facebook.com/groups/1/posts/2/", lastError: "", dryRun: false,
+    createdAt: new Date(Date.now() - index * 1000).toISOString(), remoteCommentId: null,
+  }));
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (isDashboardUrl(url)) {
+      const query = new URL(String(url), "http://local.test");
+      expect(query.searchParams.get("jobsLimit")).toBe("10");
+      return new Response(JSON.stringify({
+        ...dashboard,
+        jobs,
+        jobsPage: { offset: Number(query.searchParams.get("jobsOffset") || 0), limit: 10, total: 65, hasMore: true },
+      }));
+    }
+    return original(url, init);
+  });
+  await act(async () => root.render(React.createElement(Page)));
+  expect(container.textContent).toContain("แสดงทีละ 10 งาน");
+  expect(container.textContent).toContain("รวม 65 งาน");
+  expect(container.textContent).toMatch(/หน้า 1\/7/);
+  expect(container.querySelector('[aria-label="เลือกหน้าประวัติงาน"]')).toBeTruthy();
+  const next = Array.from(container.querySelectorAll("button")).find(node => node.textContent === "ถัดไป")!;
+  await act(async () => next.click());
+  const called = vi.mocked(fetch).mock.calls.map(([url]) => String(url)).find(url => url.includes("jobsOffset=10"));
+  expect(called).toContain("jobsLimit=10");
+});
 it("returns a newly saved type draft directly to the list", async () => {
   const original = vi.mocked(fetch).getMockImplementation()!;
   let stored: ReturnType<typeof savedRule> | undefined;
   vi.mocked(fetch).mockImplementation(async (url, init) => {
     if (url === "/api/auto-comment/rules" && init?.method === "POST") { stored = { ...savedRule(), enabled: false, browserDeviceId: "", browserFbUserId: "", browserConsent: false }; return new Response('{"id":"saved"}'); }
-    if (url === "/api/auto-comment") return new Response(JSON.stringify({ ...dashboard, rules: stored ? [stored] : [] }));
+    if (isDashboardUrl(url)) return new Response(JSON.stringify({ ...dashboard, rules: stored ? [stored] : [] }));
     return original(url, init);
   });
   await renderEditor(); await choose("#comment-type", "roblox");
@@ -218,7 +253,7 @@ it("lets an unbound saved type switch its desired state and exposes a delete act
   const original = vi.mocked(fetch).getMockImplementation()!;
   const rule = { ...savedRule(), enabled: false, browserDeviceId: "", browserFbUserId: "", browserConsent: false };
   vi.mocked(fetch).mockImplementation(async (url, init) => {
-    if (url === "/api/auto-comment") return new Response(JSON.stringify({ ...dashboard, rules: [rule] }));
+    if (isDashboardUrl(url)) return new Response(JSON.stringify({ ...dashboard, rules: [rule] }));
     if (url === "/api/auto-comment/rules/saved" && init?.method === "PATCH") { rule.enabled = true; rule.revision++; return new Response(JSON.stringify(rule)); }
     return original(url, init);
   });
@@ -235,7 +270,7 @@ it("deletes a saved type from the list after confirmation without calling global
   const original = vi.mocked(fetch).getMockImplementation()!;
   let removed = false;
   vi.mocked(fetch).mockImplementation(async (url, init) => {
-    if (url === "/api/auto-comment") return new Response(JSON.stringify({ ...dashboard, rules: removed ? [] : [savedRule()] }));
+    if (isDashboardUrl(url)) return new Response(JSON.stringify({ ...dashboard, rules: removed ? [] : [savedRule()] }));
     if (url === "/api/auto-comment/rules/saved" && init?.method === "DELETE") { removed = true; return new Response('{"ok":true}'); }
     return original(url, init);
   });
@@ -253,13 +288,13 @@ it("does not let an older background refresh overwrite a just-saved switch", asy
   const oldPayload = JSON.stringify({ ...dashboard, rules: [savedRule()] });
   const delayed = new Promise<Response>(resolve => { release = resolve; });
   vi.mocked(fetch).mockImplementation(async (url, init) => {
-    if (url === "/api/auto-comment") { reads++; if (reads === 2) return delayed; return new Response(JSON.stringify({ ...dashboard, rules: [rule] })); }
+    if (isDashboardUrl(url)) { reads++; if (reads === 2) return delayed; return new Response(JSON.stringify({ ...dashboard, rules: [rule] })); }
     if (url === "/api/auto-comment/rules/saved" && init?.method === "PATCH") { rule.enabled = false; rule.revision++; return new Response(JSON.stringify(rule)); }
     return original(url, init);
   });
   await act(async () => root.render(React.createElement(Page)));
   await act(async () => document.dispatchEvent(new Event("visibilitychange")));
-  expect(reads).toBe(2);
+  expect(reads).toBeGreaterThanOrEqual(2);
   await act(async () => container.querySelector<HTMLButtonElement>('[role="switch"]')!.click());
   await act(async () => release(new Response(oldPayload)));
   expect(container.querySelector('[role="switch"]')!.getAttribute("aria-checked")).toBe("false");

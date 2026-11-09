@@ -65,11 +65,32 @@ async function cancelBeforeSend(tx: Prisma.TransactionClient, job: AutoCommentJo
   await tx.autoCommentJob.update({ where: { id: job.id }, data: { status: "cancelled", claimToken: null, claimUntil: null, lastError: "กฎหรือโพสต์เปลี่ยนแล้ว" } });
   if (job.postId) await tx.autoCommentEvaluation.updateMany({ where: { postId: job.postId, generation: job.generation }, data: { nextEvaluateAt: new Date() } });
 }
+/** Keep undispatched work queued while a rule is parked or off; never cancel just because delivery is paused. */
+async function holdWaitingJob(tx: Prisma.TransactionClient, job: AutoCommentJob, lastError: string) {
+  if (job.dispatchedAt || !["pending", "pending_ai", "browser_ready", "claimed"].includes(job.status)) return false;
+  await tx.autoCommentJob.update({
+    where: { id: job.id },
+    data: {
+      status: job.status === "claimed" ? "browser_ready" : job.status,
+      claimToken: null,
+      claimUntil: null,
+      lastError,
+    },
+  });
+  return true;
+}
+async function dropOrHoldInvalidJob(tx: Prisma.TransactionClient, job: AutoCommentJob) {
+  const rule = await tx.autoCommentRule.findUnique({ where: { id: job.ruleId }, select: { enabled: true, pausedReason: true } });
+  if (rule && (!rule.enabled || rule.pausedReason) && await holdWaitingJob(tx, job, rule.pausedReason
+    ? "รอคิว — กฎถูกพักชั่วคราว เปิดใหม่หลังตรวจ Facebook"
+    : "รอคิว — กฎยังปิดอยู่")) return;
+  await cancelBeforeSend(tx, job);
+}
 async function valid(tx: Prisma.TransactionClient, job: AutoCommentJob, control: CommentControl) {
   if (!mayRun(control) || job.generation !== control.generation || job.deliveryMode !== "extension") return null;
   const rule = await tx.autoCommentRule.findUnique({ where: { id: job.ruleId } });
   const post = job.postId ? await tx.post.findUnique({ where: { id: job.postId }, include: { source: true } }) : null;
-  if (!rule || !post || rule.messageMode !== "template" || !rule.browserConsent || rule.deliveryMode !== "extension" || rule.revision !== job.ruleRevision
+  if (!rule || !post || !rule.enabled || rule.pausedReason || rule.messageMode !== "template" || !rule.browserConsent || rule.deliveryMode !== "extension" || rule.revision !== job.ruleRevision
     || rule.browserDeviceId !== job.browserDeviceId || rule.browserFbUserId !== job.browserFbUserId || !post.source.enabled
     || post.textRevision !== job.textRevision || !matchesCommentRule(rule, post)
     || browserTarget(post.externalUrl, post.source.url, post.source.type, [post.source.fbGroupId || ""].filter(Boolean))?.key !== job.postKey) return null;
@@ -241,7 +262,7 @@ export async function prepareBrowserComments(assertActive: () => Promise<void>, 
       const job = await tx.autoCommentJob.findFirst({ where: { id: candidate.id, status: "pending_ai", nextAttemptAt: { lte: new Date() } } }); if (!job) return;
       const state = await valid(tx, job, control);
       if (!state) {
-        await cancelBeforeSend(tx, job);
+        await dropOrHoldInvalidJob(tx, job);
         return;
       }
       const message = job.message;
@@ -286,7 +307,7 @@ export async function claimBrowserComment(deviceId: string, fbUserId: string) {
         continue;
       }
       const state = await valid(tx, job, control);
-      if (!state) { await cancelBeforeSend(tx, job); continue; }
+      if (!state) { await dropOrHoldInvalidJob(tx, job); continue; }
       await storeDeferrals();
       const claimToken = randomUUID(), claimUntil = new Date(Date.now() + 120000);
       await tx.autoCommentJob.update({ where: { id: job.id }, data: { status: "claimed", claimToken, claimUntil, lastError: "" } });
@@ -304,7 +325,7 @@ export async function authorizeBrowserComment(deviceId: string, id: string, toke
     const control = await lockCommentControl(tx);
     const job = await tx.autoCommentJob.findFirst({ where: { id, browserDeviceId: deviceId, browserFbUserId: fbUserId, deliveryMode: "extension", status: "claimed", claimToken: token, claimUntil: { gt: new Date() } } });
     if (!job || control.dryRun || job.dryRun) return null;
-    const state = await valid(tx, job, control); if (!state) { await cancelBeforeSend(tx, job); return null; }
+    const state = await valid(tx, job, control); if (!state) { await dropOrHoldInvalidJob(tx, job); return null; }
     const defer = async (delay: DispatchDelay) => {
       await tx.autoCommentJob.update({ where: { id }, data: { status: "browser_ready", claimToken: null, claimUntil: null, nextAttemptAt: delay.retryAt, lastError: delay.reason } });
       return null;
@@ -382,7 +403,7 @@ export async function reportBrowserComment(
     );
     if (outcome === "blocked") {
       await tx.autoCommentRule.update({ where: { id: job.ruleId }, data: { pausedReason: "Extension พบข้อจำกัดของ Facebook ตรวจบัญชีก่อนเปิดใหม่" } });
-      await cancelWaitingJobsForPausedRule(tx, job.ruleId, "กฎถูกพักเพราะข้อจำกัดของ Facebook");
+      await parkWaitingJobsForPausedRule(tx, job.ruleId, "รอคิว — กฎถูกพักเพราะข้อจำกัดของ Facebook");
       if (control.state === "running") await storeCommentControl(tx, { ...control, state: "paused" });
     } else if (status === "uncertain") {
       // Keep other rules and the global Start switch running. Only park this rule after a short burst of ambiguous sends.
@@ -396,7 +417,20 @@ const UNCERTAIN_BURST_LIMIT = 3;
 const UNCERTAIN_BURST_WINDOW_MS = 30 * 60_000;
 const WAITING_JOB_STATUSES = ["pending", "pending_ai", "browser_ready", "claimed"] as const;
 
-/** Drop the false backlog once a rule is parked so the UI does not keep showing 「รอ Extension」. */
+/** Hold undispatched work while a rule is parked. Owner re-open resumes the same queue; never auto-resend dispatched/uncertain jobs. */
+export async function parkWaitingJobsForPausedRule(tx: Prisma.TransactionClient, ruleId: string, lastError: string) {
+  const claimed = await tx.autoCommentJob.updateMany({
+    where: { ruleId, status: "claimed", dispatchedAt: null },
+    data: { status: "browser_ready", claimToken: null, claimUntil: null, lastError },
+  });
+  const waiting = await tx.autoCommentJob.updateMany({
+    where: { ruleId, status: { in: ["pending", "pending_ai", "browser_ready"] }, dispatchedAt: null },
+    data: { lastError },
+  });
+  return claimed.count + waiting.count;
+}
+
+/** @deprecated Prefer parkWaitingJobsForPausedRule — kept only for callers that intentionally drop a queue. */
 export async function cancelWaitingJobsForPausedRule(tx: Prisma.TransactionClient, ruleId: string, lastError: string) {
   const result = await tx.autoCommentJob.updateMany({
     where: { ruleId, status: { in: [...WAITING_JOB_STATUSES] }, dispatchedAt: null },
@@ -415,13 +449,13 @@ export async function maybePauseRuleAfterRepeatedUncertain(tx: Prisma.Transactio
     where: { id: ruleId },
     data: { pausedReason: "ผลไม่ชัดเจนหลายครั้งติดกัน ตรวจ Facebook ก่อนเปิดกฎนี้ใหม่ ระบบส่วนกลางยังทำงานต่อได้" },
   });
-  const cancelled = await cancelWaitingJobsForPausedRule(tx, ruleId, "กฎถูกพักเพราะผลไม่ชัดเจนหลายครั้ง");
+  const parked = await parkWaitingJobsForPausedRule(tx, ruleId, "รอคิว — กฎถูกพักเพราะผลไม่ชัดเจนหลายครั้ง");
   await tx.autoCommentLog.create({
     data: {
       ruleId,
       event: "rule_paused",
-      message: cancelled
-        ? `พักกฎหลัง uncertain ${recent} ครั้งใน 30 นาที และยกเลิกคิวรอ ${cancelled} งาน โดยไม่ Pause ทั้งระบบ`
+      message: parked
+        ? `พักกฎหลัง uncertain ${recent} ครั้งใน 30 นาที และคงคิวรอ ${parked} งาน โดยไม่ Pause ทั้งระบบ`
         : `พักกฎหลัง uncertain ${recent} ครั้งใน 30 นาที โดยไม่ Pause ทั้งระบบ`,
     },
   });

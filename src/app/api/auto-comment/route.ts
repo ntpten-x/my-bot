@@ -2,6 +2,7 @@ import { commentMutationGuard } from "@/lib/auto-comment/api-guard";
 import { authed } from "@/lib/guard";
 import { json } from "@/lib/http";
 import { autoCommentDashboard } from "@/lib/auto-comment/engine";
+import { COMMENT_JOBS_PAGE_SIZE } from "@/lib/auto-comment/job-status";
 import { commentControlSchema } from "@/lib/auto-comment/schema";
 import { updateCommentControl } from "@/lib/auto-comment/control";
 import { schemaReadiness } from "@/lib/schema-readiness";
@@ -15,9 +16,13 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const jobsOffset = Number(url.searchParams.get("jobsOffset") || 0);
     const logsOffset = Number(url.searchParams.get("logsOffset") || 0);
+    const jobsLimit = Number(url.searchParams.get("jobsLimit") || COMMENT_JOBS_PAGE_SIZE);
+    const jobFilter = String(url.searchParams.get("jobFilter") || "all");
     const dashboard = await autoCommentDashboard({
       jobsOffset: Number.isFinite(jobsOffset) ? jobsOffset : 0,
       logsOffset: Number.isFinite(logsOffset) ? logsOffset : 0,
+      jobsLimit: Number.isFinite(jobsLimit) ? jobsLimit : COMMENT_JOBS_PAGE_SIZE,
+      jobFilter,
     });
     return json({ ...dashboard, control: { ...dashboard.control, dryRun: false, ...(dashboard.control.dryRun ? { state: "stopped" } : {}) } });
   } catch { return json({ error: "โหลดระบบคอมเมนต์ไม่สำเร็จ กรุณาตรวจฐานข้อมูล" }, 503); }

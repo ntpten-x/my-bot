@@ -63,7 +63,15 @@ try {
         # Never adopt a same-named distro without an exact ownership marker.
         Assert-DesktopOwnedDistro -Distribution $Distro -Message $Texts.existingUnknown
         & wsl.exe -d $Distro -u mybot -- bash -lc 'export XDG_RUNTIME_DIR=/run/user/$(id -u); systemctl --user is-active --quiet mybot-workstation.service' 2>$null
-        if ($LASTEXITCODE -eq 0) { throw $Texts.updateBlocked }
+        if ($LASTEXITCODE -eq 0) {
+            # Updating while Chromium holds the profile risks corrupting cookies/pairing; stop first with owner consent.
+            if (-not (Confirm-Install $Texts.updateStopConfirm)) { throw $Texts.updateBlocked }
+            Write-Host $Texts.stopping
+            & wsl.exe -d $Distro -u mybot -- bash /opt/mybot-desktop/current/desktop/control.sh stop
+            if ($LASTEXITCODE -ne 0) { throw $Texts.updateStopFailed }
+            & wsl.exe -d $Distro -u mybot -- bash -lc 'export XDG_RUNTIME_DIR=/run/user/$(id -u); systemctl --user is-active --quiet mybot-workstation.service' 2>$null
+            if ($LASTEXITCODE -eq 0) { throw $Texts.updateStopFailed }
+        }
     }
     $Ports = Select-DesktopPorts -Existing $State
     $NewState = @{
