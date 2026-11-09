@@ -69,7 +69,8 @@
     const identityChanged = changes.fbIdentity && ["id", "loggedIn"].some(key => changes.fbIdentity.oldValue?.[key] !== changes.fbIdentity.newValue?.[key]);
     const controlChanged = changes.serverAccountControl && ["paused", "apiBase", "fbUserId"].some(key => changes.serverAccountControl.oldValue?.[key] !== changes.serverAccountControl.newValue?.[key]);
     if (area === "local" && (identityChanged || controlChanged || ["token", "apiBase", "paused"].some(key => changes[key] && changes[key].oldValue !== changes[key].newValue))) {
-      epoch++; seen.clear(); pending.clear(); managedUntil = 0; schedule(100);
+      // Keep pending until durable enqueue ack; only reset seen/throttle so a token refresh cannot drop captures.
+      epoch++; seen.clear(); managedUntil = 0; schedule(100);
     }
   });
   let fallback = setInterval(() => schedule(100), 15000);

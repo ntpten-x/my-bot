@@ -22,7 +22,8 @@ apt-get install -y --no-install-recommends ca-certificates chromium chromium-san
 python3 - "$BUNDLE_DIR" <<'PY'
 import hashlib, json, pathlib, sys
 root = pathlib.Path(sys.argv[1]).resolve()
-package = json.loads((root / 'package.json').read_text())
+# utf-8-sig tolerates a Windows PowerShell BOM if the package metadata was rewritten locally.
+package = json.loads((root / 'package.json').read_text(encoding='utf-8-sig'))
 assert package['format'] == 1 and package['name'] == 'MY-BOT Desktop'
 for item in package['files']:
     target = (root / item['path']).resolve()
@@ -54,6 +55,7 @@ execFileSync('runuser',['-u','mybot','--',process.execPath,'--input-type=module'
   fs.writeFileSync(state,JSON.stringify({mode:'remote',serverOrigin:origin,vncPort:Number(process.argv[2]),viewerPort:Number(process.argv[3])}),{mode:0o600});
 `,url.origin,String(ports.vncPort),String(ports.viewerPort)],{stdio:'inherit'});
 const release='/opt/mybot-desktop/releases/'+metadata.releaseId;
+const previous=fs.existsSync('/opt/mybot-desktop/current')?fs.readlinkSync('/opt/mybot-desktop/current'):'';
 if(!fs.existsSync(release))fs.cpSync(path.join(bundle,'runtime'),release,{recursive:true});
 // Stable public extension key keeps the identity across immutable release directories.
 const {workstationUnit}=await import(pathToFileURL(path.join(release,'scripts/lib/workstation-service.mjs')));
@@ -62,6 +64,12 @@ fs.writeFileSync(path.join(unitDir,'mybot-workstation.service'),workstationUnit(
 const temporary='/opt/mybot-desktop/current.next';
 try{fs.unlinkSync(temporary)}catch(error){if(error.code!=='ENOENT')throw error;}
 fs.symlinkSync(release,temporary);fs.renameSync(temporary,'/opt/mybot-desktop/current');
+// Keep current + one previous release for manual rollback; prune older immutable trees.
+const keep=new Set([release, previous].filter(Boolean).map(target=>path.resolve(target)));
+for(const entry of fs.readdirSync('/opt/mybot-desktop/releases')){
+  const target=path.resolve('/opt/mybot-desktop/releases',entry);
+  if(!keep.has(target))fs.rmSync(target,{recursive:true,force:true});
+}
 JS
 chmod -R go-w /opt/mybot-desktop/releases
 cat > /etc/wsl.conf <<'CONF'

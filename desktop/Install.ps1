@@ -78,10 +78,11 @@ try {
         Save-DesktopImage -Path $ImagePath -Image $Image
         Run-Wsl -WslArguments @('--import', $Distro, (Join-Path $AppRoot 'linux'), $ImagePath, '--version', '2')
         # Record ownership immediately so an interrupted setup can resume without adopting another distro.
-        $NewState | ConvertTo-Json | Set-Content -LiteralPath $StatePath -Encoding UTF8
+        [IO.File]::WriteAllText($StatePath, ($NewState | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
     }
     Write-Host $Texts.provisioning
-    $WindowsSource = $PackageDir
+    # WSL's argv conversion strips single backslashes; use a Windows path with forward slashes for wslpath.
+    $WindowsSource = $PackageDir.Replace('\', '/')
     $LinuxSource = ((& wsl.exe -d $Distro -u root -- wslpath -u $WindowsSource) | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or -not $LinuxSource.StartsWith('/')) { throw 'Cannot locate the downloaded package in WSL.' }
     Run-Wsl -WslArguments @('-d', $Distro, '-u', 'root', '--', 'bash', "$LinuxSource/provision.sh", $LinuxSource, [string]$Ports.vncPort, [string]$Ports.viewerPort)
@@ -90,14 +91,14 @@ try {
     Copy-Item -LiteralPath (Join-Path $PackageDir 'Control.ps1') -Destination (Join-Path $AppRoot 'Control.ps1') -Force
     Copy-Item -LiteralPath (Join-Path $PackageDir 'ports.ps1') -Destination (Join-Path $AppRoot 'ports.ps1') -Force
     Copy-Item -LiteralPath (Join-Path $PackageDir 'strings.th.json') -Destination (Join-Path $AppRoot 'strings.th.json') -Force
-    $NewState | ConvertTo-Json | Set-Content -LiteralPath $StatePath -Encoding UTF8
+    [IO.File]::WriteAllText($StatePath, ($NewState | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
     Write-Host $Texts.password
     & (Join-Path $AppRoot 'Control.ps1') -Action Password
     & (Join-Path $AppRoot 'Control.ps1') -Action Start
     $Shell = New-Object -ComObject WScript.Shell
     $Links = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\MY-BOT Desktop'
     New-Item -ItemType Directory -Force -Path $Links | Out-Null
-    foreach ($Item in @(@($Texts.viewer, 'Open'), @($Texts.start, 'Start'), @($Texts.stop, 'Stop'), @($Texts.status, 'Status'), @($Texts.resume, 'Resume'), @($Texts.uninstall, 'Uninstall'))) {
+    foreach ($Item in @(@($Texts.viewer, 'Open'), @($Texts.start, 'Start'), @($Texts.stop, 'Stop'), @($Texts.status, 'Status'), @($Texts.resume, 'Resume'), @($Texts.uninstall, 'Uninstall'), @($Texts.purge, 'Purge'))) {
         $Link = $Shell.CreateShortcut((Join-Path $Links ($Item[0] + '.lnk')))
         $Link.TargetPath = (Join-Path $PSHOME 'powershell.exe')
         $Link.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $AppRoot 'Control.ps1') + '" -Action ' + $Item[1]
@@ -109,9 +110,17 @@ try {
     $StartCommand = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $AppRoot 'Control.ps1') + '" -Action Start'
     $VbsCommand = $StartCommand.Replace('"', '""')
     Set-Content -LiteralPath $Startup -Encoding Unicode -Value "Set shell = CreateObject(""Wscript.Shell"")`r`nshell.Run ""$VbsCommand"", 0, False"
-    $NewState | ConvertTo-Json | Set-Content -LiteralPath $StatePath -Encoding UTF8
+    [IO.File]::WriteAllText($StatePath, ($NewState | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
     [Windows.Forms.MessageBox]::Show($Texts.done, $Texts.title) | Out-Null
-    & (Join-Path $AppRoot 'Control.ps1') -Action Open
+    # Browser launch is best-effort: a blocked Start-Process must not rewrite a successful install as failed.
+    $ViewerUrl = 'http://localhost:' + [string]$Ports.viewerPort + '/vnc.html?host=localhost&port=' + [string]$Ports.viewerPort + '&resize=scale'
+    try {
+        & (Join-Path $AppRoot 'Control.ps1') -Action Open
+    } catch {
+        Write-Host $_.Exception.Message
+        Write-Host $ViewerUrl
+        [Windows.Forms.MessageBox]::Show($Texts.doneViewerFailed + "`r`n" + $ViewerUrl + "`r`n" + $_.Exception.Message, $Texts.title) | Out-Null
+    }
 } catch {
     Write-Host $_.Exception.Message
     [Windows.Forms.MessageBox]::Show($Texts.failed + "`r`n" + $_.Exception.Message, $Texts.title) | Out-Null

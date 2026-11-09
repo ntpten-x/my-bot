@@ -4,6 +4,7 @@ import { classifyAvailability } from "@/lib/ai/run";
 import { getSettings } from "./settings";
 import { buildHealth, createHealthCache, httpStatusFor } from "@/lib/public-health";
 import { schemaReadiness } from "./schema-readiness";
+import { publicBuildHeaders } from "./build-info";
 
 const startedAt = Date.now();
 const cache = createHealthCache(7000);
@@ -31,6 +32,6 @@ export async function healthResponse(head = false) {
       startedAt,
     }),
   );
-  const headers = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
+  const headers = { "content-type": "application/json; charset=utf-8", ...publicBuildHeaders() };
   return new Response(head ? null : JSON.stringify(report), { status: httpStatusFor(report), headers });
 }

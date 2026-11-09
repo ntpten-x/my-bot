@@ -8,7 +8,7 @@ import { touchExtension } from "./extension-status";
 import { collapseIdenticalTexts, enrichPosts } from "./smart/enrich";
 import { dispatchNotification, shouldNotify, shouldNotifyExternal } from "./notify";
 import { parseFbTime } from "./fb-time";
-import { findSourceByUrl, loadCatalogFromDb, resolveCategoryIds } from "./sources";
+import { findSourceByUrl, loadCatalogFromDb, postBelongsToSource, resolveCategoryIds } from "./sources";
 import { recordTiming } from "./metrics";
 import { queueExternalNotification } from "./notification-queue";
 import { applyAutomationRules } from "./automation";
@@ -79,9 +79,14 @@ export async function ingestPosts(input: {
 
   const prepared = [];
   let tooOld = 0;
+  let outsideSource = 0;
   for (const raw of input.posts) {
     const text = raw.text?.replace(/\u0000/g, "").trim().slice(0, 8000);
     if (!text || text.length < 4 || !raw.url) continue;
+    if (!postBelongsToSource(raw.url, source)) {
+      outsideSource += 1;
+      continue;
+    }
     const postedAt = parseDate(raw.postedAt);
     if (!isWithinMaxAge(postedAt, settings.maxPostAgeHours)) {
       tooOld += 1;
@@ -239,7 +244,7 @@ export async function ingestPosts(input: {
     data: {
       sourceId: source.id,
       status: "ok",
-      message: `${input.actor}: ใหม่ ${uniqueIds.length} ซ้ำ ${duplicates}${tooOld ? ` เก่าเกิน ${tooOld}` : ""} จัดโดย ${aiProvider}`,
+      message: `${input.actor}: ใหม่ ${uniqueIds.length} ซ้ำ ${duplicates}${tooOld ? ` เก่าเกิน ${tooOld}` : ""}${outsideSource ? ` นอกแหล่ง ${outsideSource}` : ""} จัดโดย ${aiProvider}`,
       postsFound: uniqueIds.length,
     },
   });
@@ -269,6 +274,7 @@ export async function ingestPosts(input: {
     revised: revisedIds.length,
     duplicates,
     tooOld,
+    outsideSource,
     source: canonicalSourceUrl(source.url),
   };
   } finally { recordTiming("ingest", performance.now() - started); }

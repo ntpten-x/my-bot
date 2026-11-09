@@ -15,7 +15,7 @@ it('serves a private, origin-bound ZIP from production only', async () => {
   expect(response.status).toBe(200);
   expect(response.headers.get('content-type')).toBe('application/zip');
   expect(response.headers.get('cache-control')).toBe('no-store');
-  expect(response.headers.get('content-disposition')).toContain('0.1.2-preview');
+  expect(response.headers.get('content-disposition')).toContain('0.1.3-preview');
   const data = new Uint8Array(await response.arrayBuffer());
   expect([...data.slice(0, 2)]).toEqual([80, 75]);
 });

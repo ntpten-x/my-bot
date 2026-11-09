@@ -7,6 +7,7 @@ import { prisma } from "../prisma";
 import { recordTiming } from "../metrics";
 import { explainCommentRule, matchesCommentRule, templateIndex, jsonList } from "./matching";
 import { lockCommentControl, mayRun, readCommentControl, storeCommentControl, type CommentControl } from "./control";
+import { facebookGroupKey } from "../sources";
 
 export const BROWSER_GRANT_MS = 3000;
 const ruleQuery = {
@@ -18,15 +19,16 @@ const ruleQuery = {
 const inputKeySql = Prisma.sql`md5(jsonb_build_array(p."textRevision",p."truncated",p."text",p."intent",p."isAd",p."forbiddenHit",p."duplicateOfId",p."dismissed",p."aiProvider",p."suggestedReply",p."postedAt",p."externalUrl",s."enabled",s."url",s."type",s."boundCategorySlug",s."defaultProductId")::text)`;
 const fingerprint = (rules: { id: string; revision: number }[]) => createHash("sha256")
   .update(JSON.stringify(rules.map(rule => [rule.id, rule.revision]))).digest("hex");
-export function browserTarget(url: string, sourceUrl: string, sourceType: string) {
+export function browserTarget(url: string, sourceUrl: string, sourceType: string, aliases: string[] = []) {
   try {
     const post = new URL(url), source = new URL(sourceUrl);
     const hosts = ["facebook.com", "www.facebook.com", "web.facebook.com", "m.facebook.com"];
     if (sourceType !== "facebook_group" || ![post, source].every(u => u.protocol === "https:" && hosts.includes(u.hostname) && !u.username && !u.password && !u.port)) return null;
     const group = source.pathname.match(/^\/groups\/([a-zA-Z0-9._-]+)\/?$/)?.[1];
     const match = post.pathname.match(/^\/groups\/([a-zA-Z0-9._-]+)\/(?:posts|permalink)\/(\d+)\/?$/);
-    if (!group || !match || match[1].toLowerCase() !== group.toLowerCase() || post.searchParams.has("comment_id") || post.searchParams.has("reply_comment_id")) return null;
-    // Ingest normalizes URL case; source vanity slugs may retain their original case.
+    const allowed = new Set([group, ...aliases].filter(Boolean).map(value => String(value).toLowerCase()));
+    if (!group || !match || !allowed.has(match[1].toLowerCase()) || post.searchParams.has("comment_id") || post.searchParams.has("reply_comment_id")) return null;
+    // Keep the key anchored to the configured source slug so learning a numeric alias does not rewrite durable post keys.
     const canonicalGroup = group.toLowerCase();
     return { key: `group:${canonicalGroup}:${match[2]}`, area: `group:${canonicalGroup}`, url: `https://www.facebook.com/groups/${canonicalGroup}/posts/${match[2]}/` };
   } catch { return null; }
@@ -56,7 +58,7 @@ async function valid(tx: Prisma.TransactionClient, job: AutoCommentJob, control:
   if (!rule || !post || !rule.browserConsent || rule.deliveryMode !== "extension" || rule.revision !== job.ruleRevision
     || rule.browserDeviceId !== job.browserDeviceId || rule.browserFbUserId !== job.browserFbUserId || !post.source.enabled
     || post.textRevision !== job.textRevision || !matchesCommentRule(rule, post)
-    || browserTarget(post.externalUrl, post.source.url, post.source.type)?.key !== job.postKey) return null;
+    || browserTarget(post.externalUrl, post.source.url, post.source.type, [post.source.fbGroupId || ""].filter(Boolean))?.key !== job.postKey) return null;
   if (!await commentTypeAllowed(tx, rule.id, post.source)) return null;
   if (!await tx.extensionDevice.findFirst({ where: { id: job.browserDeviceId, revokedAt: null } })) return null;
   return { rule, post };
@@ -128,7 +130,7 @@ export async function scanBrowserComments(assertActive: () => Promise<void>, opt
             if (!codes.includes("source") && !await commentTypeAllowed(tx, rule.id, post.source)) codes.push("type_scope");
             if (rule.messageMode !== "ai_draft" && !rule.templates.length) codes.push("no_template");
             if (post.postedAt && post.postedAt < new Date(control.startedAt)) codes.push("before_start");
-            const target = browserTarget(post.externalUrl, post.source.url, post.source.type);
+            const target = browserTarget(post.externalUrl, post.source.url, post.source.type, [post.source.fbGroupId || ""].filter(Boolean));
             if (!target) codes.push("unsupported_target");
             const deadline = (post.postedAt ?? post.createdAt).getTime() + rule.maxAgeHours * 3600_000;
             if (codes.includes("type_scope") && deadline > now.getTime()) nextEvaluateAt = new Date(Math.min(deadline + 1, now.getTime() + 60_000));
@@ -294,7 +296,8 @@ export async function claimBrowserComment(deviceId: string, fbUserId: string) {
       await storeDeferrals();
       const claimToken = randomUUID(), claimUntil = new Date(Date.now() + 120000);
       await tx.autoCommentJob.update({ where: { id: job.id }, data: { status: "claimed", claimToken, claimUntil, lastError: "" } });
-      return { id: job.id, claimToken, externalUrl: job.externalUrl, message: job.message, fbUserId: job.browserFbUserId, claimUntil: claimUntil.toISOString() };
+      const aliases = [facebookGroupKey(state.post.source.url), state.post.source.fbGroupId || ""].filter(Boolean);
+      return { id: job.id, claimToken, externalUrl: job.externalUrl, message: job.message, fbUserId: job.browserFbUserId, claimUntil: claimUntil.toISOString(), groupAliases: [...new Set(aliases)] };
     }
     await storeDeferrals();
     return null;
@@ -339,7 +342,11 @@ export async function reportBrowserComment(deviceId: string, id: string, token: 
     }
     if (["failed", "not_sent"].includes(outcome) && await retryBeforeGrant(tx, job, control)) return true;
     let observed = false;
-    try { const url = new URL(commentUrl || ""); observed = browserTarget(url.origin + url.pathname, job.externalUrl.replace(/\/(?:posts|permalink)\/\d+\/?$/, ""), "facebook_group")?.key === job.postKey && /^\d+$/.test(url.searchParams.get("comment_id") || ""); } catch { /* no identifiable comment */ }
+    try {
+      const url = new URL(commentUrl || "");
+      const source = job.sourceId ? await tx.source.findUnique({ where: { id: job.sourceId }, select: { url: true, type: true, fbGroupId: true } }) : null;
+      observed = Boolean(source && browserTarget(url.origin + url.pathname, source.url, source.type, [source.fbGroupId || ""].filter(Boolean))?.key === job.postKey && /^\d+$/.test(url.searchParams.get("comment_id") || ""));
+    } catch { /* no identifiable comment */ }
     const status = outcome === "not_sent" ? "not_sent"
       : job.status === "sending" ? outcome === "observed" && observed ? "browser_observed" : "uncertain" : "cancelled";
     await tx.autoCommentJob.update({ where: { id }, data: { status, claimToken: null, claimUntil: null, lastError: status === "not_sent" ? "ส่วนขยายยืนยันว่าไม่ได้เรียกปุ่มส่ง เก็บประวัติไว้และไม่ส่งซ้ำอัตโนมัติ" : status === "browser_observed" ? "พบคอมเมนต์ในหน้าจอ ไม่ใช่การยืนยันจาก API" : "หยุดงาน ไม่ส่งซ้ำอัตโนมัติ" } });

@@ -9,21 +9,28 @@
     const visible = el => el && (environment?.visible ? environment.visible(el) : el.getClientRects().length > 0);
     const labelOf = el => [el.getAttribute("aria-label"), el.getAttribute("aria-placeholder"), el.getAttribute("placeholder")].filter(Boolean).join(" ");
     const normalize = text => String(text || "").replace(/\s+/g, " ").trim();
-    const postId = url => {
+    const postParts = url => {
       try {
         const u = new URL(url);
-        if (u.protocol !== "https:" || !["www.facebook.com", "facebook.com", "web.facebook.com", "m.facebook.com"].includes(u.hostname)) return "";
+        if (u.protocol !== "https:" || !["www.facebook.com", "facebook.com", "web.facebook.com", "m.facebook.com"].includes(u.hostname)) return null;
         const m = u.pathname.match(/^\/groups\/([a-zA-Z0-9._-]+)\/(?:posts|permalink)\/(\d+)\/?$/);
-        return m ? m[1].toLowerCase() + ":" + m[2] : "";
-      } catch { return ""; }
+        return m ? { group: m[1].toLowerCase(), id: m[2] } : null;
+      } catch { return null; }
+    };
+    const postId = url => { const parts = postParts(url); return parts ? parts.group + ":" + parts.id : ""; };
+    const samePost = (left, right) => {
+      const a = postParts(left), b = postParts(right);
+      if (!a || !b || a.id !== b.id) return false;
+      const allowed = new Set([b.group, ...(payload.groupAliases || [])].map(value => String(value || "").toLowerCase()).filter(Boolean));
+      return allowed.has(a.group);
     };
     const blocked = () => /\/(?:checkpoint|login|challenge)(?:\/|\?|$)/i.test(loc.href)
       || Boolean(doc.querySelector('iframe[src*="captcha"], [data-testid*="captcha"], form[action*="checkpoint"]'))
       || /temporarily blocked|ถูกบล็อกชั่วคราว|ยืนยันว่าคุณเป็นมนุษย์|confirm you.re human/i.test(doc.body?.innerText || doc.body?.textContent || "");
     const account = () => (doc.cookie.match(/(?:^|;\s*)c_user=(\d+)/) || [])[1] || "";
-    const matchesPage = () => postId(loc.href) && postId(loc.href) === postId(payload.externalUrl) && account() === payload.fbUserId;
+    const matchesPage = () => samePost(loc.href, payload.externalUrl) && account() === payload.fbUserId;
     const links = container => Array.from(container.querySelectorAll('a[href*="comment_id="]')).map(a => {
-      try { const u = new URL(a.getAttribute("href"), loc.href); return postId(u.href) === postId(payload.externalUrl) ? u.href : ""; } catch { return ""; }
+      try { const u = new URL(a.getAttribute("href"), loc.href); return samePost(u.href, payload.externalUrl) ? u.href : ""; } catch { return ""; }
     }).filter(Boolean);
     if (blocked()) return { ok: false, outcome: "blocked" };
     if (!matchesPage() || !payload.id || !payload.message || payload.message.length > 2000) return { ok: false, outcome: "failed" };
@@ -36,7 +43,7 @@
       if (dialogBoxes.length > 1) return { ok: false, outcome: "failed", reason: "ambiguous_composer" };
       const articles = Array.from(doc.querySelectorAll('[role="main"] [role="article"], main [role="article"]')).filter(article =>
         !article.parentElement?.closest('[role="article"]') && Array.from(article.querySelectorAll("a[href]")).some(a => {
-          try { return postId(new URL(a.getAttribute("href"), loc.href).href) === postId(payload.externalUrl); } catch { return false; }
+          try { return samePost(new URL(a.getAttribute("href"), loc.href).href, payload.externalUrl); } catch { return false; }
         }));
       if (!dialogs.length && articles.length !== 1) return { ok: false, outcome: "failed" };
       const article = dialogs[0] || articles[0];
@@ -82,7 +89,9 @@
     if (kind === "reconcile") {
       // Read only: no composer, focus, input or submit operations on this path.
       if (!Array.isArray(payload.baseline) || payload.baseline.length > 500 || !payload.sentAt || now() - payload.sentAt > 10 * 60_000) return { ok: false, outcome: "uncertain" };
-      const surfaces = Array.from(doc.querySelectorAll('[role="main"],main,[role="dialog"]')).filter(el => Array.from(el.querySelectorAll("a[href]")).some(a => postId(new URL(a.getAttribute("href"), loc.href).href) === postId(payload.externalUrl)));
+      const surfaces = Array.from(doc.querySelectorAll('[role="main"],main,[role="dialog"]')).filter(el => Array.from(el.querySelectorAll("a[href]")).some(a => {
+        try { return samePost(new URL(a.getAttribute("href"), loc.href).href, payload.externalUrl); } catch { return false; }
+      }));
       const article = surfaces[0]; if (!article) return { ok: false, outcome: "uncertain" };
       memory.__mybotCommentSession = { id: payload.id, message: payload.message, article, before: payload.baseline, profiles: payload.profiles || [], clicked: true };
       kind = "observe";

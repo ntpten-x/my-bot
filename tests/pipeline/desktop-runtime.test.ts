@@ -5,7 +5,8 @@ import path from 'node:path';
 import { expect, it } from 'vitest';
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-it('does not queue a browser launch when the installer owns the exclusive update lock', async () => {
+const linuxOnly = process.platform === 'win32' ? it.skip : it;
+linuxOnly('does not queue a browser launch when the installer owns the exclusive update lock', async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'mybot-desktop-update-'));
   const lock = path.join(root, 'update.lock'); writeFileSync(lock, '');
   const holder = spawn('flock', ['-x', lock, process.execPath, '-e', "process.stdout.write('locked');setTimeout(()=>{},10000)"], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
@@ -21,7 +22,7 @@ it('does not queue a browser launch when the installer owns the exclusive update
     await exited; rmSync(root, { recursive: true, force: true });
   }
 });
-it('fails closed when a production Desktop package loses its remote configuration', () => {
+linuxOnly('fails closed when a production Desktop package loses its remote configuration', () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'mybot-desktop-config-'));
   try {
     mkdirSync(path.join(root, 'scripts/lib'), { recursive: true });
@@ -33,11 +34,13 @@ it('fails closed when a production Desktop package loses its remote configuratio
       });
       throw Error('Supervisor must reject missing remote config');
     } catch (error) {
-      expect(String((error as { stderr?: Buffer }).stderr)).toContain('Desktop production configuration is missing');
+      const details = error as { stderr?: Buffer | string; stdout?: Buffer | string; message?: string };
+      const text = [details.stderr, details.stdout, details.message].map(value => Buffer.isBuffer(value) ? value.toString('utf8') : String(value || '')).join('\n');
+      expect(text).toContain('Desktop production configuration is missing');
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
-it('runs the real supervisor in remote mode, never starts local web, and latches desktop failure', async () => {
+linuxOnly('runs the real supervisor in remote mode, never starts local web, and latches desktop failure', async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'mybot-desktop-runtime-'));
   let child: ReturnType<typeof spawn> | undefined;
   try {

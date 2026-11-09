@@ -257,7 +257,7 @@ async function alert(settings: AppSettings, condition: WatchCondition, text?: st
     {
       id: null,
       text: text ?? `${condition.label}: ${condition.message}${condition.hint ? `\nวิธีแก้: ${condition.hint}` : ""}`,
-      externalUrl: "http://localhost:8001/overview",
+      externalUrl: `${(process.env.PUBLIC_APP_URL || process.env.RENDER_EXTERNAL_URL || "http://localhost:8001").replace(/\/$/, "")}/overview`,
       intent: "unknown",
       province: null,
       category: { name: "ระบบ" },
