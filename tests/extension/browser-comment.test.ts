@@ -43,9 +43,23 @@ describe("browser DOM delivery using SYNTHETIC pages only", () => {
   });
   it("does not overwrite an owner's draft or use reply/message boxes", async () => {
     const f = fixture(); f.doc.querySelector("textarea")!.value = "owner draft";
-    expect((await action("prepare", payload, f.env)).ok).toBe(false); expect(f.doc.querySelector("textarea")!.value).toBe("owner draft");
+    expect(await action("prepare", payload, f.env)).toMatchObject({ ok: false, reason: "owner_draft" });
+    expect(f.doc.querySelector("textarea")!.value).toBe("owner draft");
     f.doc.querySelector("textarea")!.value = ""; f.doc.querySelector("textarea")!.setAttribute("aria-label", "Reply comment");
-    expect((await action("prepare", payload, f.env)).ok).toBe(false); f.dom.window.close();
+    expect(await action("prepare", payload, f.env)).toMatchObject({ ok: false, reason: "unsupported_dom" });
+    f.dom.window.close();
+  });
+  it("classifies loading vs unsupported vs ambiguous prepare failures", async () => {
+    const empty = fixture("<main role=\"main\"><div role=\"progressbar\"></div></main>");
+    expect(await action("prepare", payload, empty.env)).toMatchObject({ ok: false, reason: "loading_retryable" });
+    empty.dom.window.close();
+    const bare = fixture("<main role=\"main\"><p>no post</p></main>");
+    expect(await action("prepare", payload, bare.env)).toMatchObject({ ok: false, reason: "unsupported_dom" });
+    bare.dom.window.close();
+    const multi = fixture();
+    multi.doc.querySelector("form")!.appendChild(multi.doc.querySelector("textarea")!.cloneNode(true));
+    expect(await action("prepare", payload, multi.env)).toMatchObject({ ok: false, reason: "ambiguous_composer" });
+    multi.dom.window.close();
   });
   it("observes only a new comment with own author and post-specific link", async () => {
     const f = fixture(); await action("prepare", payload, f.env); await action("send", { ...payload, permitUntil: 2000 }, f.env);

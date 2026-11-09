@@ -12,7 +12,7 @@ beforeEach(() => { vi.clearAllMocks(); mocks.authed.mockResolvedValue({ error: n
 describe("auto comment authenticated control API", () => {
   it("requires a session for reading, creating rules and changing global state", async () => {
     mocks.authed.mockImplementation(async () => ({ error: new Response("unauthorized", { status: 401 }) }));
-    expect((await GET()).status).toBe(401); expect((await PUT(request({ action: "start" }))).status).toBe(401); expect((await POST(request({}))).status).toBe(401);
+    expect((await GET(new Request("http://localhost/api/auto-comment"))).status).toBe(401); expect((await PUT(request({ action: "start" }))).status).toBe(401); expect((await POST(request({}))).status).toBe(401);
     expect(mocks.update).not.toHaveBeenCalled(); expect(mocks.save).not.toHaveBeenCalled(); expect(mocks.dashboard).not.toHaveBeenCalled();
   });
   it("rejects cross-origin and simple form requests before mutation", async () => {
@@ -47,7 +47,7 @@ it("rejects simulation requests and starts only the live workflow", async () => 
 it("presents legacy simulated runs as stopped without changing stored state or starting work", async () => {
   const legacy = { control: { state: "running", dryRun: true }, rules: [] };
   mocks.dashboard.mockResolvedValue(legacy);
-  const result = await GET();
+  const result = await GET(new Request("http://localhost/api/auto-comment"));
   expect(result.status).toBe(200);
   expect((await result.json()).control).toMatchObject({ state: "stopped", dryRun: false });
   expect(legacy.control).toEqual({ state: "running", dryRun: true });

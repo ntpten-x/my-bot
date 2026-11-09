@@ -10,6 +10,20 @@ import { lockCommentControl, mayRun, readCommentControl, storeCommentControl, ty
 import { facebookGroupKey } from "../sources";
 
 export const BROWSER_GRANT_MS = 3000;
+/** Prepare failures that may use the bounded pre-grant retry slots. Missing reason keeps legacy retry behavior. */
+export const TRANSIENT_PREPARE_REASONS = new Set([
+  "loading_retryable",
+  "editor_requires_focused_tab",
+  "editor_text_not_accepted",
+  "editor_insert_failed",
+  "selection_unavailable",
+  "submit_not_ready",
+  "submit_not_unique_or_ready",
+]);
+export function mayRetryPrepareFailure(reason?: string | null) {
+  if (!reason) return true;
+  return TRANSIENT_PREPARE_REASONS.has(String(reason));
+}
 const ruleQuery = {
   where: { enabled: true, pausedReason: "", deliveryMode: "extension", browserConsent: true, browserDeviceId: { not: "" }, browserFbUserId: { not: "" } },
   include: { templates: { orderBy: { sortOrder: "asc" as const } } },
@@ -330,7 +344,14 @@ export async function authorizeBrowserComment(deviceId: string, id: string, toke
   });
 }
 
-export async function reportBrowserComment(deviceId: string, id: string, token: string, outcome: "observed" | "uncertain" | "blocked" | "failed" | "not_sent", commentUrl?: string) {
+export async function reportBrowserComment(
+  deviceId: string,
+  id: string,
+  token: string,
+  outcome: "observed" | "uncertain" | "blocked" | "failed" | "not_sent",
+  commentUrl?: string,
+  reason?: string,
+) {
   return prisma.$transaction(async tx => {
     const control = await lockCommentControl(tx);
     const job = await tx.autoCommentJob.findFirst({ where: { id, browserDeviceId: deviceId, deliveryMode: "extension", claimToken: token, status: { in: ["claimed", "sending"] } } });
@@ -340,7 +361,8 @@ export async function reportBrowserComment(deviceId: string, id: string, token: 
       return Boolean(handled && (["browser_observed", "uncertain", "cancelled", "not_sent"].includes(handled.status)
         || (handled.status === "browser_ready" && !handled.claimToken)));
     }
-    if (["failed", "not_sent"].includes(outcome) && await retryBeforeGrant(tx, job, control)) return true;
+    const detail = String(reason || "").trim().slice(0, 80);
+    if (["failed", "not_sent"].includes(outcome) && mayRetryPrepareFailure(detail || null) && await retryBeforeGrant(tx, job, control)) return true;
     let observed = false;
     try {
       const url = new URL(commentUrl || "");
@@ -349,8 +371,30 @@ export async function reportBrowserComment(deviceId: string, id: string, token: 
     } catch { /* no identifiable comment */ }
     const status = outcome === "not_sent" ? "not_sent"
       : job.status === "sending" ? outcome === "observed" && observed ? "browser_observed" : "uncertain" : "cancelled";
-    await tx.autoCommentJob.update({ where: { id }, data: { status, claimToken: null, claimUntil: null, lastError: status === "not_sent" ? "ส่วนขยายยืนยันว่าไม่ได้เรียกปุ่มส่ง เก็บประวัติไว้และไม่ส่งซ้ำอัตโนมัติ" : status === "browser_observed" ? "พบคอมเมนต์ในหน้าจอ ไม่ใช่การยืนยันจาก API" : "หยุดงาน ไม่ส่งซ้ำอัตโนมัติ" } });
-    await log(tx, job, status, status === "not_sent" ? "สิ้นสุดก่อนเรียกปุ่มส่ง ไม่พักระบบส่วนกลาง" : status === "browser_observed" ? "Extension พบคอมเมนต์และลิงก์ใหม่ในหน้าจอ" : "ต้องตรวจผลบน Facebook ด้วยตนเอง");
+    const reasonNote = detail ? ` (${detail})` : "";
+    await tx.autoCommentJob.update({
+      where: { id },
+      data: {
+        status,
+        claimToken: null,
+        claimUntil: null,
+        lastError: status === "not_sent"
+          ? "ส่วนขยายยืนยันว่าไม่ได้เรียกปุ่มส่ง เก็บประวัติไว้และไม่ส่งซ้ำอัตโนมัติ"
+          : status === "browser_observed"
+            ? "พบคอมเมนต์ในหน้าจอ ไม่ใช่การยืนยันจาก API"
+            : `หยุดงาน ไม่ส่งซ้ำอัตโนมัติ${reasonNote}`,
+      },
+    });
+    await log(
+      tx,
+      job,
+      status,
+      status === "not_sent"
+        ? "สิ้นสุดก่อนเรียกปุ่มส่ง ไม่พักระบบส่วนกลาง"
+        : status === "browser_observed"
+          ? "Extension พบคอมเมนต์และลิงก์ใหม่ในหน้าจอ"
+          : `ต้องตรวจผลบน Facebook ด้วยตนเอง${reasonNote}`,
+    );
     if (outcome === "blocked" || status === "uncertain") {
       await tx.autoCommentRule.update({ where: { id: job.ruleId }, data: { pausedReason: "Extension พบข้อจำกัดหรือผลไม่ชัดเจน ตรวจ Facebook ก่อนเปิดใหม่" } });
       if (control.state === "running") await storeCommentControl(tx, { ...control, state: "paused" });

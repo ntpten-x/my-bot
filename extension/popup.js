@@ -11,8 +11,15 @@ document.getElementById("connectAuto").addEventListener("click", () => {
 const enabled = document.getElementById("enabled");
 document.getElementById("clearCommentJournal").addEventListener("click", async () => {
   if (!confirm("ตรวจผลบน Facebook และประวัติงานแล้วใช่ไหม? งานเดิมจะไม่ส่งซ้ำ ระบบจะบันทึกการตรวจบนเซิร์ฟเวอร์ก่อนปลดล็อกบนเครื่อง")) return;
+  const choice = prompt("ผลตรวจของคุณ?\n1 = ยืนยันว่าส่งแล้ว\n2 = ยืนยันว่าไม่ได้ส่ง\n3 = ยังไม่ชัดเจน\n4 = ตรวจแล้ว (ค่าเริ่มต้น)", "4");
+  if (choice === null) return;
+  const ownerOutcome = choice.trim() === "1" ? "confirmed_sent"
+    : choice.trim() === "2" ? "confirmed_not_sent"
+      : choice.trim() === "3" ? "still_uncertain"
+        : "reviewed";
+  const note = prompt("บันทึกสั้นๆ (ไม่บังคับ)", "") || "";
   status.textContent = "กำลังบันทึกการตรวจบนเซิร์ฟเวอร์…";
-  chrome.runtime.sendMessage({ type: "clear-comment-journal" }, async result => {
+  chrome.runtime.sendMessage({ type: "clear-comment-journal", ownerOutcome, note }, async result => {
     void chrome.runtime.lastError;
     if (!result?.ok) {
       status.textContent = result?.error || "บันทึกบนเซิร์ฟเวอร์ไม่สำเร็จ จึงยังไม่ปลดล็อกบนเครื่อง";

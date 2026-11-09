@@ -1,0 +1,45 @@
+<!-- SYNTHETIC fixtures for browser-comment prepare classification. Not captured from Facebook. -->
+<!doctype html>
+<html lang="th">
+<body>
+  <!-- loading_retryable: main present, no article yet, loader visible -->
+  <template id="loading">
+    <main role="main"><div role="progressbar" aria-label="Loading"></div></main>
+  </template>
+
+  <!-- unsupported_dom: no matching article/composer -->
+  <template id="unsupported">
+    <main role="main"><p>โพสต์นี้ยังไม่พร้อม</p></main>
+  </template>
+
+  <!-- owner_draft: main composer already has foreign text -->
+  <template id="owner-draft">
+    <main role="main">
+      <article role="article">
+        <a href="/groups/12345/posts/8888/">post</a>
+        <form>
+          <textarea aria-label="Write a comment">ข้อความของเจ้าของ</textarea>
+          <button type="button" aria-label="Comment">Comment</button>
+        </form>
+      </article>
+    </main>
+  </template>
+
+  <!-- thai dialog composer -->
+  <template id="thai-dialog">
+    <div role="dialog">
+      <a href="/groups/12345/posts/8888/">target</a>
+      <form>
+        <textarea aria-label="เขียนความคิดเห็นที่แสดงต่อสาธารณะ..."></textarea>
+        <button type="button" aria-label="โพสต์ความคิดเห็น"></button>
+      </form>
+    </div>
+  </template>
+
+  <!-- ambiguous: two independent dialog composers -->
+  <template id="ambiguous-dialogs">
+    <div role="dialog"><a href="/groups/12345/posts/8888/">a</a><form><textarea aria-label="Write a comment"></textarea><button aria-label="Comment">Comment</button></form></div>
+    <div role="dialog"><a href="/groups/12345/posts/8888/">b</a><form><textarea aria-label="Write a comment"></textarea><button aria-label="Comment">Comment</button></form></div>
+  </template>
+</body>
+</html>

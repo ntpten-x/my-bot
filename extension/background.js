@@ -2051,10 +2051,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     loadConfig()
       .then(async cfg => {
         if (!String(cfg.token || "").startsWith("mbd_")) throw new Error("ต้องจับคู่อุปกรณ์ก่อนปลดล็อก");
-        const response = await postJson(cfg, "/api/v1/extension/comments", { action: "clear_journal" }, { timeoutMs: 10000, retries: 0 });
+        const stored = await chrome.storage.local.get({ commentJournal: null });
+        const journal = stored.commentJournal;
+        const response = await postJson(cfg, "/api/v1/extension/comments", {
+          action: "clear_journal",
+          ...(journal?.id ? { jobId: journal.id } : {}),
+          ownerOutcome: ["confirmed_sent", "confirmed_not_sent", "still_uncertain", "reviewed"].includes(message.ownerOutcome)
+            ? message.ownerOutcome
+            : "reviewed",
+          ...(message.note ? { note: String(message.note).slice(0, 300) } : {}),
+        }, { timeoutMs: 10000, retries: 0 });
         const body = await response.json().catch(() => ({}));
         if (!response.ok || body.ok !== true) throw new Error(body.error || (body.upgradeRequired ? `อัปเดตส่วนขยายเป็น ${body.expectedVersion}` : "เซิร์ฟเวอร์ไม่รับการปลดล็อก"));
-        sendResponse({ ok: true });
+        sendResponse({ ok: true, jobId: body.jobId || null, ownerOutcome: body.ownerOutcome || "reviewed" });
       })
       .catch(error => sendResponse({ ok: false, error: error?.message || "ปลดล็อกไม่สำเร็จ" }));
     return true;

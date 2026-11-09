@@ -14,11 +14,13 @@ type Rule = BrowserFields & {
   days: number[]; maxAgeHours: number; areaCooldownSec: number; pageId: string;
   hasPageToken: boolean; hasManagerToken: boolean; pausedReason: string;
 };
+type PageMeta = { offset: number; limit: number; total: number; hasMore: boolean };
 type Dashboard = {
   control: { state: string; dryRun: boolean; emergency: boolean; hourlyLimit: number; dailyLimit: number; cooldownUntil: string | null };
   rules: Rule[]; sources: { id: string; name: string; type: string; enabled: boolean }[];
   jobs: { id: string; status: string; message: string; externalUrl: string; lastError: string; dryRun: boolean; createdAt: string; remoteCommentId: string | null }[];
   logs: { id: string; event: string; message: string; createdAt: string }[];
+  jobsPage?: PageMeta; logsPage?: PageMeta;
   evaluations?: { id: string; state: string; reasonsJson: string; evaluatedAt: string; post: { text: string; externalUrl: string } }[];
   counts: Record<string, number>; observed: number; matched: number;
 };
@@ -40,6 +42,7 @@ export default function AutoCommentPage() {
   const [jobFilter, setJobFilter] = useState("all");
   const [hourly, setHourly] = useState(50);
   const [daily, setDaily] = useState(200);
+  const [historyBusy, setHistoryBusy] = useState(false);
   const reloadSequence = useRef(0);
   const reload = useCallback(async (signal?: AbortSignal) => {
     const sequence = ++reloadSequence.current;
@@ -55,6 +58,34 @@ export default function AutoCommentPage() {
     }
     catch (err) { if (!signal?.aborted && sequence === reloadSequence.current) setError(err instanceof Error ? err.message : "โหลดข้อมูลไม่สำเร็จ"); return false; }
   }, []);
+  async function loadMoreJobs() {
+    if (!data?.jobsPage?.hasMore || historyBusy) return;
+    setHistoryBusy(true); setError("");
+    try {
+      const next = await api<Dashboard>(`/api/auto-comment?jobsOffset=${data.jobs.length}&logsOffset=${data.logsPage?.offset ?? 0}`);
+      setData(current => current ? {
+        ...next,
+        jobs: [...current.jobs, ...next.jobs.filter(job => !current.jobs.some(row => row.id === job.id))],
+        logs: current.logs,
+        logsPage: current.logsPage,
+      } : next);
+    } catch (err) { setError(err instanceof Error ? err.message : "โหลดประวัติงานเพิ่มไม่สำเร็จ"); }
+    finally { setHistoryBusy(false); }
+  }
+  async function loadMoreLogs() {
+    if (!data?.logsPage?.hasMore || historyBusy) return;
+    setHistoryBusy(true); setError("");
+    try {
+      const next = await api<Dashboard>(`/api/auto-comment?jobsOffset=${data.jobsPage?.offset ?? 0}&logsOffset=${data.logs.length}`);
+      setData(current => current ? {
+        ...next,
+        jobs: current.jobs,
+        jobsPage: current.jobsPage,
+        logs: [...current.logs, ...next.logs.filter(log => !current.logs.some(row => row.id === log.id))],
+      } : next);
+    } catch (err) { setError(err instanceof Error ? err.message : "โหลด audit เพิ่มไม่สำเร็จ"); }
+    finally { setHistoryBusy(false); }
+  }
   useEffect(() => {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>; let delay = 5000; let stopped = false;
@@ -155,8 +186,8 @@ export default function AutoCommentPage() {
       </div>
       <p className="mt-3 text-xs text-muted">โควตานับความพยายามส่งรวมกรณีไม่ทราบผล · ต่อโพสต์ส่งได้เพียงครั้งเดียวตลอดประวัติ</p>
     </section>
-    <section><div className="flex flex-wrap items-end justify-between gap-3"><h2 className="text-lg font-semibold">ประวัติงานและข้อความที่เตรียมไว้</h2><div><Label htmlFor="job-filter">แสดงงาน</Label><Select id="job-filter" value={jobFilter} onChange={event => setJobFilter(event.target.value)}><option value="all">ทั้งหมด</option><option value="waiting">กำลังรอ / กำลังส่ง</option><option value="browser_observed">พบคอมเมนต์ในหน้าจอ</option><option value="review">ต้องตรวจสอบ</option></Select></div></div><p className="mt-1 text-xs text-muted">แสดง 100 งานล่าสุด งาน “ไม่ทราบผล” จะไม่ลองส่งซ้ำอัตโนมัติ ต้องตรวจบน Facebook เอง</p><div className="mt-3 space-y-3">{visibleJobs?.map(job => <article key={job.id} className="rounded-lg border border-line bg-card p-4"><div className="flex flex-wrap justify-between gap-2"><strong className="text-sm">{statuses[job.status] ?? job.status}</strong><span className="text-xs text-muted">{new Date(job.createdAt).toLocaleString("th-TH")}</span></div><p className="mt-2 whitespace-pre-wrap break-words text-sm">{job.message}</p>{job.lastError ? <p className="mt-2 text-sm text-muted">{job.lastError}</p> : null}{job.remoteCommentId ? <p className="mt-1 text-xs text-muted">Comment ID: {job.remoteCommentId}</p> : null}<div className="mt-3 flex gap-3"><Button size="sm" variant="outline" onClick={() => void navigator.clipboard.writeText(job.message).then(() => setNotice("คัดลอกข้อความแล้ว")).catch(() => setError("เบราว์เซอร์ไม่อนุญาต Clipboard ให้เลือกข้อความแล้วคัดลอกเอง"))}>คัดลอกข้อความ</Button>{facebookLink(job.externalUrl) ? <a className="self-center text-sm underline" href={facebookLink(job.externalUrl)!} target="_blank" rel="noreferrer">เปิดโพสต์</a> : null}</div></article>)}{!data?.jobs.length ? <p className="rounded-lg border border-dashed border-line p-5 text-sm text-muted">ยังไม่มีงาน เปิดกฎและกดเริ่มส่งจริง แล้วรอโพสต์ใหม่ ระบบจะไม่ส่งคอมเมนต์ย้อนหลังอัตโนมัติ</p> : !visibleJobs?.length ? <p className="p-4 text-sm text-muted">ไม่พบงานในตัวกรองนี้</p> : null}</div></section>
+    <section><div className="flex flex-wrap items-end justify-between gap-3"><h2 className="text-lg font-semibold">ประวัติงานและข้อความที่เตรียมไว้</h2><div><Label htmlFor="job-filter">แสดงงาน</Label><Select id="job-filter" value={jobFilter} onChange={event => setJobFilter(event.target.value)}><option value="all">ทั้งหมด</option><option value="waiting">กำลังรอ / กำลังส่ง</option><option value="browser_observed">พบคอมเมนต์ในหน้าจอ</option><option value="review">ต้องตรวจสอบ</option></Select></div></div><p className="mt-1 text-xs text-muted">แสดงทีละ {data?.jobsPage?.limit ?? 100} งาน · รวม {data?.jobsPage?.total ?? data?.jobs.length ?? 0} งาน · งาน “ไม่ทราบผล” จะไม่ลองส่งซ้ำอัตโนมัติ ต้องตรวจบน Facebook เอง</p><div className="mt-3 space-y-3">{visibleJobs?.map(job => <article key={job.id} className="rounded-lg border border-line bg-card p-4"><div className="flex flex-wrap justify-between gap-2"><strong className="text-sm">{statuses[job.status] ?? job.status}</strong><span className="text-xs text-muted">{new Date(job.createdAt).toLocaleString("th-TH")}</span></div><p className="mt-2 whitespace-pre-wrap break-words text-sm">{job.message}</p>{job.lastError ? <p className="mt-2 text-sm text-muted">{job.lastError}</p> : null}{job.remoteCommentId ? <p className="mt-1 text-xs text-muted">Comment ID: {job.remoteCommentId}</p> : null}<div className="mt-3 flex gap-3"><Button size="sm" variant="outline" onClick={() => void navigator.clipboard.writeText(job.message).then(() => setNotice("คัดลอกข้อความแล้ว")).catch(() => setError("เบราว์เซอร์ไม่อนุญาต Clipboard ให้เลือกข้อความแล้วคัดลอกเอง"))}>คัดลอกข้อความ</Button>{facebookLink(job.externalUrl) ? <a className="self-center text-sm underline" href={facebookLink(job.externalUrl)!} target="_blank" rel="noreferrer">เปิดโพสต์</a> : null}</div></article>)}{!data?.jobs.length ? <p className="rounded-lg border border-dashed border-line p-5 text-sm text-muted">ยังไม่มีงาน เปิดกฎและกดเริ่มส่งจริง แล้วรอโพสต์ใหม่ ระบบจะไม่ส่งคอมเมนต์ย้อนหลังอัตโนมัติ</p> : !visibleJobs?.length ? <p className="p-4 text-sm text-muted">ไม่พบงานในตัวกรองนี้</p> : null}{data?.jobsPage?.hasMore ? <Button variant="outline" disabled={historyBusy} onClick={() => void loadMoreJobs()}>{historyBusy ? "กำลังโหลด..." : "โหลดงานเก่าเพิ่ม"}</Button> : null}</div></section>
     <section aria-label="ผลประเมินโพสต์"><h2 className="text-lg font-semibold">ผลประเมินโพสต์รอบปัจจุบัน</h2><p className="mt-1 text-xs text-muted">50 รายการล่าสุด แยกโพสต์ที่ข้ามออกจากงานส่ง เปลี่ยนข้อความ ผล AI หรือกฎแล้วระบบจะตรวจใหม่ โดยไม่ส่งซ้ำโพสต์ที่เคยเริ่มส่ง</p><div className="mt-3 space-y-2">{data?.evaluations?.map(item => <article key={item.id} className="rounded-lg border border-line p-3"><strong className="text-sm">{({ skipped: "ไม่ผ่านเงื่อนไข", waiting_full_text: "รออ่านข้อความฉบับเต็ม", waiting_ai: "รอ AI", waiting_window: "รอเวลาทำงาน", matched: "สร้างงานแล้ว", deduplicated: "มีประวัติงานอยู่แล้ว" } as Record<string, string>)[item.state] ?? item.state}</strong><p className="mt-1 line-clamp-2 text-sm">{item.post.text}</p><details className="mt-2 text-xs text-muted"><summary>เหตุผลและเวลาประเมิน</summary><p>{new Date(item.evaluatedAt).toLocaleString("th-TH")}</p><div className="space-y-1">{evaluationReasons(item.reasonsJson, data.rules).map((reason, index) => <p key={index}>{reason}</p>)}</div></details></article>)}{!data?.evaluations?.length ? <p className="text-sm text-muted">ยังไม่มีผลประเมินในรอบนี้</p> : null}</div></section>
-    <details><summary className="cursor-pointer font-medium">Audit Log ล่าสุด</summary><ul className="mt-3 space-y-2 text-sm">{data?.logs.map(log => <li key={log.id} className="border-b border-line pb-2"><span className="text-xs text-muted">{new Date(log.createdAt).toLocaleString("th-TH")}</span> · {statuses[log.event] ?? log.event} {log.message}</li>)}</ul></details>
+    <details><summary className="cursor-pointer font-medium">Audit Log ล่าสุด ({data?.logsPage?.total ?? data?.logs.length ?? 0})</summary><ul className="mt-3 space-y-2 text-sm">{data?.logs.map(log => <li key={log.id} className="border-b border-line pb-2"><span className="text-xs text-muted">{new Date(log.createdAt).toLocaleString("th-TH")}</span> · {statuses[log.event] ?? log.event} {log.message}</li>)}</ul>{data?.logsPage?.hasMore ? <Button className="mt-3" variant="outline" disabled={historyBusy} onClick={() => void loadMoreLogs()}>{historyBusy ? "กำลังโหลด..." : "โหลด audit เพิ่ม"}</Button> : null}</details>
   </div>;
 }

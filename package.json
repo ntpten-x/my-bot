@@ -41,6 +41,7 @@
     "observe:automation": "node scripts/observe-automation.mjs",
     "test:production": "node scripts/smoke-production-local.mjs",
     "verify:collection-soak": "node scripts/verify-collection-soak.mjs",
+    "verify:comment-acceptance": "node scripts/verify-comment-acceptance.mjs",
     "test:ci": "node scripts/test-ci.mjs",
     "db:encrypt-settings": "tsx scripts/encrypt-settings.ts"
   },

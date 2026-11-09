@@ -2,6 +2,16 @@
 (function (root) {
   let busy = false;
   let draining = false;
+  // Only these prepare failures may burn local retries or server prepare_retry slots.
+  const TRANSIENT_PREPARE = new Set([
+    "loading_retryable",
+    "editor_requires_focused_tab",
+    "editor_text_not_accepted",
+    "editor_insert_failed",
+    "selection_unavailable",
+    "submit_not_ready",
+    "submit_not_unique_or_ready",
+  ]);
   async function pageAction(tabId, kind, payload, timeoutMs = 5000) {
     let timer;
     try {
@@ -40,10 +50,10 @@
       if (!response.ok) throw new Error("comment request rejected");
       return response.json();
     };
-    const report = async (outcome, commentUrl) => {
+    const report = async (outcome, commentUrl, reason) => {
       reportAttempted = true;
       const stored = await chrome.storage.local.get({ commentJournal: null });
-      const pendingReport = { outcome, ...(commentUrl ? { commentUrl } : {}) };
+      const pendingReport = { outcome, ...(commentUrl ? { commentUrl } : {}), ...(reason ? { reason: String(reason).slice(0, 80) } : {}) };
       const journal = stored.commentJournal || { id: job.id, claimToken: job.claimToken, apiBase: deps.base(cfg), state: sendInvoked ? "sending" : authorizationRequested ? "authorizing" : "claimed", at: Date.now() };
       await chrome.storage.local.set({ commentJournal: { ...journal, pendingReport } });
       const result = await request({ action: "report", id: job.id, claimToken: job.claimToken, ...pendingReport });
@@ -73,9 +83,18 @@
       for (let attempt = 0; attempt < 8; attempt++) {
         prepared = await execute("prepare");
         if (prepared.ok || prepared.outcome === "blocked") break;
+        // Deterministic DOM/owner failures fail closed immediately — do not steal focus for 8 rounds.
+        if (prepared.reason && !TRANSIENT_PREPARE.has(prepared.reason)) break;
         await deps.sleep(Math.min(1000, remaining()));
       }
-      if (!prepared?.ok) { await report(prepared?.outcome === "blocked" ? "blocked" : "failed"); return; }
+      if (!prepared?.ok) {
+        await report(
+          prepared?.outcome === "blocked" ? "blocked" : "failed",
+          undefined,
+          prepared?.reason || (prepared?.outcome === "blocked" ? "blocked" : "prepare_failed"),
+        );
+        return;
+      }
       job.baseline = prepared.baseline; job.profiles = prepared.profiles || [];
       const latest = await deps.loadConfig();
       if (latest.accountPaused || deps.base(latest) !== deps.base(cfg) || latest.token !== cfg.token) { await report("failed"); return; }

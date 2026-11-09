@@ -33,7 +33,9 @@
       try { const u = new URL(a.getAttribute("href"), loc.href); return samePost(u.href, payload.externalUrl) ? u.href : ""; } catch { return ""; }
     }).filter(Boolean);
     if (blocked()) return { ok: false, outcome: "blocked" };
-    if (!matchesPage() || !payload.id || !payload.message || payload.message.length > 2000) return { ok: false, outcome: "failed" };
+    if (!matchesPage() || !payload.id || !payload.message || payload.message.length > 2000) {
+      return { ok: false, outcome: "failed", reason: !matchesPage() ? "target_mismatch" : "invalid_payload" };
+    }
 
     if (kind === "prepare") {
       // Nested dialogs represent one surface when they share the same composer.
@@ -45,18 +47,26 @@
         !article.parentElement?.closest('[role="article"]') && Array.from(article.querySelectorAll("a[href]")).some(a => {
           try { return samePost(new URL(a.getAttribute("href"), loc.href).href, payload.externalUrl); } catch { return false; }
         }));
-      if (!dialogs.length && articles.length !== 1) return { ok: false, outcome: "failed" };
+      if (!dialogs.length && articles.length === 0) {
+        const loading = Boolean(doc.querySelector('[role="main"] [role="progressbar"], main [aria-busy="true"], [data-visualcompletion="loading-state"]'));
+        return { ok: false, outcome: "failed", reason: loading ? "loading_retryable" : "unsupported_dom" };
+      }
+      if (!dialogs.length && articles.length !== 1) return { ok: false, outcome: "failed", reason: "ambiguous_composer" };
       const article = dialogs[0] || articles[0];
       const boxes = Array.from(article.querySelectorAll('[contenteditable="true"][role="textbox"],textarea')).filter(el => {
         const label = [el.getAttribute("aria-label"), el.getAttribute("aria-placeholder"), el.getAttribute("placeholder")].join(" ").toLowerCase();
         return visible(el) && /comment|แสดงความคิดเห็น|เขียนความคิดเห็น/.test(label) && !/reply|ตอบกลับ|message|ข้อความ|search|ค้นหา/.test(label);
       });
-      if (boxes.length !== 1) return { ok: false, outcome: "failed" };
+      if (boxes.length === 0) {
+        const loading = Boolean(article.querySelector('[role="progressbar"], [aria-busy="true"], [data-visualcompletion="loading-state"]'));
+        return { ok: false, outcome: "failed", reason: loading ? "loading_retryable" : "unsupported_dom" };
+      }
+      if (boxes.length !== 1) return { ok: false, outcome: "failed", reason: "ambiguous_composer" };
       const box = boxes[0], form = box.closest('form,[role="form"]');
-      if (!form || !article.contains(form)) return { ok: false, outcome: "failed" };
+      if (!form || !article.contains(form)) return { ok: false, outcome: "failed", reason: "unsupported_dom" };
       const prior = memory.__mybotCommentSession;
       const ownDraft = prior && prior.id === payload.id && prior.box === box && !prior.clicked && prior.message === payload.message && normalize(box.value ?? box.textContent) === normalize(payload.message);
-      if (normalize(box.value ?? box.textContent) && !ownDraft) return { ok: false, outcome: "failed" };
+      if (normalize(box.value ?? box.textContent) && !ownDraft) return { ok: false, outcome: "failed", reason: "owner_draft" };
       memory.__mybotCommentSession = { id: payload.id, box, article, before: prior?.id === payload.id ? prior.before : links(article), message: payload.message, at: now(), clicked: false };
       if (!environment && !doc.hasFocus()) return { ok: false, outcome: "failed", reason: "editor_requires_focused_tab" };
       box.focus();
@@ -81,6 +91,7 @@
         const label = normalize(el.getAttribute("aria-label") || el.textContent).toLowerCase();
         return visible(el) && !el.disabled && el.getAttribute("aria-disabled") !== "true" && /^(post a comment|post comment|comment|send|ส่ง|ส่งความคิดเห็น|โพสต์ความคิดเห็น|แสดงความคิดเห็น)$/.test(label);
       });
+      if (buttons.length === 0) return { ok: false, outcome: "failed", reason: "submit_not_ready" };
       if (buttons.length !== 1) return { ok: false, outcome: "failed", reason: "submit_not_unique_or_ready" };
       memory.__mybotCommentSession = { id: payload.id, box, button: buttons[0], article, before: memory.__mybotCommentSession.before, message: payload.message, at: now(), clicked: false };
       const profiles = Array.from(doc.querySelectorAll('[role="banner"] a[href][aria-label],header a[href][aria-label]')).filter(a => visible(a) && /^(your profile|โปรไฟล์ของคุณ)$/i.test(a.getAttribute("aria-label") || "")).map(a => new URL(a.getAttribute("href"), loc.href).pathname.replace(/\/$/, ""));

@@ -194,16 +194,27 @@ export async function processAutoCommentQueue(options: { gateway?: CommentGatewa
   } finally { processing = false; }
 }
 
-export async function autoCommentDashboard() {
+export async function autoCommentDashboard(options: {
+  jobsOffset?: number;
+  logsOffset?: number;
+  jobsLimit?: number;
+  logsLimit?: number;
+} = {}) {
   const control = await readCommentControl();
-  const [rules, sources, jobs, counts, observed, matched, logs, evaluations, typeSetups, products, categories] = await Promise.all([
+  const jobsLimit = Math.min(200, Math.max(1, options.jobsLimit ?? 100));
+  const logsLimit = Math.min(200, Math.max(1, options.logsLimit ?? 60));
+  const jobsOffset = Math.max(0, options.jobsOffset ?? 0);
+  const logsOffset = Math.max(0, options.logsOffset ?? 0);
+  const [rules, sources, jobs, jobTotal, counts, observed, matched, logs, logTotal, evaluations, typeSetups, products, categories] = await Promise.all([
     prisma.autoCommentRule.findMany({ orderBy: { createdAt: "asc" }, include: { templates: { orderBy: { sortOrder: "asc" } } } }),
     prisma.source.findMany({ select: { id: true, name: true, type: true, enabled: true }, orderBy: { name: "asc" } }),
-    prisma.autoCommentJob.findMany({ orderBy: { createdAt: "desc" }, take: 100 }),
+    prisma.autoCommentJob.findMany({ orderBy: { createdAt: "desc" }, skip: jobsOffset, take: jobsLimit }),
+    prisma.autoCommentJob.count(),
     prisma.autoCommentJob.groupBy({ by: ["status"], _count: true }),
     prisma.autoCommentLog.count({ where: { event: "observed", createdAt: { gte: new Date(control.startedAt) } } }),
     prisma.autoCommentLog.count({ where: { event: "matched", createdAt: { gte: new Date(control.startedAt) } } }),
-    prisma.autoCommentLog.findMany({ orderBy: { createdAt: "desc" }, take: 60 }),
+    prisma.autoCommentLog.findMany({ orderBy: { createdAt: "desc" }, skip: logsOffset, take: logsLimit }),
+    prisma.autoCommentLog.count(),
     prisma.autoCommentEvaluation.findMany({ where: { generation: control.generation },
       orderBy: { evaluatedAt: "desc" }, take: 50,
       include: { post: { select: { text: true, externalUrl: true } } } }),
@@ -217,6 +228,8 @@ export async function autoCommentDashboard() {
   const categoryOf = new Map(categories.map(row => [row.slug, row.name]));
   return {
     control, sources, logs, evaluations, jobs: jobs.map(job => ({ ...job, claimToken: undefined })),
+    jobsPage: { offset: jobsOffset, limit: jobsLimit, total: jobTotal, hasMore: jobsOffset + jobs.length < jobTotal },
+    logsPage: { offset: logsOffset, limit: logsLimit, total: logTotal, hasMore: logsOffset + logs.length < logTotal },
     counts: Object.fromEntries(counts.map(row => [row.status, row._count])), observed, matched,
     rules: rules.filter(rule => !archivedIds.has(rule.id)).map(({ pageTokenEnc, managerTokenEnc, ...rule }) => ({ ...rule, typeInfo: (() => { const product = productOf.get(setupOf.get(rule.id)?.productId ?? ""); return product ? { id: product.id, name: product.name, categoryName: categoryOf.get(product.categorySlug) ?? product.categorySlug } : null; })(), hasPageToken: Boolean(pageTokenEnc), hasManagerToken: Boolean(managerTokenEnc), sourceIds: jsonList<string>(rule.sourceIdsJson), days: jsonList<number>(rule.daysJson) })),
   };

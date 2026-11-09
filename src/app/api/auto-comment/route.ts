@@ -7,12 +7,18 @@ import { updateCommentControl } from "@/lib/auto-comment/control";
 import { schemaReadiness } from "@/lib/schema-readiness";
 
 export const dynamic = "force-dynamic";
-export async function GET() {
+export async function GET(request: Request) {
   const { error } = await authed(); if (error) return error;
   try {
     const schema = await schemaReadiness();
     if (!schema.ready) return json({ error: "ฐานข้อมูลคอมเมนต์ยังไม่พร้อม ต้องรัน migration บนเซิร์ฟเวอร์", code: "SCHEMA_NOT_READY", schema }, 503);
-    const dashboard = await autoCommentDashboard();
+    const url = new URL(request.url);
+    const jobsOffset = Number(url.searchParams.get("jobsOffset") || 0);
+    const logsOffset = Number(url.searchParams.get("logsOffset") || 0);
+    const dashboard = await autoCommentDashboard({
+      jobsOffset: Number.isFinite(jobsOffset) ? jobsOffset : 0,
+      logsOffset: Number.isFinite(logsOffset) ? logsOffset : 0,
+    });
     return json({ ...dashboard, control: { ...dashboard.control, dryRun: false, ...(dashboard.control.dryRun ? { state: "stopped" } : {}) } });
   } catch { return json({ error: "โหลดระบบคอมเมนต์ไม่สำเร็จ กรุณาตรวจฐานข้อมูล" }, 503); }
 }
