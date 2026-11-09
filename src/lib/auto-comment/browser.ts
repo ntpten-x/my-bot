@@ -5,7 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { Prisma, type AutoCommentJob } from "@prisma/client";
 import { prisma } from "../prisma";
 import { recordTiming } from "../metrics";
-import { explainCommentRule, matchesCommentRule, templateIndex, jsonList } from "./matching";
+import { explainCommentRule, isKeywordBotRule, matchesCommentRule, templateIndex, jsonList } from "./matching";
 import { lockCommentControl, mayRun, readCommentControl, storeCommentControl, type CommentControl } from "./control";
 import { facebookGroupKey } from "../sources";
 
@@ -148,8 +148,10 @@ export async function scanBrowserComments(assertActive: () => Promise<void>, opt
             if (!target) codes.push("unsupported_target");
             const deadline = (post.postedAt ?? post.createdAt).getTime() + rule.maxAgeHours * 3600_000;
             if (codes.includes("type_scope") && deadline > now.getTime()) nextEvaluateAt = new Date(Math.min(deadline + 1, now.getTime() + 60_000));
-            // Keep a durable wait even if pre-AI labels initially reject the post.
-            if (post.truncated && deadline > now.getTime() && !codes.some(code => ["source", "source_disabled", "type_scope", "before_start", "age", "unsupported_target"].includes(code))) {
+            // Keyword bots that already matched required words may proceed on truncated cards.
+            // Other rules still wait for a durable full-text capture.
+            if (post.truncated && deadline > now.getTime() && !isKeywordBotRule(rule)
+              && !codes.some(code => ["source", "source_disabled", "type_scope", "before_start", "age", "unsupported_target"].includes(code))) {
               evaluationState = "waiting_full_text";
               nextEvaluateAt = new Date(Math.min(deadline + 1, now.getTime() + 60_000));
               reasons.push({ ruleId: rule.id, codes: ["full_text"] });
@@ -172,11 +174,13 @@ export async function scanBrowserComments(assertActive: () => Promise<void>, opt
             const message = rule.messageMode === "ai_draft" ? "" : rule.templates[templateIndex(rule.selectionMode, rule.templates.length, rule.nextTemplate)].body;
             const dedupeKey = `${control.dryRun ? `dry:${control.generation}` : "live"}:${target.key}`;
             const existing = await tx.autoCommentJob.findUnique({ where: { dedupeKey } });
+            // Keyword bots go straight to the Extension claim queue — no AI prepare hop.
+            const readyNow = !control.dryRun && isKeywordBotRule(rule) && Boolean(message);
             const data = { ruleId: rule.id, postId: post.id, sourceId: post.sourceId,
               externalUrl: target.url, postKey: target.key, remotePostId: "", pageId: target.area,
               deliveryMode: "extension", browserDeviceId: rule.browserDeviceId, browserFbUserId: rule.browserFbUserId,
               generation: control.generation, ruleRevision: rule.revision, textRevision: post.textRevision,
-              dryRun: control.dryRun, message, status: "pending_ai",
+              dryRun: control.dryRun, message, status: readyNow ? "browser_ready" : "pending_ai",
             };
             // Only re-evaluate cancelled work that provably never received a send grant
             // in this generation. Never clear or reuse a historical live dispatch key.
@@ -194,7 +198,9 @@ export async function scanBrowserComments(assertActive: () => Promise<void>, opt
               break;
             }
             if (rule.messageMode === "template") await tx.autoCommentRule.update({ where: { id: rule.id }, data: { nextTemplate: { increment: 1 } } });
-            await log(tx, job, "matched", "จับคู่กฎ Extension รอการตรวจความพร้อม");
+            await log(tx, job, readyNow ? "browser_ready" : "matched", readyNow
+              ? "จับคู่คำสำคัญแล้ว พร้อมให้อุปกรณ์รับงานทันที"
+              : "จับคู่กฎ Extension รอการตรวจความพร้อม");
             evaluationState = waitingAi ? "waiting_ai" : "matched";
             if (!waitingAi) nextEvaluateAt = null;
             break;
@@ -254,8 +260,12 @@ export async function prepareBrowserComments(assertActive: () => Promise<void>, 
       const message = job.message;
       if (!message || message.length > 2000) { await tx.autoCommentJob.update({ where: { id: job.id }, data: { status: "cancelled", lastError: "ข้อความตอบว่างหรือยาวเกินกำหนด" } }); return; }
       const status = job.dryRun ? "dry_run" : "browser_ready";
-      await tx.autoCommentJob.update({ where: { id: job.id }, data: { status, message } });
-      await log(tx, job, status, job.dryRun ? "จำลอง Extension ไม่มีการเปิดแท็บหรือกดส่ง" : "พร้อมให้อุปกรณ์ที่ผูกไว้รับงาน");
+      await tx.autoCommentJob.update({ where: { id: job.id }, data: { status, message, nextAttemptAt: new Date(), lastError: "" } });
+      await log(tx, job, status, job.dryRun
+        ? "จำลอง Extension ไม่มีการเปิดแท็บหรือกดส่ง"
+        : isKeywordBotRule(state.rule)
+          ? "ข้อความสำเร็จรูปพร้อมแล้ว ให้อุปกรณ์รับงานทันที"
+          : "พร้อมให้อุปกรณ์ที่ผูกไว้รับงาน");
     }, { timeout: 20000, maxWait: 20000 });
     if (draft) {
       await assertActive();

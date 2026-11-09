@@ -60,6 +60,32 @@ export async function updateCommentControl(input: {
     };
     await storeCommentControl(tx, next);
     if (invalidate) await tx.autoCommentJob.updateMany({ where: { status: { in: ["pending", "pending_ai", "browser_ready", "claimed"] } }, data: { status: "cancelled", claimToken: null, claimUntil: null, lastError: "เจ้าของหยุดระบบหรือเปลี่ยนโหมด" } });
+    // Owner Start from the live UI (liveOnly) converts Extension template rules off AI/intent waits.
+    // Internal tests and legacy Graph paths can still start without rewriting rule flags.
+    if (input.action === "start" && input.liveOnly) {
+      const legacy = await tx.autoCommentRule.findMany({
+        where: {
+          deliveryMode: "extension",
+          messageMode: "template",
+          OR: [{ requireAi: true }, { intentMode: { not: "keyword" } }],
+        },
+        select: { id: true, templates: { select: { id: true }, take: 1 } },
+      });
+      let converted = 0;
+      for (const rule of legacy) {
+        if (!rule.templates.length) continue;
+        await tx.autoCommentRule.update({
+          where: { id: rule.id },
+          data: { requireAi: false, intentMode: "keyword", revision: { increment: 1 } },
+        });
+        converted += 1;
+      }
+      if (converted) {
+        await tx.autoCommentLog.create({
+          data: { event: "keyword_bot_normalized", message: `ปรับ ${converted} กฎ Extension ให้จับคำสำคัญทันที ไม่รอ AI` },
+        });
+      }
+    }
     if ((input.hourlyLimit !== undefined && input.hourlyLimit !== old.hourlyLimit)
       || (input.dailyLimit !== undefined && input.dailyLimit !== old.dailyLimit)) {
       // A deliberate quota change must not leave eligible work asleep until the old reset time.

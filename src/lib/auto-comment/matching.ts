@@ -4,9 +4,20 @@ import { normalizeText } from "../pipeline/normalize";
 
 export type MatchRule = {
   intentMode?: string;
+  requireAi?: boolean;
+  messageMode?: string;
+  deliveryMode?: string;
   enabled: boolean; pausedReason: string; sourceIdsJson: string; keywords: string; excludeKeywords: string;
   keywordMode: string; startMinute: number; endMinute: number; daysJson: string; maxAgeHours: number;
 };
+
+/** Keyword+template Extension bots: match and queue without waiting for AI classification. */
+export function isKeywordBotRule(rule: Pick<MatchRule, "intentMode" | "requireAi" | "messageMode" | "deliveryMode">) {
+  const intent = rule.intentMode || "keyword";
+  const mode = rule.messageMode || "template";
+  const delivery = rule.deliveryMode || "extension";
+  return delivery === "extension" && !rule.requireAi && mode === "template" && intent === "keyword";
+}
 export type MatchPost = { truncated?: boolean; intent?: string; aiProvider?: string | null; text: string; sourceId: string; createdAt: Date; postedAt: Date | null; isAd: boolean; forbiddenHit: boolean; duplicateOfId: string | null; dismissed: boolean };
 export function jsonList<T>(value: string, fallback: T[] = []): T[] {
   try { const out = JSON.parse(value); return Array.isArray(out) ? out : fallback; } catch { return fallback; }
@@ -34,11 +45,16 @@ export function explainCommentRule(rule: MatchRule, post: MatchPost, now = new D
   const matchedKeywords = required.filter(word => text.includes(word));
   const excludedKeywords = words(rule.excludeKeywords).filter(word => text.includes(word));
   const intent = commentIntent(post);
+  const keywordBot = isKeywordBotRule(rule);
   const smart = Boolean(rule.intentMode && rule.intentMode !== "keyword");
+  const keywordsPass = !required.length || (rule.keywordMode === "all" ? matchedKeywords.length === required.length : matchedKeywords.length > 0);
+  // Keyword bots may act on a truncated card once required keywords already match.
+  // Empty keyword lists still require full text so we do not comment every truncated post.
+  const fullTextPass = !post.truncated || (keywordBot && required.length > 0 && keywordsPass);
   const checks = [
     { code: "enabled", label: "กฎเปิดใช้งาน", passed: rule.enabled },
     { code: "not_paused", label: "กฎไม่ถูกพัก", passed: !rule.pausedReason },
-    { code: "full_text", label: "อ่านข้อความฉบับเต็มแล้ว", passed: !post.truncated },
+    { code: "full_text", label: "อ่านข้อความฉบับเต็มแล้ว", passed: fullTextPass },
     { code: "not_ad", label: "ไม่ใช่โฆษณา", passed: !post.isAd },
     { code: "not_forbidden", label: "ไม่พบคำต้องห้าม", passed: !post.forbiddenHit },
     { code: "not_duplicate", label: "ไม่ใช่โพสต์ซ้ำ", passed: !post.duplicateOfId },
@@ -51,7 +67,7 @@ export function explainCommentRule(rule: MatchRule, post: MatchPost, now = new D
     { code: "window", label: "อยู่ในวันและเวลาทำงาน (Asia/Bangkok)", passed: inCommentWindow(rule, now) },
     { code: "age", label: "อายุโพสต์อยู่ในช่วงที่รับได้", passed: Number.isFinite(age) && age >= -3600_000 && age <= rule.maxAgeHours * 3600_000 },
     { code: "excluded", label: "ไม่พบคำยกเว้น", passed: !excludedKeywords.length },
-    { code: "keywords", label: rule.keywordMode === "all" ? "พบคำสำคัญครบทุกคำ" : "พบคำสำคัญอย่างน้อยหนึ่งคำ หรือไม่ได้กำหนดคำ", passed: !required.length || (rule.keywordMode === "all" ? matchedKeywords.length === required.length : matchedKeywords.length > 0) },
+    { code: "keywords", label: rule.keywordMode === "all" ? "พบคำสำคัญครบทุกคำ" : "พบคำสำคัญอย่างน้อยหนึ่งคำ หรือไม่ได้กำหนดคำ", passed: keywordsPass },
   ];
   return { intent, matched: checks.every(check => check.passed), checks, matchedKeywords, excludedKeywords };
 }

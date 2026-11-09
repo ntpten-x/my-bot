@@ -337,18 +337,39 @@ describe.skipIf(!fixture.enabled)("comment queue efficiency", () => {
     expect(await prisma.autoCommentJob.count()).toBe(9);
   });
 
-  it("yields job preparation between jobs and resumes unsent work on the next pass", async () => {
+  it("queues keyword matches as browser_ready immediately without an AI prepare hop", async () => {
     const s = await setup();
     await prisma.post.createMany({ data: Array.from({length:8},(_,i)=>({ sourceId:s.source.id, externalUrl:`https://www.facebook.com/groups/12345/posts/${9200+i}/`,text:"หาช่างแอร์",normalizedText:"หาช่างแอร์",contentHash:`prepare-slice-${i}` })) });
     await scanBrowserComments(active);
+    expect(await prisma.autoCommentJob.count({ where: { status: "pending_ai" } })).toBe(0);
+    expect(await prisma.autoCommentJob.count({ where: { status: "browser_ready" } })).toBe(9);
+    expect(await prisma.autoCommentLog.count({ where: { event: "dispatch" } })).toBe(0);
+    expect(s.job.status).toBe("browser_ready");
+  });
+
+  it("still slices AI-gated preparation across worker deadlines", async () => {
+    const s = await setup({ requireAi: true });
+    await prisma.post.createMany({ data: Array.from({ length: 8 }, (_, i) => ({
+      sourceId: s.source.id,
+      externalUrl: `https://www.facebook.com/groups/12345/posts/${9300 + i}/`,
+      text: "หาช่างแอร์",
+      normalizedText: "หาช่างแอร์",
+      contentHash: `ai-prepare-slice-${i}`,
+      aiProvider: "ollama",
+    })) });
+    await prisma.aiJob.createMany({ data: (await prisma.post.findMany({ where: { sourceId: s.source.id }, select: { id: true } })).map(post => ({ postId: post.id, status: "done" })) });
+    await scanBrowserComments(active);
+    expect(await prisma.autoCommentJob.count({ where: { status: "pending_ai" } })).toBeGreaterThan(0);
     let clock = Date.now();
-    const now = vi.spyOn(Date,"now").mockImplementation(()=>clock);
-    try { await prepareBrowserComments(async()=>{clock+=1000;},{deadlineMs:clock+1500}); }
+    const now = vi.spyOn(Date, "now").mockImplementation(() => clock);
+    try { await prepareBrowserComments(async () => { clock += 1000; }, { deadlineMs: clock + 1500 }); }
     finally { now.mockRestore(); }
-    expect(await prisma.autoCommentJob.count({where:{status:"pending_ai"}})).toBe(7);
+    const pending = await prisma.autoCommentJob.count({ where: { status: "pending_ai" } });
+    const ready = await prisma.autoCommentJob.count({ where: { status: "browser_ready" } });
+    expect(pending + ready).toBe(9);
+    expect(pending).toBeGreaterThan(0);
     await prepareBrowserComments(active);
-    expect(await prisma.autoCommentJob.count({where:{status:"browser_ready"}})).toBe(9);
-    expect(await prisma.autoCommentLog.count({where:{event:"dispatch"}})).toBe(0);
+    expect(await prisma.autoCommentJob.count({ where: { status: "browser_ready" } })).toBe(9);
   });
 
   it("checks group cooldown before claiming and defers only the remaining interval", async () => {
