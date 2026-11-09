@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import Page from "../../src/app/(app)/auto-comment/page";
 import { CommentReadinessPanel } from "../../src/components/comment-readiness";
+import { sortAccountsOnlineFirst, sortDevicesOnlineFirst } from "../../src/components/type-comment-form";
 const dashboard = { control: { state: "stopped", dryRun: true, emergency: false, hourlyLimit: 5, dailyLimit: 20, cooldownUntil: null }, rules: [], sources: [], jobs: [], logs: [], counts: {}, observed: 0, matched: 0 };
 let root: Root; let container: HTMLDivElement;
 beforeEach(() => {
@@ -23,6 +24,18 @@ async function renderEditor() {
   const create = Array.from(container.querySelectorAll("button")).find(node => node.textContent === "สร้างชุดคอมเมนต์")!;
   await act(async () => create.click());
 }
+
+it("keeps online Chrome profiles and Facebook accounts at the top of connection pickers", () => {
+  expect(sortDevicesOnlineFirst([
+    { id: "a", name: "Chrome Win32 offline", online: false },
+    { id: "b", name: "Chrome Win32 live", online: true },
+    { id: "c", name: "Chrome Linux offline", online: false },
+  ]).map(row => row.id)).toEqual(["b", "c", "a"]);
+  expect(sortAccountsOnlineFirst([
+    { id: "2", name: "บัญชีออฟไลน์", connected: false },
+    { id: "1", name: "บัญชีออนไลน์", connected: true },
+  ]).map(row => row.id)).toEqual(["1", "2"]);
+});
 
 it("renders browser delivery with safe defaults and no Facebook credential fields", async () => {
   await act(async () => { root.render(React.createElement(Page)); });
