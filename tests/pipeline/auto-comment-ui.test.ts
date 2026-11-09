@@ -180,6 +180,25 @@ it("lists a type with its own switch and opens the same editor with saved values
   expect(container.querySelector<HTMLSelectElement>("#comment-type")!.value).toBe("roblox");
   expect(container.querySelectorAll('input[name="selected-message"]:checked')).toHaveLength(2);
 });
+
+it("shows paused rules and deferred wait reasons instead of a false open/ready state", async () => {
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  const rule = { ...savedRule(), pausedReason: "ผลไม่ชัดเจนหลายครั้งติดกัน ตรวจ Facebook ก่อนเปิดกฎนี้ใหม่ ระบบส่วนกลางยังทำงานต่อได้" };
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (url === "/api/auto-comment") return new Response(JSON.stringify({
+      ...dashboard,
+      rules: [rule],
+      counts: { browser_observed: 2, browser_ready: 1, uncertain: 3 },
+      jobs: [{ id: "job1", status: "browser_ready", message: "สนใจ", externalUrl: "https://www.facebook.com/groups/1/posts/2/", lastError: "รอระยะพักของกลุ่ม", dryRun: false, createdAt: new Date().toISOString(), remoteCommentId: null }],
+    }));
+    return original(url, init);
+  });
+  await act(async () => root.render(React.createElement(Page)));
+  expect(container.textContent).toContain("พักแล้ว · แก้ไขเพื่อเปิดใหม่");
+  expect(container.textContent).toContain("พักไว้: ผลไม่ชัดเจนหลายครั้งติดกัน");
+  expect(container.textContent).toContain("รอระยะพักของกลุ่ม");
+  expect(container.textContent).toMatch(/ส่งสำเร็จทั้งหมด[\s\S]*2/);
+});
 it("returns a newly saved type draft directly to the list", async () => {
   const original = vi.mocked(fetch).getMockImplementation()!;
   let stored: ReturnType<typeof savedRule> | undefined;

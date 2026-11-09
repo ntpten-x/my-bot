@@ -287,13 +287,29 @@ describe.skipIf(!fixture.enabled)("browser comment durable workflow on disposabl
     }
     expect(await readCommentControl()).toMatchObject({ state: "running" });
     expect((await prisma.autoCommentRule.findUniqueOrThrow({ where: { id: s.ruleId } })).pausedReason).toMatch(/ผลไม่ชัดเจน/);
+    expect(await prisma.autoCommentJob.count({ where: { ruleId: s.ruleId, status: { in: ["pending", "pending_ai", "browser_ready", "claimed"] } } })).toBe(0);
+    expect(await prisma.autoCommentLog.findFirst({ where: { ruleId: s.ruleId, event: "rule_paused" }, orderBy: { createdAt: "desc" } })).toMatchObject({
+      message: expect.stringMatching(/ยกเลิกคิวรอ|พักกฎหลัง uncertain/),
+    });
   });
   it("pauses global control on a Facebook checkpoint block", async () => {
     const s = await setup(), c = (await claim(s.device.id))!; await permit(s.device.id, c);
+    const rule = await prisma.autoCommentRule.findUniqueOrThrow({ where: { id: s.ruleId } });
+    const control = await readCommentControl();
+    await prisma.autoCommentJob.create({
+      data: {
+        ruleId: s.ruleId, postId: s.post.id, sourceId: s.source.id, pageId: "group:12345",
+        postKey: "group:12345:7777", dedupeKey: `block-wait-${++serial}`,
+        externalUrl: "https://www.facebook.com/groups/12345/posts/7777/", message: "รอ", status: "browser_ready",
+        deliveryMode: "extension", browserDeviceId: s.device.id, browserFbUserId: s.input.browserFbUserId,
+        generation: control.generation, ruleRevision: rule.revision, textRevision: 0, dryRun: false, nextAttemptAt: new Date(0),
+      },
+    });
     await reportBrowserComment(s.device.id, c.id, c.claimToken, "blocked");
-    expect((await prisma.autoCommentJob.findFirstOrThrow()).status).toBe("cancelled");
+    expect((await prisma.autoCommentJob.findFirstOrThrow({ where: { id: c.id } })).status).toBe("cancelled");
     expect(await readCommentControl()).toMatchObject({ state: "paused" });
     expect((await prisma.autoCommentRule.findUniqueOrThrow({ where: { id: s.ruleId } })).pausedReason).toBeTruthy();
+    expect(await prisma.autoCommentJob.count({ where: { ruleId: s.ruleId, status: "browser_ready" } })).toBe(0);
   });
   it("retargets waiting jobs when only the pinned device changes", async () => {
     const s = await setup();

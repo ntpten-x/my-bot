@@ -416,6 +416,7 @@ export async function reportBrowserComment(
     );
     if (outcome === "blocked") {
       await tx.autoCommentRule.update({ where: { id: job.ruleId }, data: { pausedReason: "Extension พบข้อจำกัดของ Facebook ตรวจบัญชีก่อนเปิดใหม่" } });
+      await cancelWaitingJobsForPausedRule(tx, job.ruleId, "กฎถูกพักเพราะข้อจำกัดของ Facebook");
       if (control.state === "running") await storeCommentControl(tx, { ...control, state: "paused" });
     } else if (status === "uncertain") {
       // Keep other rules and the global Start switch running. Only park this rule after a short burst of ambiguous sends.
@@ -427,6 +428,16 @@ export async function reportBrowserComment(
 
 const UNCERTAIN_BURST_LIMIT = 3;
 const UNCERTAIN_BURST_WINDOW_MS = 30 * 60_000;
+const WAITING_JOB_STATUSES = ["pending", "pending_ai", "browser_ready", "claimed"] as const;
+
+/** Drop the false backlog once a rule is parked so the UI does not keep showing 「รอ Extension」. */
+export async function cancelWaitingJobsForPausedRule(tx: Prisma.TransactionClient, ruleId: string, lastError: string) {
+  const result = await tx.autoCommentJob.updateMany({
+    where: { ruleId, status: { in: [...WAITING_JOB_STATUSES] }, dispatchedAt: null },
+    data: { status: "cancelled", claimToken: null, claimUntil: null, lastError },
+  });
+  return result.count;
+}
 
 /** Pause only the affected rule after repeated ambiguous results; never stop the whole control plane. */
 export async function maybePauseRuleAfterRepeatedUncertain(tx: Prisma.TransactionClient, ruleId: string, now = new Date()) {
@@ -438,8 +449,15 @@ export async function maybePauseRuleAfterRepeatedUncertain(tx: Prisma.Transactio
     where: { id: ruleId },
     data: { pausedReason: "ผลไม่ชัดเจนหลายครั้งติดกัน ตรวจ Facebook ก่อนเปิดกฎนี้ใหม่ ระบบส่วนกลางยังทำงานต่อได้" },
   });
+  const cancelled = await cancelWaitingJobsForPausedRule(tx, ruleId, "กฎถูกพักเพราะผลไม่ชัดเจนหลายครั้ง");
   await tx.autoCommentLog.create({
-    data: { ruleId, event: "rule_paused", message: `พักกฎหลัง uncertain ${recent} ครั้งใน 30 นาที โดยไม่ Pause ทั้งระบบ` },
+    data: {
+      ruleId,
+      event: "rule_paused",
+      message: cancelled
+        ? `พักกฎหลัง uncertain ${recent} ครั้งใน 30 นาที และยกเลิกคิวรอ ${cancelled} งาน โดยไม่ Pause ทั้งระบบ`
+        : `พักกฎหลัง uncertain ${recent} ครั้งใน 30 นาที โดยไม่ Pause ทั้งระบบ`,
+    },
   });
   return true;
 }
