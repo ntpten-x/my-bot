@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- The VM executes untyped extension JavaScript against dynamically shaped Chrome storage fixtures. */
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import vm from "node:vm";

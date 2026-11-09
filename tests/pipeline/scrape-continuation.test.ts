@@ -28,7 +28,7 @@ it("spaces loading recovery at one minute instead of a productive 30-second cont
 it("keeps hints for sources beyond the first cycle and bounds concurrent hint queries", async () => {
   mocks.sources.mockResolvedValue(Array.from({length:25},(_,i)=>({...source,id:String(i),name:String(i),nextRunAt:null,lastRunFound:200,lastRunStop:i===0?"cap":"exhausted"})));
   let inFlight=0,maxInFlight=0;
-  mocks.posts.mockImplementation(async (query:any) => {
+  mocks.posts.mockImplementation(async (query:{where:{sourceId?:string};take?:number}) => {
     if (typeof query.where.sourceId !== "string") return [];
     inFlight++; maxInFlight=Math.max(maxInFlight,inFlight);
     await Promise.resolve();
@@ -51,7 +51,7 @@ it("reports capture rate and incomplete slices from persisted runs", () => {
 it("does not spend full-text retry attempts just by polling configuration", async () => {
   mocks.sources.mockResolvedValue([{...source,nextRunAt:null,lastRunStop:"exhausted",lastRunFound:5}]);
   const externalUrl=`${source.url}/posts/1000`;
-  mocks.posts.mockImplementation(async (query:any) => query.where.truncated ? [{id:"p",sourceId:"s",externalUrl,score:1,createdAt:now,refetchAttempts:0}] : []);
+  mocks.posts.mockImplementation(async (query:{where:{truncated?:boolean}}) => query.where.truncated ? [{id:"p",sourceId:"s",externalUrl,score:1,createdAt:now,refetchAttempts:0}] : []);
   for(let i=0;i<2;i++) expect((await buildExtensionConfig(now)).groups[0].refetchUrls).toEqual([externalUrl]);
   expect(mocks.updatePosts).not.toHaveBeenCalled();
 });

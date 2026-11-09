@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports -- This .cjs audit entrypoint runs directly in Node CommonJS. */
 require('dotenv/config');
 const { PrismaClient } = require('@prisma/client');
 const db = new PrismaClient();

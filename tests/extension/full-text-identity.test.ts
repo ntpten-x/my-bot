@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- VM fixtures model untyped Chrome storage and extension worker globals. */
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { expect, it } from "vitest";

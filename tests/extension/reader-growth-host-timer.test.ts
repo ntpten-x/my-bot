@@ -9,12 +9,12 @@ function harness(count=0,keys:string[]=[]) {
  const doc={scrollingElement:root,documentElement:root,body:{},querySelectorAll:(selector:string)=>selector.includes('role="article"')||selector.includes('aria-posinset')?Array.from({length:count},()=>({})):keys.map(href=>({href}))};
  const page=vm.createContext({document:doc,window:{innerHeight:900},Set,globalThis:undefined,MutationObserver:class{observe(){}disconnect(){}},setTimeout:frozenTimer,clearTimeout:()=>{}});
  vm.runInContext('globalThis=this;globalThis.MyBotScrape={feedRoot:()=>document,scrollRoot:()=>document.scrollingElement,postKey:url=>url}',page);
- const chrome={scripting:{executeScript:async({func,args}:any)=>{const f=vm.runInContext(`(${func.toString()})`,page);return [{result:await f(...args)}];}}};
+ const chrome={scripting:{executeScript:async({func,args}:{func:(...args:unknown[])=>unknown;args:unknown[]})=>{const f=vm.runInContext(`(${func.toString()})`,page);return [{result:await f(...args)}];}}};
  const host=vm.createContext({chrome,Promise,Date,Set,setTimeout,clearTimeout,sleep:(ms:number)=>new Promise(r=>setTimeout(r,ms))});
  vm.runInContext(source.slice(source.indexOf('async function executeReaderScript('),source.indexOf('async function readPage(')),host);
  vm.runInContext(source.slice(source.indexOf('async function waitForGrowth('),source.indexOf('/** Activate only')),host);
  vm.runInContext(source.slice(source.indexOf('async function nudgeScroll('),source.indexOf('const READER_FILES')),host);
- return {root,frozenTimer,nudge:(deadline?:number)=>host.nudgeScroll(1,'group',deadline),wait:(before:number,timeout:number,known:string[]=[])=> (host.waitForGrowth as any)(1,'group',before,timeout,known)};
+ return {root,frozenTimer,nudge:(deadline?:number)=>host.nudgeScroll(1,'group',deadline),wait:(before:number,timeout:number,known:string[]=[])=> host.waitForGrowth(1,'group',before,timeout,known)};
 }
 it('finishes a bounded no-growth wait even when page-owned timers never run',async()=>{
  vi.useFakeTimers();const h=harness();

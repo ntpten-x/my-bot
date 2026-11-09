@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { headers } from "next/headers";
 import { Button, Card } from "@/components/ui";
-import { DESKTOP_VERSION } from "@/lib/desktop-package";
+import { DESKTOP_VERSION } from "@/lib/desktop-version";
 import { selfOriginOf } from "@/lib/request-security";
 
 export const dynamic = "force-dynamic";

@@ -3,8 +3,9 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { extensionFiles, EXTENSION_VERSION } from "./extension-package";
 import { createZip, type ZipEntry } from "./zip";
+import { DESKTOP_VERSION } from "./desktop-version";
 
-export const DESKTOP_VERSION = "0.1.2-preview";
+export { DESKTOP_VERSION } from "./desktop-version";
 const RUNTIME_FILES = [
   "scripts/start-workstation.mjs", "scripts/start-workstation.sh",
   "scripts/start-bot-desktop.mjs", "scripts/start-bot-desktop.sh", "scripts/store-vnc-password.py",

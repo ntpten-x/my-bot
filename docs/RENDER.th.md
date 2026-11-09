@@ -2,6 +2,10 @@
 
 เว็บ: https://my-bot-e6bt.onrender.com · Render ดีพลอยใหม่เองทุกครั้งที่ push `master`
 
+การ push สำเร็จยืนยันเฉพาะ GitHub ไม่ได้ยืนยันว่า production ใช้ commit ใหม่แล้ว ตรวจ Events/Deploys ใน Render ว่า commit เป้าหมายเป็น Live หากตั้ง Auto-Deploy เป็น After CI Checks Pass ต้องรอ GitHub checks ผ่านทุกขั้น หากเป็น Off ต้องใช้ Manual Deploy → Deploy latest commit ไม่เปลี่ยน secrets หรือรัน migration ซ้ำเพื่อแก้ปัญหาเวอร์ชันเก่า
+
+หลังรุ่นที่เพิ่มข้อมูล build deploy แล้ว ตรวจ `GET /api/v1/health` จาก production: body ยังมีเพียง `ok` กับ `version` และ header `X-MYBOT-Desktop-Version`, `X-MYBOT-Extension-Version`, `X-MYBOT-Commit` (เมื่อ Render มี RENDER_GIT_COMMIT ที่ถูกต้อง) ใช้ยืนยันรุ่นที่รันจริงได้ response เป็น no-store ไม่เผย credentials หาก header ยังไม่มี ให้ตรวจ deploy แทนการสรุปว่า push ไม่สำเร็จ
+
 ก่อนนำ Branch ความปลอดภัยขึ้นจริง ให้อ่าน [Production Readiness และแผน Apply/Rollback](PRODUCTION-READINESS.th.md) ต้องปิด FAIL/BLOCKED ที่เกี่ยวข้องและได้รับอนุญาตก่อน Push/Deploy
 
 ## ตัวแปรที่ต้องตั้งใน Render → Environment
