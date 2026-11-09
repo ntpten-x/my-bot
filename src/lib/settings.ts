@@ -87,10 +87,12 @@ export async function readSettingMap() {
 export async function getSettings(): Promise<AppSettings> {
   const map = await readSettingMap();
   const env = process.env;
-  const provider = pick(map.ai_provider, undefined, "auto");
+  // Default is rules-only: feed capture and lead labels work without Ollama/Gemini/Groq.
+  // Owner can still switch back to auto/ollama/... in Settings later.
+  const provider = pick(map.ai_provider, undefined, "rules");
   const allowed: AiProviderName[] = ["auto", "ollama", "gemini", "groq", "rules"];
   return {
-    aiProvider: (allowed.includes(provider as AiProviderName) ? provider : "auto") as AiProviderName,
+    aiProvider: (allowed.includes(provider as AiProviderName) ? provider : "rules") as AiProviderName,
     ollamaBaseUrl: pick(map.ollama_base_url, env.OLLAMA_BASE_URL, "http://127.0.0.1:11434").replace(/\/$/, ""),
     ollamaModel: pick(map.ollama_model, env.OLLAMA_MODEL, "qwen2.5:7b"),
     geminiModel: pick(map.gemini_model, undefined, "gemini-2.0-flash"),

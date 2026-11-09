@@ -218,7 +218,13 @@ export async function ingestPosts(
         },
       });
       if (!result.count) return false;
-      const reset = { status: old.aiProvider === "owner" ? "skipped" : "pending", claimToken: null, attempts: 0, nextAttemptAt: new Date(), lastError: "", latencyMs: null, queueWaitMs: null, createdAt: new Date() };
+      const rulesOnly = settings.aiProvider === "rules";
+      const reset = {
+        status: old.aiProvider === "owner" || rulesOnly ? "skipped" : "pending",
+        claimToken: null, attempts: 0, nextAttemptAt: new Date(),
+        lastError: old.aiProvider === "owner" ? "" : rulesOnly ? "ใช้กฎ ไม่เรียก AI" : "",
+        latencyMs: null, queueWaitMs: null, createdAt: new Date(),
+      };
       await tx.aiJob.upsert({ where: { postId: old.id }, update: reset, create: { postId: old.id, ...reset } });
       return true;
     });
@@ -280,10 +286,18 @@ export async function ingestPosts(
         suggestedReply: item.lead.suggestedReply, aiProvider: "rules",
       };
     });
+    const rulesOnly = settings.aiProvider === "rules";
     const inserted = await prisma.$transaction(async tx => {
       await tx.post.createMany({ data, skipDuplicates: true });
       const owned = await tx.post.findMany({ where: { id: { in: data.map(row => row.id) } }, select: { id: true } });
-      if (owned.length) await tx.aiJob.createMany({ data: owned.map(post => ({ postId: post.id })) });
+      if (owned.length) {
+        await tx.aiJob.createMany({
+          data: owned.map(post => ({
+            postId: post.id,
+            ...(rulesOnly ? { status: "skipped", lastError: "ใช้กฎ ไม่เรียก AI" } : {}),
+          })),
+        });
+      }
       return owned;
     });
     createdIds.push(...inserted.map(post => post.id));

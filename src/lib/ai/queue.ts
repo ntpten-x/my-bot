@@ -39,20 +39,26 @@ let running = false;
 
 // Startup preserves backoff and paused jobs. Only an explicit retry resets them.
 export async function enqueueAiJobs(postIds: string[], reset = false) {
+  const settings = await getSettings();
+  const rulesOnly = settings.aiProvider === "rules";
+  const status = rulesOnly ? "skipped" : "pending";
+  const lastError = rulesOnly ? "ใช้กฎ ไม่เรียก AI" : "";
   for (const postId of postIds) {
-    if (reset) await prisma.aiJob.updateMany({
+    if (reset && !rulesOnly) await prisma.aiJob.updateMany({
       where: { postId, status: { not: "running" } },
       data: { status: "pending", attempts: 0, nextAttemptAt: new Date(), lastError: "", latencyMs: null, queueWaitMs: null, createdAt: new Date() },
     });
     await prisma.aiJob.upsert({
       where: { postId },
-      update: {},
-      create: { postId, status: "pending" },
+      update: rulesOnly ? { status: "skipped", claimToken: null, lastError } : {},
+      create: { postId, status, lastError },
     });
   }
 }
 
 export async function enqueueUnclassifiedPosts(reset = false) {
+  const settings = await getSettings();
+  if (settings.aiProvider === "rules") return 0;
   let cursor: string | undefined;
   let count = 0;
   for (;;) {
@@ -116,9 +122,14 @@ export async function processAiQueue(assertActive: () => Promise<void> = async (
       where: { status: { in: ["pending", "skipped"] }, post: { aiProvider: "owner" } },
       data: { status: "skipped", claimToken: null, lastError: "เจ้าของจัดหมวดเอง ไม่เรียก AI ทับ" },
     });
-    if (settings.aiProvider !== "rules") {
-      await prisma.aiJob.updateMany({ where: { status: "skipped", post: { duplicateOfId: null, OR: [{ aiProvider: null }, { aiProvider: { not: "owner" } }] } }, data: { status: "pending", nextAttemptAt: new Date() } });
+    if (settings.aiProvider === "rules") {
+      const cleared = await prisma.aiJob.updateMany({
+        where: { status: { in: ["pending", "running"] }, post: { aiProvider: { not: "owner" } } },
+        data: { status: "skipped", claimToken: null, lastError: "ใช้กฎ ไม่เรียก AI" },
+      });
+      return cleared.count;
     }
+    await prisma.aiJob.updateMany({ where: { status: "skipped", post: { duplicateOfId: null, OR: [{ aiProvider: null }, { aiProvider: { not: "owner" } }] } }, data: { status: "pending", nextAttemptAt: new Date() } });
     await prisma.aiJob.updateMany({ where: { status: "pending", post: { duplicateOfId: { not: null } } }, data: { status: "skipped", claimToken: null, lastError: "โพสต์ซ้ำ ใช้ผลจากต้นฉบับ" } });
     // Atomic claim: two instances (local + Render) never take the same job.
     const claimedIds = await claimAiJobs(claimToken);
@@ -136,11 +147,6 @@ export async function processAiQueue(assertActive: () => Promise<void> = async (
       void assertActive().then(() => prisma.aiJob.updateMany({ where: { id: { in: claimed.map(job => job.id) }, status: "running", claimToken }, data: { updatedAt: new Date() } })).catch(() => undefined);
     }, 30_000);
     heartbeat.unref();
-    if (settings.aiProvider === "rules") {
-      await prisma.aiJob.updateMany({ where: { id: { in: jobs.map(job => job.id) }, claimToken }, data: { status: "skipped", claimToken: null, lastError: "เจ้าของเลือกใช้กฎ ไม่เรียก AI" } });
-      claimed = [];
-      return jobs.length;
-    }
     const [{ rows, catalog }, hints] = await Promise.all([
       loadCatalogFromDb(),
       loadGroupHints(jobs.map(job => job.post.sourceId)).catch(() => new Map()),

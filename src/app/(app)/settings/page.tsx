@@ -167,11 +167,11 @@ export default function SettingsPage() {
           <div>
             <Label>โหมด</Label>
             <Select value={settings.aiProvider} onChange={(event) => setSettings({ ...settings, aiProvider: event.target.value as Settings["aiProvider"] })}>
+              <option value="rules">ใช้คำจับคู่เท่านั้น (ค่าเริ่มต้น — บอททำงานเอง ไม่รอ AI)</option>
               <option value="auto">อัตโนมัติ: Ollama แล้ว Gemini แล้ว Groq แล้วคำจับคู่</option>
               <option value="ollama">Ollama อย่างเดียว แล้วถอยไปคำจับคู่</option>
               <option value="gemini">Gemini อย่างเดียว แล้วถอยไปคำจับคู่</option>
               <option value="groq">Groq อย่างเดียว แล้วถอยไปคำจับคู่</option>
-              <option value="rules">ใช้คำจับคู่เท่านั้น</option>
             </Select>
           </div>
           <div className="grid gap-3 md:grid-cols-2">

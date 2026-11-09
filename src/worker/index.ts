@@ -90,7 +90,10 @@ async function consume() {
       const processed = await processAiQueue(assertActive);
       if (Date.now() - consumerProgressAt > 30_000) { await upsertSettings({ worker_consumer_progress: new Date().toISOString() }); consumerProgressAt = Date.now(); }
       await assertActive();
-      const embedded = await backfillEmbeddings(5);
+      const settings = await getSettings();
+      const embedded = settings.aiProvider === "rules"
+        ? { tried: false, filled: 0 }
+        : await backfillEmbeddings(5);
       await assertActive();
       const notified = await processNotificationQueue(10, assertActive);
       if (!processed && !embedded.tried && !notified) break;
@@ -168,8 +171,15 @@ console.log("[worker] MY-BOT worker เริ่มทำงาน — ตรว
 void (async () => {
   lease.start();
   await upsertSettings({ worker_started_at: new Date().toISOString() }).catch(() => undefined);
+  // One-shot: feed/classify runs on keyword rules by default so the bot does not wait on cloud/local LLM.
+  // Owner can still switch back to auto/ollama/gemini/groq in Settings afterward.
+  const prior = await prisma.setting.findUnique({ where: { key: "bot_rules_only_v1" } }).catch(() => null);
+  if (!prior) {
+    await upsertSettings({ ai_provider: "rules", bot_rules_only_v1: "1" }).catch(() => undefined);
+    await workerLog({ level: "info", message: "ปิด AI จัดหมวด — ใช้คำจับคู่เป็นค่าเริ่มต้น (ตั้งค่าใหม่ได้ที่หน้าตั้งค่า)" }).catch(() => undefined);
+  }
   const settings = await getSettings().catch(() => null);
-  if (settings) await warmOllamaModels(settings).catch(() => undefined);
+  if (settings && settings.aiProvider !== "rules") await warmOllamaModels(settings).catch(() => undefined);
   const task = cron.schedule("* * * * *", () => { void tick(); }, { timezone: "Asia/Bangkok" });
   const timer = setInterval(() => { void consume(); }, 2000);
   const commentTimer = setInterval(() => {
