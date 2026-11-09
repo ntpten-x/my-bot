@@ -54,22 +54,17 @@ execFileSync('runuser',['-u','mybot','--',process.execPath,'--input-type=module'
   if(fs.existsSync(state)&&JSON.parse(fs.readFileSync(state,'utf8')).serverOrigin!==origin)throw Error('Use the original server; pairing was not changed.');
   fs.writeFileSync(state,JSON.stringify({mode:'remote',serverOrigin:origin,vncPort:Number(process.argv[2]),viewerPort:Number(process.argv[3])}),{mode:0o600});
 `,url.origin,String(ports.vncPort),String(ports.viewerPort)],{stdio:'inherit'});
-const release='/opt/mybot-desktop/releases/'+metadata.releaseId;
-const previous=fs.existsSync('/opt/mybot-desktop/current')?fs.readlinkSync('/opt/mybot-desktop/current'):'';
-if(!fs.existsSync(release))fs.cpSync(path.join(bundle,'runtime'),release,{recursive:true});
+const previous=fs.existsSync('/opt/mybot-desktop/current')?path.resolve(fs.readlinkSync('/opt/mybot-desktop/current')):'';
+const {installDesktopRelease,switchDesktopCurrent,pruneDesktopReleases}=await import(pathToFileURL(path.join(bundle,'runtime/scripts/lib/desktop-release.mjs')));
+// Stage then rename so a crashed copy never leaves a half-written release that later installs skip.
+const {release}=installDesktopRelease({bundleRuntime:path.join(bundle,'runtime'),releasesDir:'/opt/mybot-desktop/releases',releaseId:metadata.releaseId});
+switchDesktopCurrent('/opt/mybot-desktop/current',release);
 // Stable public extension key keeps the identity across immutable release directories.
 const {workstationUnit}=await import(pathToFileURL(path.join(release,'scripts/lib/workstation-service.mjs')));
 const unitDir='/etc/systemd/user';fs.mkdirSync(unitDir,{recursive:true});
 fs.writeFileSync(path.join(unitDir,'mybot-workstation.service'),workstationUnit('/opt/mybot-desktop/current','/usr/bin/node',{dataRoot:'/var/lib/mybot-desktop'}));
-const temporary='/opt/mybot-desktop/current.next';
-try{fs.unlinkSync(temporary)}catch(error){if(error.code!=='ENOENT')throw error;}
-fs.symlinkSync(release,temporary);fs.renameSync(temporary,'/opt/mybot-desktop/current');
-// Keep current + one previous release for manual rollback; prune older immutable trees.
-const keep=new Set([release, previous].filter(Boolean).map(target=>path.resolve(target)));
-for(const entry of fs.readdirSync('/opt/mybot-desktop/releases')){
-  const target=path.resolve('/opt/mybot-desktop/releases',entry);
-  if(!keep.has(target))fs.rmSync(target,{recursive:true,force:true});
-}
+// Keep current + one previous completed release for manual rollback; prune incomplete/older trees.
+pruneDesktopReleases('/opt/mybot-desktop/releases',[release, previous]);
 JS
 chmod -R go-w /opt/mybot-desktop/releases
 cat > /etc/wsl.conf <<'CONF'

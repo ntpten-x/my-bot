@@ -22,6 +22,7 @@ Check-Package
 if ($CheckOnly) { Write-Host 'PASS: package hashes, HTTPS server and pinned image metadata. No installation performed.'; exit 0 }
 . (Join-Path $PackageDir 'ports.ps1')
 . (Join-Path $PackageDir 'image.ps1')
+. (Join-Path $PackageDir 'ownership.ps1')
 if ($CheckPorts) { Select-DesktopPorts | ConvertTo-Json -Compress; exit 0 }
 Add-Type -AssemblyName System.Windows.Forms
 function Confirm-Install([string]$Message) {
@@ -59,14 +60,22 @@ try {
     if ($Exists -and (-not $State -or $State.distribution -ne $Distro -or $State.product -ne 'MY-BOT Desktop')) { throw $Texts.existingUnknown }
     if ($State -and $State.serverOrigin -ne $Metadata.serverOrigin) { throw 'This install belongs to another server. Existing pairing was not changed.' }
     if ($Exists) {
-        & wsl.exe -d $Distro -u root -- test -f /etc/mybot-desktop-owner 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            & wsl.exe -d $Distro -u mybot -- bash -lc 'export XDG_RUNTIME_DIR=/run/user/$(id -u); systemctl --user is-active --quiet mybot-workstation.service' 2>$null
-            if ($LASTEXITCODE -eq 0) { throw $Texts.updateBlocked }
-        }
+        # Never adopt a same-named distro without an exact ownership marker.
+        Assert-DesktopOwnedDistro -Distribution $Distro -Message $Texts.existingUnknown
+        & wsl.exe -d $Distro -u mybot -- bash -lc 'export XDG_RUNTIME_DIR=/run/user/$(id -u); systemctl --user is-active --quiet mybot-workstation.service' 2>$null
+        if ($LASTEXITCODE -eq 0) { throw $Texts.updateBlocked }
     }
     $Ports = Select-DesktopPorts -Existing $State
-    $NewState = @{ product = 'MY-BOT Desktop'; distribution = $Distro; serverOrigin = $Metadata.serverOrigin; releaseId = $Metadata.releaseId; desktopVersion = [string]$Metadata.version; vncPort = $Ports.vncPort; viewerPort = $Ports.viewerPort }
+    $NewState = @{
+        product = 'MY-BOT Desktop'
+        distribution = $Distro
+        serverOrigin = $Metadata.serverOrigin
+        releaseId = $Metadata.releaseId
+        desktopVersion = [string]$Metadata.version
+        extensionVersion = [string]$Metadata.extensionVersion
+        vncPort = $Ports.vncPort
+        viewerPort = $Ports.viewerPort
+    }
     New-Item -ItemType Directory -Force -Path $AppRoot | Out-Null
     $UserSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     & icacls.exe $AppRoot /inheritance:r /grant:r "*${UserSid}:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' | Out-Null
@@ -90,6 +99,7 @@ try {
     Run-Wsl -WslArguments @('--terminate', $Distro)
     Copy-Item -LiteralPath (Join-Path $PackageDir 'Control.ps1') -Destination (Join-Path $AppRoot 'Control.ps1') -Force
     Copy-Item -LiteralPath (Join-Path $PackageDir 'ports.ps1') -Destination (Join-Path $AppRoot 'ports.ps1') -Force
+    Copy-Item -LiteralPath (Join-Path $PackageDir 'ownership.ps1') -Destination (Join-Path $AppRoot 'ownership.ps1') -Force
     Copy-Item -LiteralPath (Join-Path $PackageDir 'strings.th.json') -Destination (Join-Path $AppRoot 'strings.th.json') -Force
     [IO.File]::WriteAllText($StatePath, ($NewState | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
     Write-Host $Texts.password
@@ -98,7 +108,7 @@ try {
     $Shell = New-Object -ComObject WScript.Shell
     $Links = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\MY-BOT Desktop'
     New-Item -ItemType Directory -Force -Path $Links | Out-Null
-    foreach ($Item in @(@($Texts.viewer, 'Open'), @($Texts.start, 'Start'), @($Texts.stop, 'Stop'), @($Texts.status, 'Status'), @($Texts.resume, 'Resume'), @($Texts.uninstall, 'Uninstall'), @($Texts.purge, 'Purge'))) {
+    foreach ($Item in @(@($Texts.viewer, 'Open'), @($Texts.start, 'Start'), @($Texts.stop, 'Stop'), @($Texts.status, 'Status'), @($Texts.resume, 'Resume'), @($Texts.rollback, 'Rollback'), @($Texts.uninstall, 'Uninstall'), @($Texts.purge, 'Purge'))) {
         $Link = $Shell.CreateShortcut((Join-Path $Links ($Item[0] + '.lnk')))
         $Link.TargetPath = (Join-Path $PSHOME 'powershell.exe')
         $Link.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $AppRoot 'Control.ps1') + '" -Action ' + $Item[1]

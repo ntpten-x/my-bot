@@ -1,6 +1,6 @@
 # MY-BOT Desktop — ส่วนเสริมจอแยกสำหรับ production
 
-รุ่นปัจจุบัน **0.1.4-preview / extension 1.11.24** รองรับ Windows 11 x64 เป็นทางเลือก ไม่บังคับผู้ใช้ทั่วไปติดตั้ง แพ็กเกจยังเป็น ZIP พร้อมตัวติดตั้ง PowerShell ไม่ใช่ EXE ที่ลงลายเซ็นแล้ว ต้องตรวจรับบน Windows เครื่องใหม่ก่อนแจกเป็นรุ่นทั่วไป
+รุ่นปัจจุบัน **0.1.5-preview / extension 1.11.24** รองรับ Windows 11 x64 เป็นทางเลือก ไม่บังคับผู้ใช้ทั่วไปติดตั้ง แพ็กเกจยังเป็น ZIP พร้อมตัวติดตั้ง PowerShell ไม่ใช่ EXE ที่ลงลายเซ็นแล้ว ต้องตรวจรับบน Windows เครื่องใหม่ก่อนแจกเป็นรุ่นทั่วไป
 
 ## ทำไมจึงคุ้มสำหรับรุ่นแรก
 
@@ -22,7 +22,11 @@
 ## โครงสร้างและการรักษาข้อมูล
 
 - `src/lib/desktop-package.ts` สร้าง ZIP จาก allowlist ไฟล์ runtime และ extension เท่านั้น มี checksum รายไฟล์และ release ID ที่ผูกกับ origin ไม่รวม `.env`, `data/`, backups, Prisma, Node dependencies หรือ worker
-- `desktop/Install.ps1` ตรวจ checksum ก่อนรันไฟล์ ตั้ง ownership record ของ distro เพื่อ resume การติดตั้งที่สะดุด และปฏิเสธ distro ชื่อชนกันที่ยืนยันเจ้าของไม่ได้ ตรวจพอร์ต viewer ไม่ให้แย่งจอเดิมและใช้ mutex กัน installer ซ้อน
+- `desktop/Install.ps1` ตรวจ checksum ก่อนรันไฟล์ ตั้ง ownership record ของ distro เพื่อ resume การติดตั้งที่สะดุด และปฏิเสธ distro ชื่อชนกันที่ยืนยันเจ้าของไม่ได้ (ต้องมี `/etc/mybot-desktop-owner=MYBOT-Desktop-V1` ครบ) ตรวจพอร์ต viewer ไม่ให้แย่งจอเดิมและใช้ mutex กัน installer ซ้อน
+- `desktop/ownership.ps1` ใช้ร่วมกับ Control: Start/Status/Uninstall/Rollback/Purge ยืนยัน marker ก่อนสั่งงาน Purge จะไม่ `wsl --unregister` ถ้า marker ไม่ตรง
+- `scripts/lib/desktop-release.mjs` + `provision.sh` คัดลอก runtime ไป staging แล้ว rename เป็น release พร้อม marker `.mybot-release-complete` กันโฟลเดอร์ค้างครึ่งทาง
+- ทางลัด **ย้อนรุ่นก่อนหน้า** เรียก `desktop/rollback.sh` หลังหยุด service สลับ `current` ไปยัง release ที่สมบูรณ์รุ่นก่อน เก็บโปรไฟล์/pairing
+- Status เทียบทั้ง `X-MYBOT-Desktop-Version` และ `X-MYBOT-Extension-Version` กับค่าที่บันทึกตอนติดตั้ง
 - ตั้งแต่ 0.1.1 เลือกพอร์ตว่างอัตโนมัติ เริ่มจากคู่ 5915/6095 สูงสุด 20 คู่ และจำไว้ใน install-state.json กับ workstation-config.json ใช้ค่านี้ทั้ง VNC, noVNC, health, ทางลัด และ X display จึงอยู่ร่วมกับจอเดิม 5905/6085 ได้ ไม่ฆ่าโปรเซสที่ใช้พอร์ตอื่น `Install.ps1 -CheckPorts` ตรวจชุดไฟล์และเลือกพอร์ตโดยไม่ติดตั้ง
 - ตั้งแต่ 0.1.2 ตรวจ magic gzip, ขนาด และ SHA-256 ก่อนแทน cache ใช้ไฟล์ `.download` แยกแล้ว replace หลังยืนยันครบ หากได้ HTML verification page จะหยุดและบอกสาเหตุตรง ไม่ retry challenge วนหรือ import HTML มี provenance ของ OCI manifest ในแพ็กเกจ
 - `desktop/provision.sh` ทำงาน root เฉพาะ distro ที่กำหนด ติดตั้งโปรแกรมใน immutable release ที่ root เป็นเจ้าของ ใช้ผู้ใช้ `mybot` สำหรับ Chromium ไม่ปิด sandbox เขียนค่าที่ผู้ใช้แก้ได้ด้วยสิทธิ์ผู้ใช้นั้นแทน root
@@ -53,7 +57,12 @@ service ถือ shared update lock ตลอดอายุโปรเซส 
 
 อ้างอิง: [WSL install](https://learn.microsoft.com/windows/wsl/install), [WSL systemd lifecycle](https://learn.microsoft.com/windows/wsl/systemd), [WSL image metadata](https://github.com/microsoft/WSL/blob/master/distributions/DistributionInfo.json), [Debian Node.js package](https://sources.debian.org/src/nodejs/)
 
-## ผลตรวจรอบพัฒนา 9 พฤศจิกายน 2026
+## ผลตรวจรอบพัฒนา 9 พฤศจิกายน 2026 (อัปเดต 0.1.5-preview)
+
+- ชุดทดสอบ Desktop/ownership/atomic release ผ่าน รวมเทสทั้ง repo; ยังคงสถานะ preview จนกว่าจะผ่าน pristine-Windows + Facebook อ่านอย่างเดียว
+- 0.1.5: ownership ก่อนอัปเดต/Purge, atomic staging, Status เทียบ extension, Rollback มือ, `DESKTOP_PUBLIC_ORIGIN` ทางเลือก
+
+## ผลตรวจรอบพัฒนา 9 พฤศจิกายน 2026 (0.1.4)
 
 - ชุดทดสอบ 881/881 ข้อ รวม 102 ไฟล์ ผ่านทั้งหมดโดยกำหนด TEST_DATABASE_URL ไป PostgreSQL ชั่วคราวบน loopback พอร์ต 55439 ไม่ใช้ Supabase จริง
 - Production build ผ่าน มีหน้า `/settings/desktop` และ API ดาวน์โหลดที่ต้องล็อกอิน จำกัด HTTPS production

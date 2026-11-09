@@ -10,10 +10,10 @@ const RUNTIME_FILES = [
   "scripts/start-workstation.mjs", "scripts/start-workstation.sh",
   "scripts/start-bot-desktop.mjs", "scripts/start-bot-desktop.sh", "scripts/store-vnc-password.py",
   "scripts/lib/workstation.mjs", "scripts/lib/workstation-service.mjs", "scripts/lib/bot-desktop.mjs",
-  "scripts/lib/bot-browser.mjs", "scripts/lib/browser-profile.mjs",
+  "scripts/lib/bot-browser.mjs", "scripts/lib/browser-profile.mjs", "scripts/lib/desktop-release.mjs",
   "scripts/windows/set-bot-viewer-password.ps1",
 ];
-const INSTALL_FILES = ["Install.cmd", "Install.ps1", "Control.ps1", "ports.ps1", "image.ps1", "provision.sh", "control.sh", "rootfs.json", "rootfs-provenance.json", "strings.th.json", "README.th.md"];
+const INSTALL_FILES = ["Install.cmd", "Install.ps1", "Control.ps1", "ports.ps1", "image.ps1", "ownership.ps1", "provision.sh", "control.sh", "rollback.sh", "rootfs.json", "rootfs-provenance.json", "strings.th.json", "README.th.md"];
 const digest = (data: Buffer) => createHash("sha256").update(data).digest("hex");
 
 export function desktopFiles(serverOrigin: string, root = process.cwd()): ZipEntry[] {
@@ -29,7 +29,7 @@ export function desktopFiles(serverOrigin: string, root = process.cwd()): ZipEnt
   for (const script of manifest.content_scripts) if (script.js.includes("bridge.js")) script.matches = [`${url.origin}/*`];
   manifest.key = readFileSync(path.join(root, "desktop/extension-key.txt"), "utf8").trim();
   manifestEntry.data = Buffer.from(JSON.stringify(manifest, null, 2));
-  for (const file of ["control.sh", "keepalive.sh", "strings.th.json"]) entries.push({ name: `runtime/desktop/${file}`, data: readFileSync(path.join(root, "desktop", file)) });
+  for (const file of ["control.sh", "keepalive.sh", "rollback.sh", "strings.th.json"]) entries.push({ name: `runtime/desktop/${file}`, data: readFileSync(path.join(root, "desktop", file)) });
   entries.push({ name: "runtime/extension/desktop-config.json", data: Buffer.from(JSON.stringify({ dedicatedReaderDesktop: true })) });
   const files = entries.map(entry => ({ path: entry.name, sha256: digest(entry.data) }));
   const releaseId = digest(Buffer.from(JSON.stringify({ serverOrigin: url.origin, files }))).slice(0, 24);
