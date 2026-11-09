@@ -9,7 +9,9 @@ function Check-Package {
     if ($Metadata.format -ne 1 -or $Metadata.name -ne 'MY-BOT Desktop' -or $Metadata.releaseId -notmatch '^[a-f0-9]{24}$') { throw 'Invalid desktop package.' }
     $Origin = [Uri]$Metadata.serverOrigin
     if ($Origin.Scheme -ne 'https' -or $Origin.UserInfo -or $Origin.AbsolutePath -ne '/' -or $Origin.Query -or $Origin.Fragment -or $Origin.IsLoopback) { throw 'Use a production HTTPS origin.' }
-    if ($Image.distribution -ne $Distro -or $Image.architecture -ne 'amd64' -or $Image.sha256 -notmatch '^[a-f0-9]{64}$' -or -not $Image.url.StartsWith('https://salsa.debian.org/debian/WSL/')) { throw 'Invalid pinned operating system image.' }
+    if ($Image.distribution -ne $Distro -or $Image.architecture -ne 'amd64' -or $Image.sha256 -notmatch '^[a-f0-9]{64}$' -or $Image.commit -notmatch '^[a-f0-9]{40}$' -or $Image.format -ne 'gzip' -or $Image.sizeBytes -lt 1MB -or $Image.sizeBytes -gt 1GB) { throw 'Invalid pinned operating system image.' }
+    $ExpectedUrl = 'https://raw.githubusercontent.com/debuerreotype/docker-debian-artifacts/' + $Image.commit + '/trixie/oci/blobs/rootfs.tar.gz'
+    if ($Image.url -cne $ExpectedUrl) { throw 'Invalid immutable operating system source.' }
     foreach ($File in $Metadata.files) {
         if ($File.path -notmatch '^[a-zA-Z0-9_./-]+$' -or $File.path -match '(^|/)\.\.(/|$)' -or $File.path.StartsWith('/') -or $File.sha256 -notmatch '^[a-f0-9]{64}$') { throw 'Invalid package path or hash.' }
         $Target = Join-Path $PackageDir $File.path
@@ -19,6 +21,7 @@ function Check-Package {
 Check-Package
 if ($CheckOnly) { Write-Host 'PASS: package hashes, HTTPS server and pinned image metadata. No installation performed.'; exit 0 }
 . (Join-Path $PackageDir 'ports.ps1')
+. (Join-Path $PackageDir 'image.ps1')
 if ($CheckPorts) { Select-DesktopPorts | ConvertTo-Json -Compress; exit 0 }
 Add-Type -AssemblyName System.Windows.Forms
 function Confirm-Install([string]$Message) {
@@ -72,21 +75,7 @@ try {
         Write-Host $Texts.downloading
         $ImagePath = Join-Path $AppRoot 'debian.wsl'
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        $Verified = $false
-        for ($Attempt = 1; $Attempt -le 3; $Attempt++) {
-            try {
-                if (-not (Test-Path -LiteralPath $ImagePath) -or (Get-FileHash -LiteralPath $ImagePath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $Image.sha256) {
-                    Invoke-WebRequest -UseBasicParsing -TimeoutSec 600 -MaximumRedirection 3 -Uri $Image.url -OutFile $ImagePath
-                }
-                if ((Get-FileHash -LiteralPath $ImagePath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $Image.sha256) { throw 'Operating system image checksum mismatch.' }
-                $Verified = $true
-                break
-            } catch {
-                if ($Attempt -eq 3) { throw }
-                Start-Sleep -Seconds 2
-            }
-        }
-        if (-not $Verified) { throw 'Operating system image could not be verified.' }
+        Save-DesktopImage -Path $ImagePath -Image $Image
         Run-Wsl -WslArguments @('--import', $Distro, (Join-Path $AppRoot 'linux'), $ImagePath, '--version', '2')
         # Record ownership immediately so an interrupted setup can resume without adopting another distro.
         $NewState | ConvertTo-Json | Set-Content -LiteralPath $StatePath -Encoding UTF8

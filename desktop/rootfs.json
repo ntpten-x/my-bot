@@ -1,7 +1,11 @@
 {
   "architecture": "amd64",
   "distribution": "MYBOT-Desktop-V1",
-  "url": "https://salsa.debian.org/debian/WSL/-/jobs/9606244/artifacts/raw/Debian_WSL_AMD64_v1.26.0.0.wsl",
-  "sha256": "5ec7dc68216e75d1d4d4761474e99d8461a98d316537110314b137122a879e0f",
-  "source": "https://github.com/microsoft/WSL/blob/master/distributions/DistributionInfo.json"
+  "url": "https://raw.githubusercontent.com/debuerreotype/docker-debian-artifacts/373f61a386722a989c79f0c11f23fcf379b56e94/trixie/oci/blobs/rootfs.tar.gz",
+  "sha256": "a6dd1c05fbba4f9028078a11f143cbb625d2408921eb8207bfa1dd1ad301276f",
+  "sizeBytes": 49412508,
+  "format": "gzip",
+  "commit": "373f61a386722a989c79f0c11f23fcf379b56e94",
+  "ociManifestSha256": "bfc36aecdece0387418759dba474aa856c026ca8087da3606b41b90ab0509c99",
+  "source": "https://github.com/debuerreotype/docker-debian-artifacts/blob/373f61a386722a989c79f0c11f23fcf379b56e94/trixie/oci/index.json"
 }

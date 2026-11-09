@@ -1,8 +1,22 @@
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { desktopFiles } from '../../src/lib/desktop-package';
 
 describe('optional desktop installer package', () => {
+  it('pins a single Debian rootfs layer to the published immutable OCI manifest digest and length', () => {
+    const image = JSON.parse(readFileSync('desktop/rootfs.json', 'utf8'));
+    const index = JSON.parse(readFileSync('desktop/rootfs-provenance.json', 'utf8'));
+    const descriptor = index.manifests.find((row: { platform: { architecture: string } }) => row.platform.architecture === 'amd64');
+    const bytes = Buffer.from(descriptor.data, 'base64');
+    expect(`sha256:${createHash('sha256').update(bytes).digest('hex')}`).toBe(descriptor.digest);
+    expect(image.ociManifestSha256).toBe(descriptor.digest.slice(7));
+    const manifest = JSON.parse(bytes.toString());
+    expect(manifest.layers).toHaveLength(1);
+    expect(manifest.layers[0]).toMatchObject({ digest: `sha256:${image.sha256}`, size: image.sizeBytes, mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip' });
+    expect(image.url).toBe(`https://raw.githubusercontent.com/debuerreotype/docker-debian-artifacts/${image.commit}/trixie/oci/blobs/rootfs.tar.gz`);
+    expect(image.commit).toMatch(/^[a-f0-9]{40}$/);
+  });
   it('contains a self-contained collector runtime and public configuration, with verified per-file hashes', () => {
     const entries = desktopFiles('https://owner.example');
     const metadata = JSON.parse(entries.find(entry => entry.name === 'package.json')!.data.toString());

@@ -4,7 +4,7 @@ import path from "node:path";
 import { extensionFiles, EXTENSION_VERSION } from "./extension-package";
 import { createZip, type ZipEntry } from "./zip";
 
-export const DESKTOP_VERSION = "0.1.1-preview";
+export const DESKTOP_VERSION = "0.1.2-preview";
 const RUNTIME_FILES = [
   "scripts/start-workstation.mjs", "scripts/start-workstation.sh",
   "scripts/start-bot-desktop.mjs", "scripts/start-bot-desktop.sh", "scripts/store-vnc-password.py",
@@ -12,7 +12,7 @@ const RUNTIME_FILES = [
   "scripts/lib/bot-browser.mjs", "scripts/lib/browser-profile.mjs",
   "scripts/windows/set-bot-viewer-password.ps1",
 ];
-const INSTALL_FILES = ["Install.cmd", "Install.ps1", "Control.ps1", "ports.ps1", "provision.sh", "control.sh", "rootfs.json", "strings.th.json", "README.th.md"];
+const INSTALL_FILES = ["Install.cmd", "Install.ps1", "Control.ps1", "ports.ps1", "image.ps1", "provision.sh", "control.sh", "rootfs.json", "rootfs-provenance.json", "strings.th.json", "README.th.md"];
 const digest = (data: Buffer) => createHash("sha256").update(data).digest("hex");
 
 export function desktopFiles(serverOrigin: string, root = process.cwd()): ZipEntry[] {

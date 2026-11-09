@@ -1,6 +1,6 @@
 # MY-BOT Desktop — ส่วนเสริมจอแยกสำหรับ production
 
-รุ่นปัจจุบัน **0.1.1-preview / extension 1.11.19** รองรับ Windows 11 x64 เป็นทางเลือก ไม่บังคับผู้ใช้ทั่วไปติดตั้ง แพ็กเกจยังเป็น ZIP พร้อมตัวติดตั้ง PowerShell ไม่ใช่ EXE ที่ลงลายเซ็นแล้ว ต้องตรวจรับบน Windows เครื่องใหม่ก่อนแจกเป็นรุ่นทั่วไป
+รุ่นปัจจุบัน **0.1.2-preview / extension 1.11.19** รองรับ Windows 11 x64 เป็นทางเลือก ไม่บังคับผู้ใช้ทั่วไปติดตั้ง แพ็กเกจยังเป็น ZIP พร้อมตัวติดตั้ง PowerShell ไม่ใช่ EXE ที่ลงลายเซ็นแล้ว ต้องตรวจรับบน Windows เครื่องใหม่ก่อนแจกเป็นรุ่นทั่วไป
 
 ## ทำไมจึงคุ้มสำหรับรุ่นแรก
 
@@ -12,7 +12,7 @@
 2. แตกไฟล์และเปิด `Install.cmd` ยืนยันคำขอติดตั้ง ตัวติดตั้งตรวจ Windows x64 และพื้นที่ว่างขั้นต่ำ 4 GB หาก WSL ยังไม่พร้อม จะขอเปิดตัวติดตั้ง WSL ของ Windows ซึ่งอาจต้องสิทธิ์ผู้ดูแลและรีสตาร์ต ไม่รีสตาร์ตเอง หลังรีสตาร์ตให้เปิดชุดเดิมอีกครั้ง
 
    หน้ายืนยันระบุสิทธิ์อ่าน Facebook/ส่งโพสต์และ origin เซิร์ฟเวอร์จริง ให้ตรวจที่อยู่ก่อนยอมรับ ส่วนขยายโหลดเฉพาะในเบราว์เซอร์ของบอท ไม่ติดตั้งหรือให้ optional host permission ใน Chrome ส่วนตัวเงียบ ๆ
-3. ตัวติดตั้งดาวน์โหลด Debian image ที่กำหนด SHA-256 จากแหล่งทางการ สร้าง distro เฉพาะชื่อ `MYBOT-Desktop-V1` ไม่แก้ distro เดิม ไม่เปลี่ยน default distro และไม่ใช้ `wsl --shutdown` ติดตั้งเฉพาะ Chromium พร้อม sandbox, จอเสมือน, viewer, Node runtime และ user service
+3. ตัวติดตั้งดาวน์โหลด Debian 13 rootfs จากแหล่ง Docker Official Image ที่ผู้พัฒนา Debian ดูแล โดย pin commit, ขนาด และ SHA-256 ตาม OCI manifest ไม่ต้องติดตั้ง Docker สร้าง distro เฉพาะชื่อ `MYBOT-Desktop-V1` ไม่แก้ distro เดิม ไม่เปลี่ยน default distro และไม่ใช้ `wsl --shutdown` ติดตั้งเฉพาะ Chromium พร้อม sandbox, จอเสมือน, viewer, Node runtime และ user service
 4. ตั้งรหัสเปิดดูจอบอท 8 ตัวอักษร ASCII ไม่ใช้รหัส Facebook ซ้ำ รหัสนี้เก็บเฉพาะเครื่อง มีเพียงช่องส่งต่อชั่วคราวที่ลบทันที ไม่อยู่ใน URL/argv/logs
 5. ในจอบอท เข้าสู่ MY-BOT และ Facebook ด้วยตนเอง ส่วนขยายที่มาพร้อมชุดติดตั้งเชื่อมอุปกรณ์อัตโนมัติตาม flow เดิม และเปิดโหมดจอเฉพาะเฉพาะ fresh Desktop profile ไม่ย้าย cookies หรือสิทธิ์จาก Chrome ส่วนตัว
 6. ตรวจโพสต์ที่รับจริงและความคืบหน้าในภาพรวมระบบ จากนั้นปิดหน้าดูจอได้ ใช้ทางลัดในเมนูเริ่มเพื่อเปิดดู เริ่ม หยุด ตรวจสถานะ เปิดเบราว์เซอร์ใหม่หลังตรวจงาน หรือถอนการเริ่มอัตโนมัติ
@@ -24,6 +24,7 @@
 - `src/lib/desktop-package.ts` สร้าง ZIP จาก allowlist ไฟล์ runtime และ extension เท่านั้น มี checksum รายไฟล์และ release ID ที่ผูกกับ origin ไม่รวม `.env`, `data/`, backups, Prisma, Node dependencies หรือ worker
 - `desktop/Install.ps1` ตรวจ checksum ก่อนรันไฟล์ ตั้ง ownership record ของ distro เพื่อ resume การติดตั้งที่สะดุด และปฏิเสธ distro ชื่อชนกันที่ยืนยันเจ้าของไม่ได้ ตรวจพอร์ต viewer ไม่ให้แย่งจอเดิมและใช้ mutex กัน installer ซ้อน
 - ตั้งแต่ 0.1.1 เลือกพอร์ตว่างอัตโนมัติ เริ่มจากคู่ 5915/6095 สูงสุด 20 คู่ และจำไว้ใน install-state.json กับ workstation-config.json ใช้ค่านี้ทั้ง VNC, noVNC, health, ทางลัด และ X display จึงอยู่ร่วมกับจอเดิม 5905/6085 ได้ ไม่ฆ่าโปรเซสที่ใช้พอร์ตอื่น `Install.ps1 -CheckPorts` ตรวจชุดไฟล์และเลือกพอร์ตโดยไม่ติดตั้ง
+- ตั้งแต่ 0.1.2 ตรวจ magic gzip, ขนาด และ SHA-256 ก่อนแทน cache ใช้ไฟล์ `.download` แยกแล้ว replace หลังยืนยันครบ หากได้ HTML verification page จะหยุดและบอกสาเหตุตรง ไม่ retry challenge วนหรือ import HTML มี provenance ของ OCI manifest ในแพ็กเกจ
 - `desktop/provision.sh` ทำงาน root เฉพาะ distro ที่กำหนด ติดตั้งโปรแกรมใน immutable release ที่ root เป็นเจ้าของ ใช้ผู้ใช้ `mybot` สำหรับ Chromium ไม่ปิด sandbox เขียนค่าที่ผู้ใช้แก้ได้ด้วยสิทธิ์ผู้ใช้นั้นแทน root
 - `/opt/mybot-desktop/current` ชี้ runtime รุ่นปัจจุบัน แยกข้อมูลคงอยู่ที่ `/var/lib/mybot-desktop` และโปรไฟล์ `/var/lib/mybot-desktop/desktop-browser-profile` ไม่เก็บโปรไฟล์ในโฟลเดอร์ดาวน์โหลดหรือ release
 - `desktop/extension-key.txt` เป็น **public key** สำหรับ Chrome extension identity เพื่อคง ID ข้าม release path ไม่ใช่ API credential และไม่ใช่ private signing key ไม่มี private key ในชุดติดตั้ง ไม่ใช่การลงลายเซ็น EXE/CRX
@@ -60,3 +61,5 @@ service ถือ shared update lock ตลอดอายุโปรเซส 
 - จำลองตัวควบคุมจริงใน remote mode ที่เว็บออฟไลน์ ยืนยันว่าไม่เปิด Next.js/worker ในเครื่อง และไม่วนเปิด browser หลังล้ม ทดสอบ update lock และ foreground keep-alive เมื่อ service activation/stop/failure
 - ลิงก์ Debian ทางการตอบ HTTP 200 แต่การดาวน์โหลดไฟล์เต็มในสภาพแวดล้อมตรวจขาดกลางทาง จึงยังไม่ถือว่าตรวจ image เต็มไฟล์สำเร็จ ตัวติดตั้งตรวจ checksum และห้าม import ไฟล์ไม่ครบ
 - ยังไม่ติดตั้ง distro ใหม่บนเครื่องเจ้าของ ไม่ย้าย session Facebook ไม่ส่งคอมเมนต์จริง ยังไม่ push/deploy และยังไม่ผ่าน pristine-Windows/real-Facebook acceptance จึงคงสถานะ preview
+
+ผลตรวจรอบ 0.1.2: พบไฟล์ cache จาก endpoint เดิมเป็น HTML `I Challenge Thee` 3,319 bytes ช่อง API ของผู้ให้บริการเดิมคืน HTML เช่นกัน จึงใช้ rootfs เดียวกับ Docker Official Debian จาก immutable commit แทน ตรวจไฟล์เต็มบน Windows ได้ 49,412,508 bytes และ SHA-256 `a6dd1c05fbba4f9028078a11f143cbb625d2408921eb8207bfa1dd1ad301276f` ตรงกับ layer digest ใน manifest ตรวจ tar แล้วเป็น Debian 13 ไม่ใช้ hash ของหน้า HTML มาตั้งเป็นค่าที่คาดไว้
