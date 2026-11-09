@@ -90,7 +90,7 @@ try {
   const args = process.argv.slice(2);
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--help') {
-      console.log('npm run browser:desktop -- [--check | --password | --password-window] [--url https://app.example]\nLinux/WSL only. Starts an authenticated virtual desktop; keep this process running. Viewer: http://localhost:6085/vnc.html\nFirst install: sudo apt-get install --no-install-recommends chromium chromium-sandbox xvfb xauth x11-utils x11-xserver-utils openbox tint2 pcmanfm xdg-utils x11vnc novnc websockify util-linux\nSet the viewer password locally using --password. Never send that password in chat.');
+      console.log('npm run browser:desktop -- [--check | --password | --password-window] [--url https://app.example]\nLinux/WSL only. Starts an authenticated virtual desktop; keep this process running. Viewer: http://localhost:6085/vnc.html\nFirst install: sudo apt-get install --no-install-recommends chromium chromium-sandbox xvfb xauth x11-utils x11-xserver-utils openbox tint2 pcmanfm xdg-utils unzip zip xarchiver x11vnc novnc websockify util-linux\nSet the viewer password locally using --password. Never send that password in chat.');
       process.exit(0);
     }
     if (args[i] === '--check') { check = true; continue; }

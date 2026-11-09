@@ -39,6 +39,8 @@ it('starts a lightweight bottom panel after openbox and recovers it without kill
   expect(source).toContain('pcmanfm');
   expect(readFileSync('desktop/provision.sh','utf8')).toMatch(/\btint2\b/);
   expect(readFileSync('desktop/provision.sh','utf8')).toMatch(/\bpcmanfm\b/);
+  expect(readFileSync('desktop/provision.sh','utf8')).toMatch(/\bunzip\b/);
+  expect(readFileSync('desktop/provision.sh','utf8')).toMatch(/\bxarchiver\b/);
   expect(readFileSync('desktop/tint2rc','utf8')).toContain('MYBOT_LAUNCHER_BROWSER');
   expect(readFileSync('desktop/tint2rc','utf8')).toContain('MYBOT_LAUNCHER_FILES');
   expect(readFileSync('desktop/tint2rc','utf8')).toMatch(/panel_position = bottom/);

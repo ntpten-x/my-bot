@@ -2,3 +2,6 @@
 inode/directory=pcmanfm.desktop;
 inode/mount-point=pcmanfm.desktop;
 x-scheme-handler/file=pcmanfm.desktop;
+application/zip=xarchiver.desktop;
+application/x-zip-compressed=xarchiver.desktop;
+application/x-compressed-tar=xarchiver.desktop;

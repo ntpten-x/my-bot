@@ -18,7 +18,7 @@ chmod 0644 /opt/mybot-desktop/update.lock
 exec 8>/opt/mybot-desktop/update.lock
 flock -xn 8 || { echo 'Stop the Desktop service before updating. Runtime was not changed.' >&2; exit 1; }
 apt-get update -qq
-apt-get install -y --no-install-recommends ca-certificates chromium chromium-sandbox fonts-noto-core nodejs python3 xvfb xauth x11-utils x11-xserver-utils openbox tint2 pcmanfm xdg-utils x11vnc novnc websockify util-linux dbus-user-session libpam-systemd systemd systemd-sysv
+apt-get install -y --no-install-recommends ca-certificates chromium chromium-sandbox fonts-noto-core nodejs python3 xvfb xauth x11-utils x11-xserver-utils openbox tint2 pcmanfm xdg-utils unzip zip xarchiver x11vnc novnc websockify util-linux dbus-user-session libpam-systemd systemd systemd-sysv
 python3 - "$BUNDLE_DIR" <<'PY'
 import hashlib, json, pathlib, sys
 root = pathlib.Path(sys.argv[1]).resolve()
@@ -80,6 +80,9 @@ cat > /home/mybot/.config/mimeapps.list <<'MIME'
 inode/directory=pcmanfm.desktop;
 inode/mount-point=pcmanfm.desktop;
 x-scheme-handler/file=pcmanfm.desktop;
+application/zip=xarchiver.desktop;
+application/x-zip-compressed=xarchiver.desktop;
+application/x-compressed-tar=xarchiver.desktop;
 MIME
 chown mybot:mybot /home/mybot/.config/mimeapps.list
 chmod 0644 /home/mybot/.config/mimeapps.list
