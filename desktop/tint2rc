@@ -1,13 +1,13 @@
 # MY-BOT Desktop lightweight bottom panel (not a Windows Start Menu).
-# __LAUNCHER_DESKTOP__ is replaced at desktop start with an absolute .desktop path.
+# Placeholders MYBOT_LAUNCHER_BROWSER and MYBOT_LAUNCHER_FILES are replaced at desktop start.
 
-panel_monitor = all
-panel_position = bottom center horizontal
+panel_monitor = 1
+panel_position = bottom left horizontal
 panel_size = 100% 36
 panel_margin = 0 0
 panel_padding = 4 2 4
-panel_dock = 1
-panel_layer = top
+panel_dock = 0
+panel_layer = bottom
 panel_background_id = 1
 wm_menu = 0
 panel_items = LT
@@ -61,7 +61,8 @@ launcher_icon_background_id = 2
 launcher_icon_size = 24
 launcher_icon_asb = 100 0 0
 launcher_tooltip = 1
-launcher_item_app = __LAUNCHER_DESKTOP__
+launcher_item_app = MYBOT_LAUNCHER_BROWSER
+launcher_item_app = MYBOT_LAUNCHER_FILES
 
 systray_padding = 0 0 0
 systray_background_id = 0

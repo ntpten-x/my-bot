@@ -90,7 +90,7 @@ try {
   const args = process.argv.slice(2);
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--help') {
-      console.log('npm run browser:desktop -- [--check | --password | --password-window] [--url https://app.example]\nLinux/WSL only. Starts an authenticated virtual desktop; keep this process running. Viewer: http://localhost:6085/vnc.html\nFirst install: sudo apt-get install --no-install-recommends chromium chromium-sandbox xvfb xauth x11-utils x11-xserver-utils openbox tint2 x11vnc novnc websockify util-linux\nSet the viewer password locally using --password. Never send that password in chat.');
+      console.log('npm run browser:desktop -- [--check | --password | --password-window] [--url https://app.example]\nLinux/WSL only. Starts an authenticated virtual desktop; keep this process running. Viewer: http://localhost:6085/vnc.html\nFirst install: sudo apt-get install --no-install-recommends chromium chromium-sandbox xvfb xauth x11-utils x11-xserver-utils openbox tint2 pcmanfm xdg-utils x11vnc novnc websockify util-linux\nSet the viewer password locally using --password. Never send that password in chat.');
       process.exit(0);
     }
     if (args[i] === '--check') { check = true; continue; }
@@ -173,21 +173,42 @@ try {
       start('Window manager', 'openbox', [], env);
       await sleep(750);
       if (stopping) throw new Error('Window manager stopped before startup.');
-      // Lightweight bottom panel (window list + bot browser launcher). Not a Windows Start Menu.
+      // Lightweight bottom panel (window list + browser/files launchers). Not a Windows Start Menu.
       const panelTemplate = path.join(root, 'desktop', 'tint2rc');
       const focusScript = path.join(root, 'desktop', 'focus-bot-browser.sh');
+      const filesScript = path.join(root, 'desktop', 'open-files.sh');
+      const mimeTemplate = path.join(root, 'desktop', 'mimeapps.list');
       try {
         await access(panelTemplate, constants.R_OK);
         await access(focusScript, constants.R_OK);
-        const launcherDesktop = path.join(plan.runtime, 'bot-browser.desktop');
+        await access(filesScript, constants.R_OK);
+        const launcherBrowser = path.join(plan.runtime, 'bot-browser.desktop');
+        const launcherFiles = path.join(plan.runtime, 'bot-files.desktop');
         const panelConfig = path.join(plan.runtime, 'tint2rc');
-        await writeFile(launcherDesktop, [
+        const esc = value => value.replace(/ /g, '\\ ');
+        await writeFile(launcherBrowser, [
           '[Desktop Entry]', 'Type=Application', 'Name=Bot Browser', 'Comment=Open or focus the MY-BOT desktop Chromium',
-          `Exec=${focusScript.replace(/ /g, '\\ ')}`, 'Terminal=false', 'Categories=Network;', '',
+          `Exec=${esc(focusScript)}`, 'Terminal=false', 'Categories=Network;', '',
         ].join('\n'), { mode: 0o600 });
+        await writeFile(launcherFiles, [
+          '[Desktop Entry]', 'Type=Application', 'Name=Files', 'Comment=Open the bot desktop file manager',
+          `Exec=${esc(filesScript)}`, 'Terminal=false', 'Categories=FileManager;', 'MimeType=inode/directory;', '',
+        ].join('\n'), { mode: 0o600 });
+        // Prefer pcmanfm over Chromium when something opens a folder inside this session.
+        try {
+          await access(mimeTemplate, constants.R_OK);
+          const xdgConfig = path.join(plan.runtime, 'xdg-config');
+          await mkdir(xdgConfig, { recursive: true, mode: 0o700 });
+          await writeFile(path.join(xdgConfig, 'mimeapps.list'), await readFile(mimeTemplate, 'utf8'), { mode: 0o600 });
+          env.XDG_CONFIG_HOME = xdgConfig;
+        } catch { /* mime defaults are best-effort */ }
         const template = await readFile(panelTemplate, 'utf8');
-        if (!template.includes('__LAUNCHER_DESKTOP__')) throw new Error('tint2rc missing launcher placeholder');
-        await writeFile(panelConfig, template.split('__LAUNCHER_DESKTOP__').join(launcherDesktop), { mode: 0o600 });
+        if (!template.includes('MYBOT_LAUNCHER_BROWSER') || !template.includes('MYBOT_LAUNCHER_FILES')) {
+          throw new Error('tint2rc missing launcher placeholders');
+        }
+        await writeFile(panelConfig, template
+          .split('MYBOT_LAUNCHER_BROWSER').join(launcherBrowser)
+          .split('MYBOT_LAUNCHER_FILES').join(launcherFiles), { mode: 0o600 });
         start('Desktop panel', 'tint2', ['-c', panelConfig], env);
       } catch (error) {
         console.error(`Desktop panel was not started (${error instanceof Error ? error.message : 'missing tint2 files'}). Window list unavailable; Chrome still starts.`);

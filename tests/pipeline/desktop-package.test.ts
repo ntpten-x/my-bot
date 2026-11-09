@@ -28,7 +28,7 @@ describe('optional desktop installer package', () => {
       expect(createHash('sha256').update(entry.data).digest('hex')).toBe(file.sha256);
     }
     const names = entries.map(entry => entry.name);
-    for (const file of ['Install.cmd', 'Install.ps1', 'Control.ps1', 'ownership.ps1', 'provision.sh', 'rollback.sh', 'runtime/desktop/control.sh', 'runtime/desktop/rollback.sh', 'runtime/desktop/tint2rc', 'runtime/desktop/focus-bot-browser.sh', 'runtime/scripts/start-bot-desktop.mjs', 'runtime/scripts/lib/workstation.mjs', 'runtime/scripts/lib/desktop-release.mjs']) expect(names).toContain(file);
+    for (const file of ['Install.cmd', 'Install.ps1', 'Control.ps1', 'ownership.ps1', 'provision.sh', 'rollback.sh', 'runtime/desktop/control.sh', 'runtime/desktop/rollback.sh', 'runtime/desktop/tint2rc', 'runtime/desktop/focus-bot-browser.sh', 'runtime/desktop/open-files.sh', 'runtime/desktop/mimeapps.list', 'runtime/scripts/start-bot-desktop.mjs', 'runtime/scripts/lib/workstation.mjs', 'runtime/scripts/lib/desktop-release.mjs']) expect(names).toContain(file);
     expect(JSON.parse(entries.find(entry => entry.name === 'package.json')!.data.toString()).extensionVersion).toMatch(/^\d+\.\d+\.\d+$/);
     expect(names.some(name => /(^|\/)(data|node_modules|prisma|\.env)(\/|$)/.test(name))).toBe(false);
     expect(names).not.toContain('runtime/scripts/start-all.mjs');

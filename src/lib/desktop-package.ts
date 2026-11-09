@@ -29,7 +29,7 @@ export function desktopFiles(serverOrigin: string, root = process.cwd()): ZipEnt
   for (const script of manifest.content_scripts) if (script.js.includes("bridge.js")) script.matches = [`${url.origin}/*`];
   manifest.key = readFileSync(path.join(root, "desktop/extension-key.txt"), "utf8").trim();
   manifestEntry.data = Buffer.from(JSON.stringify(manifest, null, 2));
-  for (const file of ["control.sh", "keepalive.sh", "rollback.sh", "strings.th.json", "tint2rc", "focus-bot-browser.sh"]) entries.push({ name: `runtime/desktop/${file}`, data: readFileSync(path.join(root, "desktop", file)) });
+  for (const file of ["control.sh", "keepalive.sh", "rollback.sh", "strings.th.json", "tint2rc", "focus-bot-browser.sh", "open-files.sh", "mimeapps.list"]) entries.push({ name: `runtime/desktop/${file}`, data: readFileSync(path.join(root, "desktop", file)) });
   entries.push({ name: "runtime/extension/desktop-config.json", data: Buffer.from(JSON.stringify({ dedicatedReaderDesktop: true })) });
   const files = entries.map(entry => ({ path: entry.name, sha256: digest(entry.data) }));
   const releaseId = digest(Buffer.from(JSON.stringify({ serverOrigin: url.origin, files }))).slice(0, 24);

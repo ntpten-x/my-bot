@@ -18,7 +18,7 @@ chmod 0644 /opt/mybot-desktop/update.lock
 exec 8>/opt/mybot-desktop/update.lock
 flock -xn 8 || { echo 'Stop the Desktop service before updating. Runtime was not changed.' >&2; exit 1; }
 apt-get update -qq
-apt-get install -y --no-install-recommends ca-certificates chromium chromium-sandbox fonts-noto-core nodejs python3 xvfb xauth x11-utils x11-xserver-utils openbox tint2 x11vnc novnc websockify util-linux dbus-user-session libpam-systemd systemd systemd-sysv
+apt-get install -y --no-install-recommends ca-certificates chromium chromium-sandbox fonts-noto-core nodejs python3 xvfb xauth x11-utils x11-xserver-utils openbox tint2 pcmanfm xdg-utils x11vnc novnc websockify util-linux dbus-user-session libpam-systemd systemd systemd-sysv
 python3 - "$BUNDLE_DIR" <<'PY'
 import hashlib, json, pathlib, sys
 root = pathlib.Path(sys.argv[1]).resolve()
@@ -67,10 +67,22 @@ fs.writeFileSync(path.join(unitDir,'mybot-workstation.service'),workstationUnit(
 pruneDesktopReleases('/opt/mybot-desktop/releases',[release, previous]);
 JS
 chmod -R go-w /opt/mybot-desktop/releases
-# Launcher script must stay executable after the Windows-built ZIP lands in the release tree.
-if [[ -f /opt/mybot-desktop/current/desktop/focus-bot-browser.sh ]]; then
-  chmod a+x /opt/mybot-desktop/current/desktop/focus-bot-browser.sh
-fi
+# Launcher scripts must stay executable after the Windows-built ZIP lands in the release tree.
+for script in focus-bot-browser.sh open-files.sh; do
+  if [[ -f /opt/mybot-desktop/current/desktop/$script ]]; then
+    chmod a+x /opt/mybot-desktop/current/desktop/$script
+  fi
+done
+# Prefer the file manager over Chromium for folders inside the bot desktop.
+install -d -m 0755 -o mybot -g mybot /home/mybot/.config
+cat > /home/mybot/.config/mimeapps.list <<'MIME'
+[Default Applications]
+inode/directory=pcmanfm.desktop;
+inode/mount-point=pcmanfm.desktop;
+x-scheme-handler/file=pcmanfm.desktop;
+MIME
+chown mybot:mybot /home/mybot/.config/mimeapps.list
+chmod 0644 /home/mybot/.config/mimeapps.list
 cat > /etc/wsl.conf <<'CONF'
 [boot]
 systemd=true

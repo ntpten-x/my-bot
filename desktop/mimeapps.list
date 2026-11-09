@@ -1,0 +1,4 @@
+[Default Applications]
+inode/directory=pcmanfm.desktop;
+inode/mount-point=pcmanfm.desktop;
+x-scheme-handler/file=pcmanfm.desktop;

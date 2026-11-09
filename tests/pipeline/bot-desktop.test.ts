@@ -26,6 +26,7 @@ it('prints setup help without installing packages or opening a browser',()=>{
   const help=execFileSync(process.execPath,['scripts/start-bot-desktop.mjs','--help'],{encoding:'utf8'});
   expect(help).toContain('--password'); expect(help).toContain('sudo apt-get install');
   expect(help).toContain('tint2');
+  expect(help).toContain('pcmanfm');
 });
 
 it('starts a lightweight bottom panel after openbox and recovers it without killing Chrome',()=>{
@@ -34,9 +35,16 @@ it('starts a lightweight bottom panel after openbox and recovers it without kill
   expect(source).toContain("'Desktop panel'");
   expect(source).toContain("'desktop', 'tint2rc'");
   expect(source).toContain('focus-bot-browser.sh');
+  expect(source).toContain('open-files.sh');
+  expect(source).toContain('pcmanfm');
   expect(readFileSync('desktop/provision.sh','utf8')).toMatch(/\btint2\b/);
-  expect(readFileSync('desktop/tint2rc','utf8')).toContain('__LAUNCHER_DESKTOP__');
+  expect(readFileSync('desktop/provision.sh','utf8')).toMatch(/\bpcmanfm\b/);
+  expect(readFileSync('desktop/tint2rc','utf8')).toContain('MYBOT_LAUNCHER_BROWSER');
+  expect(readFileSync('desktop/tint2rc','utf8')).toContain('MYBOT_LAUNCHER_FILES');
+  expect(readFileSync('desktop/tint2rc','utf8')).toMatch(/panel_position = bottom/);
   expect(readFileSync('desktop/focus-bot-browser.sh','utf8')).toContain('desktop-browser-profile');
+  expect(readFileSync('desktop/open-files.sh','utf8')).toContain('pcmanfm');
+  expect(readFileSync('desktop/mimeapps.list','utf8')).toContain('inode/directory=pcmanfm.desktop');
 });
 
 it('removes inherited WSLg Wayland signals while keeping the actual X display and owner environment',()=>{
