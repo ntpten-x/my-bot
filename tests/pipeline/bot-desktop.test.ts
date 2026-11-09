@@ -25,6 +25,18 @@ it('validates the app URL before any desktop starts',()=>{
 it('prints setup help without installing packages or opening a browser',()=>{
   const help=execFileSync(process.execPath,['scripts/start-bot-desktop.mjs','--help'],{encoding:'utf8'});
   expect(help).toContain('--password'); expect(help).toContain('sudo apt-get install');
+  expect(help).toContain('tint2');
+});
+
+it('starts a lightweight bottom panel after openbox and recovers it without killing Chrome',()=>{
+  const source=readFileSync('scripts/start-bot-desktop.mjs','utf8');
+  expect(source).toContain("start('Desktop panel', 'tint2'");
+  expect(source).toContain("'Desktop panel'");
+  expect(source).toContain("'desktop', 'tint2rc'");
+  expect(source).toContain('focus-bot-browser.sh');
+  expect(readFileSync('desktop/provision.sh','utf8')).toMatch(/\btint2\b/);
+  expect(readFileSync('desktop/tint2rc','utf8')).toContain('__LAUNCHER_DESKTOP__');
+  expect(readFileSync('desktop/focus-bot-browser.sh','utf8')).toContain('desktop-browser-profile');
 });
 
 it('removes inherited WSLg Wayland signals while keeping the actual X display and owner environment',()=>{

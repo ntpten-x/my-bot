@@ -1,0 +1,71 @@
+# MY-BOT Desktop lightweight bottom panel (not a Windows Start Menu).
+# __LAUNCHER_DESKTOP__ is replaced at desktop start with an absolute .desktop path.
+
+panel_monitor = all
+panel_position = bottom center horizontal
+panel_size = 100% 36
+panel_margin = 0 0
+panel_padding = 4 2 4
+panel_dock = 1
+panel_layer = top
+panel_background_id = 1
+wm_menu = 0
+panel_items = LT
+
+rounded = 0
+border_width = 0
+background_color = #202020 92
+border_color = #202020 92
+background_color_hover = #303030 92
+background_color_pressed = #101010 92
+
+rounded = 4
+border_width = 0
+background_color = #3a3a3a 80
+border_color = #3a3a3a 80
+background_color_hover = #505050 80
+background_color_pressed = #2a2a2a 80
+
+rounded = 4
+border_width = 0
+background_color = #2f6fed 90
+border_color = #2f6fed 90
+background_color_hover = #4a84f5 90
+background_color_pressed = #1f5ad0 90
+
+task_width = 160
+task_height = 28
+task_centered = 1
+task_max_size = 220
+task_padding = 6 2
+task_font = sans 10
+task_font_color = #eeeeee 100
+task_active_font_color = #ffffff 100
+task_background_id = 2
+task_active_background_id = 3
+urgent_nb_of_blink = 0
+task_icon = 1
+task_tooltip = 1
+
+taskbar_mode = single_desktop
+taskbar_padding = 2 0 4
+taskbar_background_id = 0
+taskbar_active_background_id = 0
+taskbar_name = 0
+taskbar_distribute_size = 1
+taskbar_sort_order = title
+
+launcher_padding = 2 2 4
+launcher_background_id = 0
+launcher_icon_background_id = 2
+launcher_icon_size = 24
+launcher_icon_asb = 100 0 0
+launcher_tooltip = 1
+launcher_item_app = __LAUNCHER_DESKTOP__
+
+systray_padding = 0 0 0
+systray_background_id = 0
+
+time1_format =
+time2_format =
+clock_padding = 0 0
