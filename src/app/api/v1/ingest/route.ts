@@ -8,6 +8,7 @@ import { corsPreflight, json, withCors } from "@/lib/http";
 import { ingestPosts } from "@/lib/ingest";
 import { countCapturedPosts, noteBadExtensionToken } from "@/lib/extension-heartbeat";
 import { recordTiming } from "@/lib/metrics";
+import { after } from "next/server";
 
 export const dynamic = "force-dynamic";
 
@@ -47,7 +48,14 @@ export async function POST(request: Request) {
     if (!(await facebookWorkAllowed(request, fbUserId))) return withCors(json({ error: "บัญชีถูกหยุดงาน ข้อมูลยังอยู่ในคิวของส่วนขยาย", code: "ACCOUNT_PAUSED" }, 423));
     const itemIds = data.posts.map(post => post.itemId);
     if (batchId && (itemIds.some(id => !id) || new Set(itemIds).size !== itemIds.length)) return withCors(json({ error: "รายการต้องมี itemId ไม่ซ้ำ" }, 400));
-    const result = await ingestPosts({ ...data, actor: "extension" });
+    // Durable Post+AiJob first; enrichment/notify continue after the receipt response.
+    const result = await ingestPosts({ ...data, actor: "extension" }, { deferFinalize: true });
+    if (result.ok && "_finalize" in result && typeof result._finalize === "function") {
+      const finalize = result._finalize;
+      after(() => {
+        void finalize().catch((error) => console.error("[ingest-finalize]", error));
+      });
+    }
     if (result.ok) {
       const now = Date.now();
       for (const post of data.posts) {
@@ -57,14 +65,18 @@ export async function POST(request: Request) {
       }
     }
     await countCapturedPosts(fbUserId, result.inserted).catch(() => undefined);
-    if (!batchId || !result.ok) return withCors(json(result, result.ok ? 200 : 404));
+    const publicResult = { ...result } as Record<string, unknown>;
+    delete publicResult._finalize;
+    if (!batchId || !result.ok) {
+      return withCors(json(publicResult, result.ok ? 200 : 404));
+    }
     const deviceKey = createHash("sha256").update(request.headers.get("authorization") || "").digest("hex");
     const stored = await prisma.post.findMany({ where: { externalUrl: { in: data.posts.map(post => normalizeUrl(post.url)) } }, select: { externalUrl: true } });
     const urls = new Set(stored.map(post => post.externalUrl));
-    const receipts = data.posts.map(post => ({ itemId: post.itemId!, outcome: urls.has(normalizeUrl(post.url)) ? "accepted" : "skipped" }));
+    const receipts = data.posts.map(post => ({ itemId: post.itemId!, outcome: urls.has(normalizeUrl(post.url)) ? "accepted" : "skipped" as const }));
     await prisma.ingestReceipt.createMany({ data: receipts.map(receipt => ({ ...receipt, deviceKey, batchId })), skipDuplicates: true });
     const persisted = await prisma.ingestReceipt.findMany({ where: { deviceKey, batchId }, select: { itemId: true, outcome: true } });
-    return withCors(json({ ...result, batchId, receipts: persisted }));
+    return withCors(json({ ...publicResult, batchId, receipts: persisted }));
   } catch (error) {
     const code = error && typeof error === "object" && "code" in error ? error.code : "";
     const schemaMissing = code === "P2021" || code === "P2022";

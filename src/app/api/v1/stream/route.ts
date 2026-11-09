@@ -1,7 +1,7 @@
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { postInclude, serializePost } from "@/lib/serialize";
-import { postStreamWhere, type PostStreamCursor } from "@/lib/post-stream";
+import { initialPostStreamCursor, postStreamWhere, type PostStreamCursor } from "@/lib/post-stream";
 
 export const dynamic = "force-dynamic";
 
@@ -25,7 +25,9 @@ export async function GET(request: Request) {
       if (request.signal.aborted) { onAbort(); return; }
       request.signal.addEventListener("abort", onAbort, { once: true });
       send({ type: "hello", at: new Date().toISOString() });
-      let cursor: PostStreamCursor = { createdAt: new Date(), id: null };
+      // Start slightly in the past + id dedupe so late-committing rows are not skipped.
+      let cursor: PostStreamCursor = initialPostStreamCursor();
+      const seen = new Set<string>();
       const poll = async () => {
         if (closed) return;
         let full = false;
@@ -41,7 +43,14 @@ export async function GET(request: Request) {
             const last = posts[posts.length - 1];
             cursor = { createdAt: last.createdAt, id: last.id };
             full = posts.length === 20;
-            send({ type: "posts", posts: posts.map(serializePost) });
+            const fresh = posts.filter((post) => {
+              if (seen.has(post.id)) return false;
+              seen.add(post.id);
+              return true;
+            });
+            while (seen.size > 2000) seen.delete(seen.values().next().value as string);
+            if (fresh.length) send({ type: "posts", posts: fresh.map(serializePost) });
+            else send({ type: "ping" });
           } else {
             send({ type: "ping" });
           }

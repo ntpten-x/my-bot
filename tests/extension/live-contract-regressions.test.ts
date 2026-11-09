@@ -40,6 +40,7 @@ it("batches collected posts so every request is accepted by the real ingest vali
       const result = await POST(new Request("https://owner.example/api/v1/ingest", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sourceUrl, posts: batch }) }));
       statuses.push(result.status); const batchId = String(statuses.length); queued[batchId] = await result.json(); return { batchId };
     }, flushOutbox: async () => queued, postJson: async () => undefined, reportRun: async () => null, rememberError: async () => undefined,
+    withSweepsLock: async (fn: () => Promise<unknown>) => fn(), updateFullTextBacklog: async () => ({}),
   });
   vm.runInContext(source.slice(source.indexOf("async function scrapeGroupPass("), source.indexOf("let cycling = false;")), context);
   const result = await vm.runInContext('scrapeGroupPass({}, {url:"https://www.facebook.com/groups/12345",id:"source"}, {}, {})', context);

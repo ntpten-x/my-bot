@@ -187,6 +187,7 @@ async function errorSummary() {
 // ---- Outbox: posts that could not reach MY-BOT wait here (chrome.storage) and are re-sent later ----
 const OUTBOX_MAX = 200;
 const OUTBOX_MAX_AGE_MS = 72 * 3600000;
+const CAPTURE_JOURNAL_MAX = 400;
 let outboxLock = Promise.resolve();
 function withOutboxLock(fn) {
   const task = outboxLock.then(fn); outboxLock = task.catch(() => undefined); return task;
@@ -227,18 +228,100 @@ async function loadOutbox() {
   const stored = await chrome.storage.local.get({ outbox: [] });
   return (Array.isArray(stored.outbox) ? stored.outbox : []).filter(Boolean);
 }
+async function loadCaptureJournal() {
+  const stored = await chrome.storage.local.get({ captureJournal: [] });
+  return (Array.isArray(stored.captureJournal) ? stored.captureJournal : []).filter(Boolean);
+}
+function mergeJournalPosts(existing, incoming) {
+  const byUrl = new Map();
+  for (const post of existing || []) if (post?.url) byUrl.set(String(post.url), post);
+  for (const post of incoming || []) {
+    if (!post?.url) continue;
+    const prev = byUrl.get(String(post.url));
+    if (!prev) { byUrl.set(String(post.url), post); continue; }
+    const nextText = String(post.text || "");
+    const prevText = String(prev.text || "");
+    byUrl.set(String(post.url), nextText.length >= prevText.length ? { ...prev, ...post, text: nextText } : { ...post, ...prev, text: prevText });
+  }
+  return [...byUrl.values()].slice(0, 40);
+}
+/** Durable pre-outbox journal so visible-tab captures survive tab/Chrome restart before outbox admission. */
+async function appendCaptureJournalUnlocked(item) {
+  const journal = await loadCaptureJournal();
+  const posts = (Array.isArray(item.posts) ? item.posts : []).filter((post) => post?.url && typeof post.text === "string").slice(0, 40);
+  if (!posts.length) return { pending: journal.reduce((sum, row) => sum + (row.posts?.length || 0), 0), added: 0 };
+  const apiBase = item.apiBase || null;
+  const sourceUrl = item.sourceUrl;
+  const fbUserId = item.fbUserId || null;
+  const match = (row) => row && row.sourceUrl === sourceUrl && (row.apiBase || null) === apiBase && (row.fbUserId || null) === fbUserId;
+  const idx = journal.findIndex(match);
+  if (idx >= 0) {
+    journal[idx] = { ...journal[idx], posts: mergeJournalPosts(journal[idx].posts, posts), at: Date.now() };
+  } else {
+    if (journal.length >= CAPTURE_JOURNAL_MAX) {
+      const stats = await chrome.storage.local.get({ journalRejectedItems: 0 });
+      await chrome.storage.local.set({ journalRejectedItems: (stats.journalRejectedItems || 0) + posts.length, captureJournalPending: journal.reduce((sum, row) => sum + (row.posts?.length || 0), 0) });
+      await rememberError("สมุดจับภาพเต็ม หยุดรับเพิ่มจนกว่าจะส่งเข้าคิวได้");
+      throw new Error("capture journal full");
+    }
+    journal.push({ id: outboxId(), sourceUrl, posts, fbUserId, apiBase, at: Date.now() });
+  }
+  const pending = journal.reduce((sum, row) => sum + (row.posts?.length || 0), 0);
+  await chrome.storage.local.set({ captureJournal: journal, captureJournalPending: pending });
+  return { pending, added: posts.length };
+}
+async function promoteCaptureJournalUnlocked() {
+  let journal = await loadCaptureJournal();
+  let outbox = await loadOutbox();
+  if (!journal.length) {
+    await chrome.storage.local.set({ captureJournalPending: 0, outboxBlocked: outbox.length >= OUTBOX_MAX });
+    return { promoted: 0, remaining: 0, lastQueued: null };
+  }
+  const kept = [];
+  let promoted = 0;
+  let lastQueued = null;
+  for (const entry of journal) {
+    const posts = (Array.isArray(entry.posts) ? entry.posts : []).filter((post) => post?.url && typeof post.text === "string").slice(0, 40);
+    if (!posts.length) continue;
+    if (outbox.length >= OUTBOX_MAX) {
+      kept.push({ ...entry, posts });
+      continue;
+    }
+    const queued = {
+      sourceUrl: entry.sourceUrl,
+      posts: posts.map((post) => ({ ...post, itemId: post.itemId || outboxId() })),
+      fbUserId: entry.fbUserId || null,
+      apiBase: entry.apiBase || null,
+      batchId: outboxId(),
+      at: entry.at || Date.now(),
+    };
+    outbox.push(queued);
+    lastQueued = queued;
+    promoted += posts.length;
+  }
+  const remaining = kept.reduce((sum, row) => sum + (row.posts?.length || 0), 0);
+  await chrome.storage.local.set({
+    outbox,
+    captureJournal: kept,
+    captureJournalPending: remaining,
+    outboxBlocked: outbox.length >= OUTBOX_MAX || remaining > 0,
+  });
+  return { promoted, remaining, lastQueued };
+}
 async function queueOutbox(item) {
   return withOutboxLock(async () => {
-    const outbox = await loadOutbox();
-    if (outbox.length >= OUTBOX_MAX) {
-      const stats = await chrome.storage.local.get({ outboxRejectedItems: 0 });
-      await chrome.storage.local.set({ outboxBlocked: true, outboxRejectedItems: stats.outboxRejectedItems + item.posts.length });
-      await rememberError("คิวข้อมูลเต็ม หยุดอ่านเพิ่ม กรุณาตรวจรายการค้างในส่วนขยาย");
-      throw new Error("outbox full");
-    }
-    const queued = { ...item, batchId: outboxId(), posts: item.posts.map(post => ({ ...post, itemId: outboxId() })), at: Date.now() };
-    outbox.push(queued); await chrome.storage.local.set({ outbox, outboxBlocked: outbox.length >= OUTBOX_MAX }); return queued;
+    await appendCaptureJournalUnlocked(item);
+    const promoted = await promoteCaptureJournalUnlocked();
+    if (promoted.lastQueued) return promoted.lastQueued;
+    const stats = await chrome.storage.local.get({ outboxRejectedItems: 0 });
+    await chrome.storage.local.set({ outboxBlocked: true, outboxRejectedItems: (stats.outboxRejectedItems || 0) + (item.posts?.length || 0) });
+    await rememberError("คิวข้อมูลเต็ม เก็บไว้ในสมุดจับภาพแล้ว จะส่งต่อเมื่อมีช่องว่าง");
+    // Journal write already durable — callers may acknowledge. Transport waits for promote.
+    return { batchId: null, journalOnly: true, posts: item.posts, sourceUrl: item.sourceUrl, fbUserId: item.fbUserId || null, apiBase: item.apiBase || null, at: Date.now() };
   });
+}
+async function drainCaptureJournal() {
+  return withOutboxLock(() => promoteCaptureJournalUnlocked());
 }
 let flushing = false;
 async function flushOutbox(cfg, options = {}) {
@@ -247,6 +330,7 @@ async function flushOutbox(cfg, options = {}) {
   const results = {};
   const deadline = Math.min(Date.now() + 20_000, options.deadlineMs || Infinity);
   try {
+    await drainCaptureJournal().catch(() => undefined);
     for (let sent = 0; sent < 10 && Date.now() < deadline; sent++) {
       const item = await withOutboxLock(async () => {
         const outbox = await loadOutbox();
@@ -357,6 +441,10 @@ async function sendPosts(cfg, sourceUrl, posts, options = {}) {
   if (!posts.length) return null;
   const fbUserId = await currentFbUserId();
   const queued = await queueOutbox({ sourceUrl, posts, fbUserId, apiBase: base(cfg) });
+  if (!queued?.batchId) {
+    await flushOutbox(cfg, options).catch(() => undefined);
+    return null;
+  }
   const result = (await flushOutbox(cfg, options))?.[queued.batchId];
   return result ? { ok: true, clone: () => ({ json: async () => result }) } : null;
 }
@@ -405,8 +493,15 @@ async function heartbeat() {
       quiet: null,
       commentJournal: null,
       readingStatus: null,
+      outboxRejectedItems: 0,
+      journalRejectedItems: 0,
+      fullTextOverflow: 0,
+      captureJournalPending: 0,
     });
+    await drainCaptureJournal().catch(() => undefined);
     const outbox = await loadOutbox();
+    const journal = await loadCaptureJournal();
+    const backlog = await loadFullTextBacklog();
     const readers = await chrome.storage.session.get({ readers: {} });
     const tabStatus = await botTabStatus();
     const fb = stored.fbIdentity || { loggedIn: false, id: "", name: "", at: 0 };
@@ -418,6 +513,14 @@ async function heartbeat() {
           startedAt: Number(stored.readingStatus.startedAt) || 0,
         }
       : null;
+    const outboxPending = outbox.reduce((sum, item) => sum + (item.posts?.length || 0), 0);
+    const journalPending = journal.reduce((sum, item) => sum + (item.posts?.length || 0), 0);
+    const outboxTimes = outbox.map((item) => Number(item.at) || Date.now());
+    const journalTimes = journal.map((item) => Number(item.at) || Date.now());
+    const pendingTimes = [...outboxTimes, ...journalTimes];
+    const problemOutbox = outbox.filter((item) => item.problem).length;
+    const fullTextReview = Object.values(backlog).filter((item) => item.problem).length;
+    const fullTextActive = Object.values(backlog).filter((item) => !item.problem).length;
     const response = await postJson(cfg, "/api/v1/extension/heartbeat", {
       installId: await installId(),
       version: chrome.runtime.getManifest().version,
@@ -438,9 +541,16 @@ async function heartbeat() {
         commentPending: Boolean(stored.commentJournal),
         reading,
         capture: {
-          pendingPosts: outbox.reduce((sum, item) => sum + (item.posts?.length || 0), 0),
-          oldestPendingAt: outbox.length ? Math.min(...outbox.map(item => Number(item.at) || Date.now())) : 0,
+          pendingPosts: outboxPending + journalPending,
+          oldestPendingAt: pendingTimes.length ? Math.min(...pendingTimes) : 0,
           parkedFeeds: Object.values(readers.readers || {}).filter(reader => reader.continuation).length,
+          journalPending,
+          outboxRejectedItems: Number(stored.outboxRejectedItems) || 0,
+          journalRejectedItems: Number(stored.journalRejectedItems) || 0,
+          fullTextOverflow: Number(stored.fullTextOverflow) || 0,
+          fullTextActive,
+          fullTextReview,
+          problemOutbox,
         },
       },
     }, { timeoutMs: 30000, retries: 1 });
@@ -449,7 +559,7 @@ async function heartbeat() {
       const status = await response.json().catch(() => ({}));
       await chrome.storage.local.set({ serverAccountControl: { apiBase: base(cfg), fbUserId: fb.id || "", paused: Boolean(status.accountPaused), at: Date.now() } });
       if (status.accountPaused) await setQuiet("บัญชีนี้ถูกหยุดงานจากหน้าจัดการบัญชี");
-      if (!status.accountPaused && outbox.length) await flushOutbox(await loadConfig());
+      if (!status.accountPaused && (outbox.length || journal.length)) await flushOutbox(await loadConfig());
     }
   } catch {
     await chrome.storage.local.set({ lastHeartbeat: { at: Date.now(), status: 0 } });
@@ -560,17 +670,53 @@ async function loadFullTextBacklog() {
 }
 
 async function saveFullTextBacklog(backlog) {
-  const entries = Object.entries(backlog).sort((a, b) => (a[1].addedAt || 0) - (b[1].addedAt || 0));
-  const dropped = entries.slice(200);
+  // Fail-closed: never discard recovery targets to satisfy the active cap.
+  // Overflow becomes explicit review rows; only hard-drop expired/exhausted review past the bound.
   const previous = await chrome.storage.local.get({ fullTextOverflow: 0 });
-  await chrome.storage.local.set({ fullTextBacklog: Object.fromEntries(entries.slice(0, 200)), fullTextOverflow: previous.fullTextOverflow + dropped.length });
-  if (dropped.length) await rememberError("คิวอ่านข้อความเต็มเกิน 200 รายการ มีงานไม่รับเพิ่ม กรุณาตรวจสถิติคิวและลดจำนวนกลุ่ม");
+  const active = Object.entries(backlog).filter(([, item]) => item && !item.problem)
+    .sort((a, b) => (a[1].addedAt || 0) - (b[1].addedAt || 0));
+  let overflowed = 0;
+  if (active.length > 200) {
+    for (const [, item] of active.slice(200)) {
+      item.problem = "overflow_review";
+      item.overflowAt = Date.now();
+      overflowed += 1;
+    }
+  }
+  const review = Object.entries(backlog).filter(([, item]) => item && item.problem)
+    .sort((a, b) => (a[1].addedAt || 0) - (b[1].addedAt || 0));
+  const keepReview = review.filter(([, item]) => !["expired", "retry_exhausted"].includes(item.problem));
+  const droppable = review.filter(([, item]) => ["expired", "retry_exhausted"].includes(item.problem));
+  const activeKept = Object.entries(backlog).filter(([, item]) => item && !item.problem);
+  let kept = [...activeKept, ...keepReview];
+  if (kept.length > 400) {
+    // Prefer dropping only terminal review rows, never live recovery work.
+    const overflowReview = keepReview.filter(([, item]) => item.problem === "overflow_review");
+    const otherReview = keepReview.filter(([, item]) => item.problem !== "overflow_review");
+    const room = Math.max(0, 400 - activeKept.length - otherReview.length);
+    kept = [...activeKept, ...otherReview, ...overflowReview.slice(-room)];
+    overflowed += Math.max(0, overflowReview.length - room);
+  }
+  // Terminal rows stay until space exists; count them as overflow pressure, do not silent-drop active URLs.
+  if (droppable.length && kept.length >= 400) {
+    overflowed += droppable.length;
+  } else {
+    kept = [...kept, ...droppable].slice(0, 400);
+  }
+  await chrome.storage.local.set({
+    fullTextBacklog: Object.fromEntries(kept),
+    fullTextOverflow: (previous.fullTextOverflow || 0) + overflowed,
+    fullTextBlocked: activeKept.length >= 200 || kept.length >= 400,
+  });
+  if (overflowed) await rememberError("คิวอ่านข้อความเต็มเกินเพดาน — เก็บเป็นรายการตรวจ ไม่ทิ้งเงียบ ๆ กรุณาลดจำนวนกลุ่มหรือรอให้อ่านจบ");
 }
 
 async function updateFullTextBacklog(mutator) {
   return withBacklogLock(async () => {
     const backlog = await loadFullTextBacklog();
-    await mutator(backlog);
+    const active = Object.values(backlog).filter((item) => item && !item.problem).length;
+    const blocked = active >= 200 || Object.keys(backlog).length >= 400;
+    await mutator(backlog, { blocked, active });
     await saveFullTextBacklog(backlog);
     return backlog;
   });
@@ -1279,11 +1425,17 @@ async function scrapeGroupPass(cfg, group, remote, options) {
   const Scrape = globalThis.MyBotScrape;
   const kind = sourceKind(group);
   const settings = await scrapeSettingsFor(remote);
-  const stored = await chrome.storage.local.get({ sweeps: {}, coverageRecovery: {}, headRecovery: {} });
+  const stored = await chrome.storage.local.get({ sweeps: {}, sweepBoostUntil: {}, coverageRecovery: {}, headRecovery: {} });
   const fbUserId = await currentFbUserId();
   const recovery = options.head ? stored.headRecovery?.[recoveryKey(cfg, group, fbUserId)] : stored.coverageRecovery?.[recoveryKey(cfg, group, fbUserId)];
   const recovering = options.head ? Boolean(recovery) : recovery && recovery.apiBase === base(cfg) && recovery.fbUserId === fbUserId;
-  let plan = Scrape.planRun({ group: { ...group, needsCoverage: group.needsCoverage || recovering }, settings, lastSweepAt: (stored.sweeps || {})[group.id], audit: Boolean(options && options.audit) });
+  let plan = Scrape.planRun({
+    group: { ...group, needsCoverage: group.needsCoverage || recovering },
+    settings,
+    lastSweepAt: (stored.sweeps || {})[group.id],
+    sweepBoostUntil: (stored.sweepBoostUntil || {})[group.id],
+    audit: Boolean(options && options.audit),
+  });
   if (options.head) plan = { ...plan, mode: "latest", maxScrolls: 2, knownStreak: Infinity };
   const result = { ok: true, postsFound: 0, newPosts: 0, scrolls: 0, stoppedBy: "", message: "", nextRunAt: null, mode: plan.mode, stats: null };
   const startedAt = Date.now();
@@ -1339,9 +1491,16 @@ async function scrapeGroupPass(cfg, group, remote, options) {
       while (current.fresh.length && (force || current.fresh.length >= batchSize)) {
         const picked = current.fresh.slice(0, batchSize);
         const queued = await queueOutbox({ sourceUrl: group.url, posts: picked.map(cleanPost), fbUserId, apiBase: base(cfg) });
-        batchIds.push(queued.batchId);
-        if (kind !== "marketplace") await updateFullTextBacklog(async backlog => {
-          for (const post of picked) if (post.truncated && !backlog[post.url]) backlog[post.url] = { groupId: group.id, sourceUrl: group.url, tries: 0, addedAt: Date.now(), after: 0 };
+        if (queued?.batchId) batchIds.push(queued.batchId);
+        if (kind !== "marketplace") await updateFullTextBacklog(async (backlog, state) => {
+          for (const post of picked) {
+            if (!post.truncated || backlog[post.url]) continue;
+            if (state?.blocked) {
+              backlog[post.url] = { groupId: group.id, sourceUrl: group.url, tries: 0, addedAt: Date.now(), after: 0, problem: "overflow_review", overflowAt: Date.now() };
+              continue;
+            }
+            backlog[post.url] = { groupId: group.id, sourceUrl: group.url, tries: 0, addedAt: Date.now(), after: 0 };
+          }
         });
         current.fresh.splice(0, picked.length);
         await checkpoint(current);
@@ -1435,10 +1594,15 @@ async function scrapeGroupPass(cfg, group, remote, options) {
     }
     if (!options.head && kind !== "marketplace") {
       // Discovery only enqueues work under a lock so parallel groups do not clobber each other.
-      await updateFullTextBacklog(async (backlog) => {
+      await updateFullTextBacklog(async (backlog, state) => {
         const now = Date.now();
         const urls = [...new Set((group.refetchUrls || []).map(String))];
-        for (const url of urls) if (!backlog[url]) backlog[url] = { groupId: group.id, sourceUrl: group.url, tries: 0, addedAt: now, after: 0 };
+        for (const url of urls) {
+          if (backlog[url]) continue;
+          backlog[url] = state?.blocked
+            ? { groupId: group.id, sourceUrl: group.url, tries: 0, addedAt: now, after: 0, problem: "overflow_review", overflowAt: now }
+            : { groupId: group.id, sourceUrl: group.url, tries: 0, addedAt: now, after: 0 };
+        }
       });
     }
     if (deadlineMs - Date.now() > 8000) await postJson(cfg, "/api/v1/extension/sample", { sourceUrl: group.url, posts: result.sample || [] }, { timeoutMs: Math.min(3000, deadlineMs - Date.now() - 5000), retries: 0 }).catch(() => undefined);
@@ -1464,6 +1628,15 @@ async function scrapeGroupPass(cfg, group, remote, options) {
   result.nextRunAt = await reportRun(cfg, group, result, { deadlineMs });
   if (retain && result.ok && ["limit", "cap", "yield"].includes(result.stoppedBy)) result.nextRunAt = Date.now() + 30_000;
   if (retain && result.ok && ["loading", "stalled"].includes(result.stoppedBy)) result.nextRunAt = Date.now() + 60_000;
+  // Incomplete coverage → accelerate the next deep sweep for this source.
+  if (result.ok && ["cap", "limit", "screens", "loading", "stalled", "yield"].includes(String(result.stoppedBy || ""))) {
+    await withSweepsLock(async () => {
+      const stored = await chrome.storage.local.get({ sweepBoostUntil: {} });
+      const boost = { ...(stored.sweepBoostUntil || {}) };
+      boost[group.id] = Date.now() + 2 * 3600_000;
+      await chrome.storage.local.set({ sweepBoostUntil: boost });
+    }).catch(() => undefined);
+  }
   return result;
 }
 async function processFullTextQueue(cfg, groups, options = {}) {

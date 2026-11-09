@@ -75,6 +75,8 @@
   // Owner rule: never ingest posts older than 24 h, including catch-up / sweep / audit.
   const CATCHUP_MAX_MS = 24 * HOUR;
   const SWEEP_EVERY_MS = 60 * 60 * 1000;
+  /** When recent runs were incomplete or audits found misses, sweep more often. */
+  const SWEEP_FAST_MS = 20 * 60 * 1000;
 
   /**
    * Decide how deep one run goes.
@@ -107,7 +109,9 @@
       return { ...base, mode: "catchup", maxScrolls: deepScrolls, knownStreak: Infinity, maxAgeMs: Math.min(base.maxAgeMs, Math.max(HOUR, back)) };
     }
     const lastSweep = Number(opts.lastSweepAt) || 0;
-    if (now - lastSweep >= SWEEP_EVERY_MS) return { ...base, mode: "sweep", maxScrolls: deepScrolls, knownStreak: Infinity };
+    const boosted = Number(opts.sweepBoostUntil) > now || Boolean(opts.forceFastSweep);
+    const sweepEvery = boosted ? SWEEP_FAST_MS : SWEEP_EVERY_MS;
+    if (now - lastSweep >= sweepEvery) return { ...base, mode: "sweep", maxScrolls: deepScrolls, knownStreak: Infinity };
     return { ...base, mode: "normal" };
   }
 

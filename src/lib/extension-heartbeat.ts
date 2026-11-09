@@ -4,7 +4,7 @@ import { upsertSettings } from "./settings";
 import { touchExtension } from "./extension-status";
 
 // Version this MY-BOT build expects from extension/manifest.json (tests keep the two in sync).
-export const EXPECTED_EXTENSION_VERSION = "1.11.21";
+export const EXPECTED_EXTENSION_VERSION = "1.11.22";
 /** Oldest patch still allowed for scrape/read work within the current minor line. */
 export const MINIMUM_EXTENSION_VERSION = "1.11.19";
 
@@ -101,6 +101,13 @@ export const heartbeatSchema = z.object({
         pendingPosts: z.number().int().min(0).max(100000).default(0),
         oldestPendingAt: z.number().nonnegative().default(0),
         parkedFeeds: z.number().int().min(0).max(1000).default(0),
+        journalPending: z.number().int().min(0).max(100000).default(0).optional(),
+        outboxRejectedItems: z.number().int().min(0).max(1000000).default(0).optional(),
+        journalRejectedItems: z.number().int().min(0).max(1000000).default(0).optional(),
+        fullTextOverflow: z.number().int().min(0).max(1000000).default(0).optional(),
+        fullTextActive: z.number().int().min(0).max(100000).default(0).optional(),
+        fullTextReview: z.number().int().min(0).max(100000).default(0).optional(),
+        problemOutbox: z.number().int().min(0).max(100000).default(0).optional(),
       }).optional(),
       reading: z
         .object({

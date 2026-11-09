@@ -54,11 +54,94 @@ function cleanImages(images: string[] | undefined) {
     .slice(0, 6);
 }
 
-export async function ingestPosts(input: {
-  sourceUrl: string;
-  posts: IncomingPost[];
+type IngestCoreResult = {
+  ok: true;
+  inserted: number;
+  expanded: number;
+  revised: number;
+  duplicates: number;
+  tooOld: number;
+  outsideSource: number;
+  source: string;
+  createdIds: string[];
+  revisedIds: string[];
+  sourceId: string;
   actor: "extension" | "worker";
-}) {
+};
+
+async function finalizeIngest(core: IngestCoreResult) {
+  const enrichStarted = performance.now();
+  const settings = await getSettings();
+  if (core.revisedIds.length) {
+    await assignProducts(core.revisedIds);
+    await enrichPosts(core.revisedIds, [], settings, { embed: false });
+  }
+  if (core.createdIds.length) {
+    await collapseIdenticalTexts(
+      (
+        await prisma.post.findMany({
+          where: { id: { in: core.createdIds } },
+          select: { normalizedText: true },
+        })
+      ).map((row) => row.normalizedText),
+    );
+    await assignProducts(core.createdIds).catch((error) => console.error("[products]", error));
+    await syncDuplicateLabels(core.createdIds).catch((error) => console.error("[dup-labels]", error));
+  }
+  const uniqueIds = core.createdIds.length
+    ? (
+        await prisma.post.findMany({
+          where: { id: { in: core.createdIds }, duplicateOfId: null },
+          select: { id: true },
+        })
+      ).map((post) => post.id)
+    : [];
+  await prisma.source.update({
+    where: { id: core.sourceId },
+    data: {
+      lastFetchedAt: new Date(),
+      lastError: null,
+      ...(core.actor === "extension" ? { lastExtensionAt: new Date() } : {}),
+    },
+  });
+  if (core.actor === "extension") await touchExtension(core.sourceId);
+  if (uniqueIds.length) await enrichPosts(uniqueIds, [], settings, { embed: false });
+  await prisma.fetchLog.create({
+    data: {
+      sourceId: core.sourceId,
+      status: "ok",
+      message: `${core.actor}: ใหม่ ${uniqueIds.length} ซ้ำ ${core.duplicates + (core.createdIds.length - uniqueIds.length)}${core.tooOld ? ` เก่าเกิน ${core.tooOld}` : ""}${core.outsideSource ? ` นอกแหล่ง ${core.outsideSource}` : ""} จัดโดย rules`,
+      postsFound: uniqueIds.length,
+    },
+  });
+  recordTiming("ingest_enrich", performance.now() - enrichStarted);
+  const notifyStarted = performance.now();
+  if (uniqueIds.length) {
+    await applyAutomationRules(uniqueIds).catch((error) => console.error("[automation]", error));
+    const ready = await prisma.post.findMany({
+      where: { id: { in: uniqueIds }, duplicateOfId: null, dismissed: false },
+      include: { category: true, subcategory: true, source: true },
+    });
+    for (const post of ready) {
+      if (!shouldNotify(post) || post.score < settings.notifyMinScore) continue;
+      if (settings.serviceAreaNotifyOnly && !inServiceArea(post.province, settings.serviceProvinces)) continue;
+      const title = post.score >= 80 ? "ลีดร้อน" : "ลีดใหม่";
+      await dispatchNotification(post, settings, title);
+      if (shouldNotifyExternal(post)) await queueExternalNotification(post.id, title);
+    }
+  }
+  recordTiming("ingest_notify", performance.now() - notifyStarted);
+  return uniqueIds;
+}
+
+export async function ingestPosts(
+  input: {
+    sourceUrl: string;
+    posts: IncomingPost[];
+    actor: "extension" | "worker";
+  },
+  options: { deferFinalize?: boolean } = {},
+) {
   const started = performance.now();
   try {
   const source = await findSourceByUrl(input.sourceUrl);
@@ -207,66 +290,38 @@ export async function ingestPosts(input: {
     duplicates += data.length - inserted.length;
   }
   recordTiming("ingest_store", performance.now() - storeStarted);
-  const enrichStarted = performance.now();
 
-  if (revisedIds.length) {
-    await assignProducts(revisedIds);
-    await enrichPosts(revisedIds, [], settings, { embed: false });
+  const core: IngestCoreResult = {
+    ok: true,
+    inserted: createdIds.length,
+    expanded,
+    revised: revisedIds.length,
+    duplicates,
+    tooOld,
+    outsideSource,
+    source: canonicalSourceUrl(source.url),
+    createdIds,
+    revisedIds,
+    sourceId: source.id,
+    actor: input.actor,
+  };
+
+  if (options.deferFinalize) {
+    return {
+      ok: true as const,
+      inserted: core.inserted,
+      expanded: core.expanded,
+      revised: core.revised,
+      duplicates: core.duplicates,
+      tooOld: core.tooOld,
+      outsideSource: core.outsideSource,
+      source: core.source,
+      _finalize: () => finalizeIngest(core),
+    };
   }
-  const aiProvider = "rules";
-  if (createdIds.length) {
-    await collapseIdenticalTexts(fresh.map((item) => item.lead.normalizedText));
-    await assignProducts(createdIds).catch((error) => console.error("[products]", error));
-    await syncDuplicateLabels(createdIds).catch((error) => console.error("[dup-labels]", error));
-  }
-  const uniqueIds = createdIds.length
-    ? (
-        await prisma.post.findMany({
-          where: { id: { in: createdIds }, duplicateOfId: null },
-          select: { id: true },
-        })
-      ).map((post) => post.id)
-    : [];
+
+  const uniqueIds = await finalizeIngest(core);
   duplicates += createdIds.length - uniqueIds.length;
-  // Jobs already exist from the insertion transaction; do not upsert each one again.
-
-  await prisma.source.update({
-    where: { id: source.id },
-    data: {
-      lastFetchedAt: new Date(),
-      lastError: null,
-      ...(input.actor === "extension" ? { lastExtensionAt: new Date() } : {}),
-    },
-  });
-  if (input.actor === "extension") await touchExtension(source.id);
-  if (uniqueIds.length) await enrichPosts(uniqueIds, [], settings, { embed: false });
-  await prisma.fetchLog.create({
-    data: {
-      sourceId: source.id,
-      status: "ok",
-      message: `${input.actor}: ใหม่ ${uniqueIds.length} ซ้ำ ${duplicates}${tooOld ? ` เก่าเกิน ${tooOld}` : ""}${outsideSource ? ` นอกแหล่ง ${outsideSource}` : ""} จัดโดย ${aiProvider}`,
-      postsFound: uniqueIds.length,
-    },
-  });
-
-  recordTiming("ingest_enrich", performance.now() - enrichStarted);
-  const notifyStarted = performance.now();
-  if (uniqueIds.length) {
-    await applyAutomationRules(uniqueIds).catch((error) => console.error("[automation]", error));
-    const ready = await prisma.post.findMany({
-      where: { id: { in: uniqueIds }, duplicateOfId: null, dismissed: false },
-      include: { category: true, subcategory: true, source: true },
-    });
-    for (const post of ready) {
-      if (!shouldNotify(post) || post.score < settings.notifyMinScore) continue;
-      if (settings.serviceAreaNotifyOnly && !inServiceArea(post.province, settings.serviceProvinces)) continue;
-      const title = post.score >= 80 ? "ลีดร้อน" : "ลีดใหม่";
-      await dispatchNotification(post, settings, title);
-      if (shouldNotifyExternal(post)) await queueExternalNotification(post.id, title);
-    }
-  }
-
-  recordTiming("ingest_notify", performance.now() - notifyStarted);
   return {
     ok: true as const,
     inserted: uniqueIds.length,
