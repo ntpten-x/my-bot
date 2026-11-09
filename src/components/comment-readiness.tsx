@@ -20,10 +20,13 @@ export function CommentReadinessPanel({ control, rules, readiness }: {
       {!enabled.length ? <li>ยังไม่มีกฎเปิดใช้งาน — สร้างหรือเปิดกฎก่อน</li> : null}
       {!readiness ? <li>ยังตรวจอุปกรณ์ไม่ได้ กรุณาตรวจการเชื่อมต่อแล้วลองอีกครั้ง</li> : enabled.map(rule => {
         const device = readiness.extensions.find(item => item.id === rule.browserDeviceId);
+        const liveSameAccount = readiness.extensions.filter(item => item.online && item.fbUserId === rule.browserFbUserId && item.commentsEnabled !== false);
         const issue = rule.pausedReason ? `กฎถูกพัก: ${rule.pausedReason}`
           : rule.deliveryMode !== "extension" ? "ยังไม่ใช้ช่องทาง Extension"
           : !rule.browserConsent ? "ยังไม่ยืนยันการใช้บัญชีในกลุ่มที่เลือก"
           : readiness.accounts.find(account => account.id === rule.browserFbUserId)?.enabled === false ? "บัญชีนี้ถูกหยุดงานในหน้าจัดการบัญชี"
+          : !device?.online && liveSameAccount.length === 1 ? `อุปกรณ์เดิมออฟไลน์ — ระบบจะย้ายไปยัง ${liveSameAccount[0]!.name || "เครื่องที่ออนไลน์"} อัตโนมัติเมื่อ Worker สแกน`
+          : !device?.online && liveSameAccount.length > 1 ? "อุปกรณ์เดิมออฟไลน์ และมีหลายเครื่องออนไลน์ของบัญชีนี้ — เปิดแก้ไขกฎแล้วเลือกเครื่องที่ต้องการ"
           : !device?.online ? "อุปกรณ์ที่ผูกไว้ไม่ออนไลน์ เปิด Chrome และตรวจการจับคู่"
           : !rule.browserFbUserId || device.fbUserId !== rule.browserFbUserId ? "บัญชี Facebook ไม่ตรงกฎ ตรวจบัญชีที่ล็อกอิน"
           : device.commentPending ? "มีงานค้างบนเครื่อง ต้องตรวจผลเดิมก่อน ไม่ส่งซ้ำ"

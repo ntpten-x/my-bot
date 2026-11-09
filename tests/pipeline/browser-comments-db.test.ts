@@ -263,10 +263,47 @@ describe.skipIf(!fixture.enabled)("browser comment durable workflow on disposabl
     expect((await prisma.autoCommentJob.findFirstOrThrow()).status).toBe("browser_observed");
     expect(await prisma.autoCommentLog.count({ where: { jobId: c.id, event: "browser_observed" } })).toBe(1);
   });
-  it("pauses on checkpoint or uncertain result without retry", async () => {
+  it("keeps the system running after a single uncertain result and never retries that job", async () => {
     const s = await setup(), c = (await claim(s.device.id))!; await permit(s.device.id, c);
     await reportBrowserComment(s.device.id, c.id, c.claimToken, "observed", "https://other.example/?comment_id=1");
-    expect((await prisma.autoCommentJob.findFirstOrThrow()).status).toBe("uncertain"); expect((await readCommentControl()).state).toBe("paused");
+    expect((await prisma.autoCommentJob.findFirstOrThrow()).status).toBe("uncertain");
+    expect(await readCommentControl()).toMatchObject({ state: "running" });
+    expect((await prisma.autoCommentRule.findUniqueOrThrow({ where: { id: s.ruleId } })).pausedReason).toBe("");
+    expect(await claim(s.device.id)).toBeNull();
+  });
+  it("pauses only the rule after repeated uncertain results, without pausing global control", async () => {
+    const s = await setup();
+    await saveCommentRule({ ...s.input, areaCooldownSec: 30 }, s.ruleId);
+    await prisma.autoCommentJob.updateMany({ where: { status: "browser_ready" }, data: { nextAttemptAt: new Date(0), lastError: "" } });
+    for (let i = 0; i < 3; i++) {
+      await prisma.post.create({ data: { sourceId: s.source.id, externalUrl: `https://www.facebook.com/groups/12345/posts/${9000 + i}/`, text: "หาช่างด่วน", normalizedText: "หาช่างด่วน", contentHash: `post-unc-${++serial}` } });
+      await scanBrowserComments(active); await prepareBrowserComments(active);
+      await prisma.autoCommentJob.updateMany({ where: { status: "browser_ready" }, data: { nextAttemptAt: new Date(0), lastError: "" } });
+      await prisma.autoCommentLog.updateMany({ where: { event: "dispatch" }, data: { createdAt: new Date(Date.now() - 120_000) } });
+      const c = (await claim(s.device.id))!;
+      expect(c).toBeTruthy();
+      await permit(s.device.id, c);
+      await reportBrowserComment(s.device.id, c.id, c.claimToken, "uncertain");
+    }
+    expect(await readCommentControl()).toMatchObject({ state: "running" });
+    expect((await prisma.autoCommentRule.findUniqueOrThrow({ where: { id: s.ruleId } })).pausedReason).toMatch(/ผลไม่ชัดเจน/);
+  });
+  it("pauses global control on a Facebook checkpoint block", async () => {
+    const s = await setup(), c = (await claim(s.device.id))!; await permit(s.device.id, c);
+    await reportBrowserComment(s.device.id, c.id, c.claimToken, "blocked");
+    expect((await prisma.autoCommentJob.findFirstOrThrow()).status).toBe("cancelled");
+    expect(await readCommentControl()).toMatchObject({ state: "paused" });
+    expect((await prisma.autoCommentRule.findUniqueOrThrow({ where: { id: s.ruleId } })).pausedReason).toBeTruthy();
+  });
+  it("retargets waiting jobs when only the pinned device changes", async () => {
+    const s = await setup();
+    expect(s.job).toMatchObject({ status: "browser_ready", browserDeviceId: s.device.id });
+    const next = await prisma.extensionDevice.create({ data: { name: "Chrome Linux new", tokenHash: `hash-${++serial}`, tokenHint: "mbd_…new" } });
+    await saveCommentRule({ ...s.input, browserDeviceId: next.id, areaCooldownSec: 60 }, s.ruleId);
+    expect(await prisma.autoCommentJob.findFirstOrThrow()).toMatchObject({ status: "browser_ready", browserDeviceId: next.id, lastError: "" });
+    expect(await prisma.autoCommentLog.findFirst({ where: { ruleId: s.ruleId, event: "rule_updated" }, orderBy: { createdAt: "desc" } })).toMatchObject({
+      message: expect.stringContaining("คงคิวงานรอ"),
+    });
   });
   it("enforces quota before a second dispatch", async () => {
     const s = await setup(); await updateCommentControl({ hourlyLimit: 1 });

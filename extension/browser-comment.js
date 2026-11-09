@@ -29,9 +29,36 @@
       || /temporarily blocked|ถูกบล็อกชั่วคราว|ยืนยันว่าคุณเป็นมนุษย์|confirm you.re human/i.test(doc.body?.innerText || doc.body?.textContent || "");
     const account = () => (doc.cookie.match(/(?:^|;\s*)c_user=(\d+)/) || [])[1] || "";
     const matchesPage = () => samePost(loc.href, payload.externalUrl) && account() === payload.fbUserId;
-    const links = container => Array.from(container.querySelectorAll('a[href*="comment_id="]')).map(a => {
-      try { const u = new URL(a.getAttribute("href"), loc.href); return samePost(u.href, payload.externalUrl) ? u.href : ""; } catch { return ""; }
+    const commentIdOf = href => {
+      try {
+        const u = new URL(href, loc.href);
+        const fromQuery = u.searchParams.get("comment_id") || u.searchParams.get("reply_comment_id");
+        if (fromQuery && /^\d+$/.test(fromQuery)) return fromQuery;
+        const fromHash = (u.hash || "").match(/(?:comment_id|reply_comment_id)=(\d+)/);
+        return fromHash ? fromHash[1] : "";
+      } catch { return ""; }
+    };
+    const links = container => Array.from(container.querySelectorAll("a[href]")).map(a => {
+      try {
+        const href = a.getAttribute("href") || "";
+        if (!/comment_id=|reply_comment_id=/.test(href)) return "";
+        const u = new URL(href, loc.href);
+        if (!commentIdOf(u.href) || !samePost(u.href, payload.externalUrl)) return "";
+        return u.href;
+      } catch { return ""; }
     }).filter(Boolean);
+    const authorMatches = (node, profiles) => Array.from(node.querySelectorAll("a[href]")).some(author => {
+      try {
+        const u = new URL(author.getAttribute("href"), loc.href);
+        if (!["www.facebook.com", "facebook.com", "web.facebook.com", "m.facebook.com"].includes(u.hostname)) return false;
+        const path = u.pathname.replace(/\/$/, "") || "/";
+        const allowed = (profiles || []).map(profile => String(profile || "").replace(/\/$/, "")).filter(Boolean);
+        if (path === "/" + payload.fbUserId) return true;
+        if (path === "/profile.php" && u.searchParams.get("id") === payload.fbUserId) return true;
+        if (path === "/user/" + payload.fbUserId || path.startsWith("/user/" + payload.fbUserId + "/")) return true;
+        return allowed.includes(path);
+      } catch { return false; }
+    });
     if (blocked()) return { ok: false, outcome: "blocked" };
     if (!matchesPage() || !payload.id || !payload.message || payload.message.length > 2000) {
       return { ok: false, outcome: "failed", reason: !matchesPage() ? "target_mismatch" : "invalid_payload" };
@@ -62,8 +89,10 @@
         return { ok: false, outcome: "failed", reason: loading ? "loading_retryable" : "unsupported_dom" };
       }
       if (boxes.length !== 1) return { ok: false, outcome: "failed", reason: "ambiguous_composer" };
-      const box = boxes[0], form = box.closest('form,[role="form"]');
-      if (!form || !article.contains(form)) return { ok: false, outcome: "failed", reason: "unsupported_dom" };
+      const box = boxes[0];
+      // Facebook often nests the composer without a real <form>; fall back to the article/dialog surface.
+      const form = box.closest('form,[role="form"]') || (article.contains(box) ? article : null);
+      if (!form || (!article.contains(form) && form !== article)) return { ok: false, outcome: "failed", reason: "unsupported_dom" };
       const prior = memory.__mybotCommentSession;
       const ownDraft = prior && prior.id === payload.id && prior.box === box && !prior.clicked && prior.message === payload.message && normalize(box.value ?? box.textContent) === normalize(payload.message);
       if (normalize(box.value ?? box.textContent) && !ownDraft) return { ok: false, outcome: "failed", reason: "owner_draft" };
@@ -118,16 +147,30 @@
     }
     if (kind === "observe") {
       if (!session.clicked) return { ok: false, outcome: "uncertain" };
+      const profiles = session.profiles || payload.profiles || [];
+      const needle = normalize(payload.message);
       for (const url of links(session.article)) {
-        if (session.before.includes(url)) continue;
+        if ((session.before || []).includes(url)) continue;
         const anchor = Array.from(session.article.querySelectorAll("a[href]")).find(a => {
           try { return new URL(a.getAttribute("href"), loc.href).href === url; } catch { return false; }
         });
-        const comment = anchor?.closest('[role="article"],[data-commentid]');
-        if (comment && comment !== session.article && normalize(comment.textContent).includes(normalize(payload.message))
-          && Array.from(comment.querySelectorAll("a[href]")).some(author => {
-            try { const u = new URL(author.getAttribute("href"), loc.href); return ["www.facebook.com", "facebook.com", "web.facebook.com", "m.facebook.com"].includes(u.hostname) && (u.pathname.replace(/\/$/, "") === "/" + payload.fbUserId || (u.pathname === "/profile.php" && u.searchParams.get("id") === payload.fbUserId) || (session.profiles || payload.profiles || []).includes(u.pathname.replace(/\/$/, ""))); } catch { return false; }
-          })) return { ok: true, outcome: "observed", commentUrl: url };
+        const comment = anchor?.closest('[role="article"],[data-commentid],li,div');
+        if (comment && comment !== session.article && normalize(comment.textContent).includes(needle) && authorMatches(comment, profiles)) {
+          return { ok: true, outcome: "observed", commentUrl: url };
+        }
+      }
+      // Facebook sometimes renders a fresh comment node with data-commentid before the permalink appears.
+      for (const node of Array.from(session.article.querySelectorAll("[data-commentid], [aria-label*='Comment'], [aria-label*='ความคิดเห็น']"))) {
+        if (node === session.article || !normalize(node.textContent).includes(needle) || !authorMatches(node, profiles)) continue;
+        const id = node.getAttribute("data-commentid") || "";
+        if (!/^\d+$/.test(id)) continue;
+        try {
+          const base = new URL(payload.externalUrl);
+          base.searchParams.set("comment_id", id);
+          const commentUrl = base.href;
+          if ((session.before || []).includes(commentUrl)) continue;
+          return { ok: true, outcome: "observed", commentUrl };
+        } catch { /* keep scanning */ }
       }
       return { ok: false, outcome: "uncertain" };
     }

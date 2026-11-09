@@ -7,6 +7,7 @@ import { prisma } from "../prisma";
 import { recordTiming } from "../metrics";
 import { explainCommentRule, isKeywordBotRule, matchesCommentRule, templateIndex, jsonList } from "./matching";
 import { lockCommentControl, mayRun, readCommentControl, storeCommentControl, type CommentControl } from "./control";
+import { migrateStaleBrowserDevicePins } from "./admin";
 import { facebookGroupKey } from "../sources";
 
 export const BROWSER_GRANT_MS = 3000;
@@ -87,6 +88,8 @@ async function aiReady(tx: Prisma.TransactionClient, post: { id: string; aiProvi
 export async function scanBrowserComments(assertActive: () => Promise<void>, options: { deadlineMs?: number } = {}) {
   if (process.env.MYBOT_PROCESS !== "worker") return;
   const initial = await readCommentControl(); if (!mayRun(initial)) return;
+  await migrateStaleBrowserDevicePins().catch(() => undefined);
+  await assertActive();
   const initialRules = await prisma.autoCommentRule.findMany(ruleQuery);
   if (!initialRules.length) return;
   // Cache only for this slice. Under the control lock, refresh the ordered
@@ -233,8 +236,8 @@ export async function prepareBrowserComments(assertActive: () => Promise<void>, 
       await tx.autoCommentJob.update({ where: { id: job.id }, data: { status, claimToken: null, claimUntil: null, lastError: "Extension ขาดการติดต่อ ไม่ส่งงานนี้ซ้ำอัตโนมัติ" } });
       await log(tx, job, status, "หมดเวลางาน Extension");
       if (status === "uncertain") {
-        await tx.autoCommentRule.update({ where: { id: job.ruleId }, data: { pausedReason: "ขาดการติดต่อระหว่างส่ง ต้องตรวจ Facebook เองก่อนเปิดกฎใหม่" } });
-        if (control.state === "running") await storeCommentControl(tx, { ...control, state: "paused" });
+        // Ambiguous lease expiry must not freeze every other rule. Park this rule only after a burst.
+        await maybePauseRuleAfterRepeatedUncertain(tx, job.ruleId);
       }
     }, { timeout: 20000, maxWait: 20000 });
   }
@@ -376,9 +379,12 @@ export async function reportBrowserComment(
     try {
       const url = new URL(commentUrl || "");
       const source = job.sourceId ? await tx.source.findUnique({ where: { id: job.sourceId }, select: { url: true, type: true, fbGroupId: true } }) : null;
-      observed = Boolean(source && browserTarget(url.origin + url.pathname, source.url, source.type, [source.fbGroupId || ""].filter(Boolean))?.key === job.postKey && /^\d+$/.test(url.searchParams.get("comment_id") || ""));
+      const commentId = url.searchParams.get("comment_id") || url.searchParams.get("reply_comment_id")
+        || ((url.hash || "").match(/(?:comment_id|reply_comment_id)=(\d+)/) || [])[1] || "";
+      observed = Boolean(source && browserTarget(url.origin + url.pathname, source.url, source.type, [source.fbGroupId || ""].filter(Boolean))?.key === job.postKey && /^\d+$/.test(commentId));
     } catch { /* no identifiable comment */ }
     const status = outcome === "not_sent" ? "not_sent"
+      : outcome === "blocked" || outcome === "failed" ? "cancelled"
       : job.status === "sending" ? outcome === "observed" && observed ? "browser_observed" : "uncertain" : "cancelled";
     const reasonNote = detail ? ` (${detail})` : "";
     await tx.autoCommentJob.update({
@@ -391,23 +397,49 @@ export async function reportBrowserComment(
           ? "ส่วนขยายยืนยันว่าไม่ได้เรียกปุ่มส่ง เก็บประวัติไว้และไม่ส่งซ้ำอัตโนมัติ"
           : status === "browser_observed"
             ? "พบคอมเมนต์ในหน้าจอ ไม่ใช่การยืนยันจาก API"
-            : `หยุดงาน ไม่ส่งซ้ำอัตโนมัติ${reasonNote}`,
+            : outcome === "blocked"
+              ? `เจอข้อจำกัดของ Facebook${reasonNote}`
+              : `หยุดงาน ไม่ส่งซ้ำอัตโนมัติ${reasonNote}`,
       },
     });
     await log(
       tx,
       job,
-      status,
+      status === "uncertain" ? "uncertain" : outcome === "blocked" ? "blocked" : status,
       status === "not_sent"
         ? "สิ้นสุดก่อนเรียกปุ่มส่ง ไม่พักระบบส่วนกลาง"
         : status === "browser_observed"
           ? "Extension พบคอมเมนต์และลิงก์ใหม่ในหน้าจอ"
-          : `ต้องตรวจผลบน Facebook ด้วยตนเอง${reasonNote}`,
+          : outcome === "blocked"
+            ? `เจอ checkpoint หรือข้อจำกัด${reasonNote}`
+            : `ต้องตรวจผลบน Facebook ด้วยตนเอง${reasonNote}`,
     );
-    if (outcome === "blocked" || status === "uncertain") {
-      await tx.autoCommentRule.update({ where: { id: job.ruleId }, data: { pausedReason: "Extension พบข้อจำกัดหรือผลไม่ชัดเจน ตรวจ Facebook ก่อนเปิดใหม่" } });
+    if (outcome === "blocked") {
+      await tx.autoCommentRule.update({ where: { id: job.ruleId }, data: { pausedReason: "Extension พบข้อจำกัดของ Facebook ตรวจบัญชีก่อนเปิดใหม่" } });
       if (control.state === "running") await storeCommentControl(tx, { ...control, state: "paused" });
+    } else if (status === "uncertain") {
+      // Keep other rules and the global Start switch running. Only park this rule after a short burst of ambiguous sends.
+      await maybePauseRuleAfterRepeatedUncertain(tx, job.ruleId);
     }
     return true;
   });
+}
+
+const UNCERTAIN_BURST_LIMIT = 3;
+const UNCERTAIN_BURST_WINDOW_MS = 30 * 60_000;
+
+/** Pause only the affected rule after repeated ambiguous results; never stop the whole control plane. */
+export async function maybePauseRuleAfterRepeatedUncertain(tx: Prisma.TransactionClient, ruleId: string, now = new Date()) {
+  const recent = await tx.autoCommentLog.count({
+    where: { ruleId, event: "uncertain", createdAt: { gte: new Date(now.getTime() - UNCERTAIN_BURST_WINDOW_MS) } },
+  });
+  if (recent < UNCERTAIN_BURST_LIMIT) return false;
+  await tx.autoCommentRule.update({
+    where: { id: ruleId },
+    data: { pausedReason: "ผลไม่ชัดเจนหลายครั้งติดกัน ตรวจ Facebook ก่อนเปิดกฎนี้ใหม่ ระบบส่วนกลางยังทำงานต่อได้" },
+  });
+  await tx.autoCommentLog.create({
+    data: { ruleId, event: "rule_paused", message: `พักกฎหลัง uncertain ${recent} ครั้งใน 30 นาที โดยไม่ Pause ทั้งระบบ` },
+  });
+  return true;
 }

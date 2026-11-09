@@ -54,11 +54,32 @@ export async function saveCommentRule(input: z.infer<typeof autoCommentRuleSchem
       ...(managerToken?.trim() ? { managerTokenEnc: encryptSecret(managerToken.trim()) } : {}),
     };
     const value = { ...data, ...secrets, sourceIdsJson: JSON.stringify(sourceIds), daysJson: JSON.stringify([...new Set(days)]), pausedReason: "" };
+    const previous = id
+      ? await tx.autoCommentRule.findUnique({ where: { id }, include: { templates: { orderBy: { sortOrder: "asc" } } } })
+      : null;
+    const preserveQueue = Boolean(previous && isQueuePreservingRuleUpdate(previous, input, bodies, sourceIds));
     const rule = id
       ? await tx.autoCommentRule.update({ where: { id }, data: { ...value, revision: { increment: 1 } } })
       : await tx.autoCommentRule.create({ data: value });
-    if (id) {
-      await tx.autoCommentJob.updateMany({ where: { ruleId: id, status: { in: ["pending", "pending_ai", "browser_ready", "claimed"] } }, data: { status: "cancelled", claimToken: null, claimUntil: null, lastError: "กฎถูกแก้ไข" } });
+    if (id && previous) {
+      if (preserveQueue) {
+        const deviceChanged = previous.browserDeviceId !== input.browserDeviceId || previous.browserFbUserId !== input.browserFbUserId;
+        // Retarget waiting work onto the new pin/revision instead of wiping the whole queue.
+        await tx.autoCommentJob.updateMany({
+          where: { ruleId: id, status: { in: ["pending", "pending_ai", "browser_ready"] } },
+          data: {
+            ruleRevision: rule.revision,
+            ...(deviceChanged ? { browserDeviceId: input.browserDeviceId, browserFbUserId: input.browserFbUserId, nextAttemptAt: new Date(), lastError: "" } : {}),
+          },
+        });
+        // Claimed work still belongs to the old device/revision; never silently reassign mid-flight.
+        await tx.autoCommentJob.updateMany({
+          where: { ruleId: id, status: "claimed" },
+          data: { status: "cancelled", claimToken: null, claimUntil: null, lastError: deviceChanged ? "เปลี่ยนอุปกรณ์ระหว่างเตรียมหน้า" : "กฎถูกแก้ไขระหว่างรับงาน" },
+        });
+      } else {
+        await tx.autoCommentJob.updateMany({ where: { ruleId: id, status: { in: ["pending", "pending_ai", "browser_ready", "claimed"] } }, data: { status: "cancelled", claimToken: null, claimUntil: null, lastError: "กฎถูกแก้ไข" } });
+      }
       await tx.autoCommentTemplate.deleteMany({ where: { ruleId: id } });
     }
     if (typeProductId) {
@@ -66,9 +87,37 @@ export async function saveCommentRule(input: z.infer<typeof autoCommentRuleSchem
       await tx.setting.upsert({ where: { key }, create: { key, value }, update: { value } });
     }
     await tx.autoCommentTemplate.createMany({ data: bodies.map((body, sortOrder) => ({ ruleId: rule.id, body, sortOrder })) });
-    await tx.autoCommentLog.create({ data: { ruleId: rule.id, event: id ? "rule_updated" : "rule_created", message: rule.enabled ? "เปิดกฎ" : "กฎยังปิดอยู่" } });
+    await tx.autoCommentLog.create({
+      data: {
+        ruleId: rule.id,
+        event: id ? "rule_updated" : "rule_created",
+        message: id
+          ? `${rule.enabled ? "เปิดกฎ" : "กฎยังปิดอยู่"}${preserveQueue ? " · คงคิวงานรอและย้ายอุปกรณ์ถ้าเปลี่ยน" : ""}`
+          : (rule.enabled ? "เปิดกฎ" : "กฎยังปิดอยู่"),
+      },
+    });
     return rule.id;
   });
+}
+
+function sameSorted(left: string[], right: string[]) {
+  return [...left].map(String).sort().join("\0") === [...right].map(String).sort().join("\0");
+}
+
+/** Keep waiting jobs when the owner only retargets device/schedule/limits, not match text or templates. */
+export function isQueuePreservingRuleUpdate(
+  previous: { deliveryMode: string; messageMode: string; requireAi: boolean; intentMode: string; keywordMode: string; keywords: string; excludeKeywords: string; selectionMode: string; sourceIdsJson: string; templates: { body: string }[] },
+  input: z.infer<typeof autoCommentRuleSchema>,
+  bodies: string[],
+  sourceIds: string[],
+) {
+  if (previous.deliveryMode !== input.deliveryMode || previous.messageMode !== input.messageMode || previous.requireAi !== input.requireAi) return false;
+  if (previous.intentMode !== input.intentMode || previous.keywordMode !== input.keywordMode || previous.selectionMode !== input.selectionMode) return false;
+  if (previous.keywords !== input.keywords || previous.excludeKeywords !== input.excludeKeywords) return false;
+  if (!sameSorted(previous.templates.map(row => row.body), bodies)) return false;
+  let previousSources: string[] = [];
+  try { previousSources = JSON.parse(previous.sourceIdsJson) as string[]; } catch { return false; }
+  return sameSorted(previousSources, sourceIds);
 }
 
 export class RuleToggleError extends Error {
@@ -102,6 +151,67 @@ export async function setCommentRuleEnabled(id: string, enabled: boolean, revisi
     await tx.autoCommentLog.create({ data: { ruleId: id, event: enabled ? "rule_enabled" : "rule_disabled", message: enabled ? "เปิดใช้งานชุดตั้งค่า" : "ปิดใช้งานชุดตั้งค่า" } });
     return { id, enabled: updated.enabled, revision: updated.revision };
   }, { timeout: 20000, maxWait: 20000 });
+}
+
+const DEVICE_ONLINE_MS = 180_000;
+
+type RuntimeState = { at?: string; fbUserId?: string; commentsEnabled?: boolean };
+
+function readDeviceRuntime(raw?: string | null): RuntimeState {
+  try { return JSON.parse(raw || "{}") as RuntimeState; } catch { return {}; }
+}
+
+function deviceOnline(state: RuntimeState, now: number) {
+  return Boolean(state.at && now - Date.parse(state.at) < DEVICE_ONLINE_MS);
+}
+
+/**
+ * When Desktop reinstall creates a new mbd_ device, retarget enabled rules that still pin an offline
+ * device if exactly one live sender matches the same Facebook account.
+ */
+export async function migrateStaleBrowserDevicePins(now = Date.now()) {
+  const rules = await prisma.autoCommentRule.findMany({
+    where: { enabled: true, deliveryMode: "extension", browserConsent: true, browserDeviceId: { not: "" }, browserFbUserId: { not: "" }, pausedReason: "" },
+    select: { id: true, browserDeviceId: true, browserFbUserId: true, revision: true },
+  });
+  if (!rules.length) return [] as string[];
+  const devices = await prisma.extensionDevice.findMany({ where: { revokedAt: null }, select: { id: true } });
+  const settings = await prisma.setting.findMany({ where: { key: { in: devices.map(row => `extension_runtime_${row.id}`) } } });
+  const runtime = new Map(settings.map(row => [row.key.slice("extension_runtime_".length), readDeviceRuntime(row.value)]));
+  const migrated: string[] = [];
+  for (const rule of rules) {
+    const pinned = runtime.get(rule.browserDeviceId) || {};
+    if (deviceOnline(pinned, now) && pinned.fbUserId === rule.browserFbUserId) continue;
+    const candidates = devices.filter(device => {
+      if (device.id === rule.browserDeviceId) return false;
+      const state = runtime.get(device.id) || {};
+      return deviceOnline(state, now) && state.fbUserId === rule.browserFbUserId && state.commentsEnabled !== false;
+    });
+    if (candidates.length !== 1) continue;
+    const nextId = candidates[0]!.id;
+    await prisma.$transaction(async tx => {
+      await lockCommentControl(tx);
+      const current = await tx.autoCommentRule.findUnique({ where: { id: rule.id } });
+      if (!current || current.revision !== rule.revision || current.browserDeviceId !== rule.browserDeviceId) return;
+      const updated = await tx.autoCommentRule.update({
+        where: { id: rule.id },
+        data: { browserDeviceId: nextId, revision: { increment: 1 } },
+      });
+      await tx.autoCommentJob.updateMany({
+        where: { ruleId: rule.id, status: { in: ["pending", "pending_ai", "browser_ready"] } },
+        data: { browserDeviceId: nextId, ruleRevision: updated.revision, nextAttemptAt: new Date(), lastError: "" },
+      });
+      await tx.autoCommentJob.updateMany({
+        where: { ruleId: rule.id, status: "claimed" },
+        data: { status: "cancelled", claimToken: null, claimUntil: null, lastError: "ย้ายไปอุปกรณ์ที่ออนไลน์" },
+      });
+      await tx.autoCommentLog.create({
+        data: { ruleId: rule.id, event: "device_migrated", message: `ย้ายจากอุปกรณ์ออฟไลน์ไปยังเครื่องที่ออนไลน์ของบัญชีเดียวกัน` },
+      });
+      migrated.push(rule.id);
+    });
+  }
+  return migrated;
 }
 
 /** Remove from the active list while retaining jobs, message snapshots and idempotency history. */

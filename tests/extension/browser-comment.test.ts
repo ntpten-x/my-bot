@@ -69,6 +69,22 @@ describe("browser DOM delivery using SYNTHETIC pages only", () => {
     f.doc.querySelector("article")!.appendChild(comment);
     expect(await action("observe", payload, f.env)).toMatchObject({ ok: true, outcome: "observed", commentUrl: url + "?comment_id=777" }); f.dom.window.close();
   });
+  it("observes comments authored via profile.php and data-commentid without a permalink yet", async () => {
+    const f = fixture(); await action("prepare", payload, f.env); await action("send", { ...payload, permitUntil: 2000 }, f.env);
+    const comment = f.doc.createElement("div"); comment.setAttribute("data-commentid", "888");
+    comment.innerHTML = '<a href="/profile.php?id=99887766">Owner</a><span>ข้อความทดสอบ</span>';
+    f.doc.querySelector("article")!.appendChild(comment);
+    expect(await action("observe", payload, f.env)).toMatchObject({ ok: true, outcome: "observed", commentUrl: url + "?comment_id=888" });
+    f.dom.window.close();
+  });
+  it("prepares a composer nested in the article without a form element", async () => {
+    const f = fixture('<main role="main"><article role="article"><a href="/groups/12345/posts/8888/">post</a><div contenteditable="true" role="textbox" aria-label="Write a comment"></div><button type="button" aria-label="Comment">Comment</button></article></main>');
+    const box = f.doc.querySelector("[contenteditable]")!;
+    Object.defineProperty(f.doc, "execCommand", { value: (_c: unknown, _u: unknown, text: string) => { box.textContent = String(text); return true; } });
+    expect(await action("prepare", payload, f.env)).toMatchObject({ ok: true });
+    expect(f.click).not.toHaveBeenCalled();
+    f.dom.window.close();
+  });
 });
 
 it("supports a uniquely identified target dialog with a Thai main composer", async () => {
