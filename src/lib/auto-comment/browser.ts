@@ -104,6 +104,7 @@ export async function scanBrowserComments(assertActive: () => Promise<void>, opt
   if (process.env.MYBOT_PROCESS !== "worker") return;
   const initial = await readCommentControl(); if (!mayRun(initial)) return;
   await migrateStaleBrowserDevicePins().catch(() => undefined);
+  await resumeRulesPausedOnlyForUncertain().catch(() => undefined);
   await assertActive();
   const initialRules = await prisma.autoCommentRule.findMany(ruleQuery);
   if (!initialRules.length) return;
@@ -247,8 +248,7 @@ export async function prepareBrowserComments(assertActive: () => Promise<void>, 
       await tx.autoCommentJob.update({ where: { id: job.id }, data: { status, claimToken: null, claimUntil: null, lastError: "Extension ขาดการติดต่อ ไม่ส่งงานนี้ซ้ำอัตโนมัติ" } });
       await log(tx, job, status, "หมดเวลางาน Extension");
       if (status === "uncertain") {
-        // Ambiguous lease expiry must not freeze every other rule. Park this rule only after a burst.
-        await maybePauseRuleAfterRepeatedUncertain(tx, job.ruleId);
+        await noteUncertainWithoutPausingRule(tx, job.ruleId);
       }
     }, { timeout: 20000, maxWait: 20000 });
   }
@@ -406,15 +406,14 @@ export async function reportBrowserComment(
       await parkWaitingJobsForPausedRule(tx, job.ruleId, "รอคิว — กฎถูกพักเพราะข้อจำกัดของ Facebook");
       if (control.state === "running") await storeCommentControl(tx, { ...control, state: "paused" });
     } else if (status === "uncertain") {
-      // Keep other rules and the global Start switch running. Only park this rule after a short burst of ambiguous sends.
-      await maybePauseRuleAfterRepeatedUncertain(tx, job.ruleId);
+      // One ambiguous send never freezes the rest of the queue. That job stays terminal; later posts keep flowing.
+      await noteUncertainWithoutPausingRule(tx, job.ruleId);
     }
     return true;
   });
 }
 
-const UNCERTAIN_BURST_LIMIT = 3;
-const UNCERTAIN_BURST_WINDOW_MS = 30 * 60_000;
+const UNCERTAIN_PAUSE_REASON = "ผลไม่ชัดเจนหลายครั้งติดกัน ตรวจ Facebook ก่อนเปิดกฎนี้ใหม่ ระบบส่วนกลางยังทำงานต่อได้";
 const WAITING_JOB_STATUSES = ["pending", "pending_ai", "browser_ready", "claimed"] as const;
 
 /** Hold undispatched work while a rule is parked. Owner re-open resumes the same queue; never auto-resend dispatched/uncertain jobs. */
@@ -439,25 +438,47 @@ export async function cancelWaitingJobsForPausedRule(tx: Prisma.TransactionClien
   return result.count;
 }
 
-/** Pause only the affected rule after repeated ambiguous results; never stop the whole control plane. */
-export async function maybePauseRuleAfterRepeatedUncertain(tx: Prisma.TransactionClient, ruleId: string, now = new Date()) {
-  const recent = await tx.autoCommentLog.count({
-    where: { ruleId, event: "uncertain", createdAt: { gte: new Date(now.getTime() - UNCERTAIN_BURST_WINDOW_MS) } },
-  });
-  if (recent < UNCERTAIN_BURST_LIMIT) return false;
-  await tx.autoCommentRule.update({
-    where: { id: ruleId },
-    data: { pausedReason: "ผลไม่ชัดเจนหลายครั้งติดกัน ตรวจ Facebook ก่อนเปิดกฎนี้ใหม่ ระบบส่วนกลางยังทำงานต่อได้" },
-  });
-  const parked = await parkWaitingJobsForPausedRule(tx, ruleId, "รอคิว — กฎถูกพักเพราะผลไม่ชัดเจนหลายครั้ง");
+/** Record ambiguous delivery without pausing the rule or holding the rest of the queue. */
+export async function noteUncertainWithoutPausingRule(tx: Prisma.TransactionClient, ruleId: string) {
   await tx.autoCommentLog.create({
     data: {
       ruleId,
-      event: "rule_paused",
-      message: parked
-        ? `พักกฎหลัง uncertain ${recent} ครั้งใน 30 นาที และคงคิวรอ ${parked} งาน โดยไม่ Pause ทั้งระบบ`
-        : `พักกฎหลัง uncertain ${recent} ครั้งใน 30 นาที โดยไม่ Pause ทั้งระบบ`,
+      event: "uncertain_noted",
+      message: "ผลไม่ชัดเจนของงานนี้ไม่ส่งซ้ำ และไม่พักกฎ คิวงานอื่นทำงานต่อได้",
     },
   });
-  return true;
+  return false;
+}
+
+/** @deprecated Uncertain bursts no longer pause rules; kept for callers/tests that still import the name. */
+export async function maybePauseRuleAfterRepeatedUncertain(tx: Prisma.TransactionClient, ruleId: string, _now = new Date()) {
+  return noteUncertainWithoutPausingRule(tx, ruleId);
+}
+
+/** Clear legacy "uncertain burst" parks so waiting jobs can resume after the policy change. */
+export async function resumeRulesPausedOnlyForUncertain() {
+  const paused = await prisma.autoCommentRule.findMany({
+    where: { pausedReason: UNCERTAIN_PAUSE_REASON },
+    select: { id: true },
+  });
+  if (!paused.length) return 0;
+  await prisma.autoCommentRule.updateMany({
+    where: { id: { in: paused.map(row => row.id) }, pausedReason: UNCERTAIN_PAUSE_REASON },
+    data: { pausedReason: "" },
+  });
+  await prisma.autoCommentJob.updateMany({
+    where: {
+      ruleId: { in: paused.map(row => row.id) },
+      status: { in: ["pending", "pending_ai", "browser_ready"] },
+      dispatchedAt: null,
+      lastError: { contains: "ผลไม่ชัดเจน" },
+    },
+    data: { lastError: "" },
+  });
+  for (const row of paused) {
+    await prisma.autoCommentLog.create({
+      data: { ruleId: row.id, event: "rule_resumed", message: "ปลดพักกฎที่ค้างจากผลไม่ชัดเจน ให้คิวคอมเมนต์ทำงานต่อ" },
+    });
+  }
+  return paused.length;
 }

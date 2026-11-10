@@ -15,7 +15,10 @@ function crc32(buf: Buffer): number {
 
 it("ships a non-interactive zip extractor for PCManFM Extract Here", () => {
   expect(readFileSync("desktop/extract-archive.sh", "utf8")).toContain("unzip -o");
+  expect(readFileSync("desktop/extract-archive.sh", "utf8")).toContain("file://");
+  expect(readFileSync("desktop/extract-archive.sh", "utf8")).toContain("archive_basename");
   expect(readFileSync("desktop/archiver-shim.sh", "utf8")).toContain("extract-archive.sh");
+  expect(readFileSync("desktop/archiver-shim.sh", "utf8")).toContain("file://");
   expect(readFileSync("desktop/libfm.conf", "utf8")).toMatch(/archiver=xarchiver/);
 });
 
@@ -74,6 +77,13 @@ it("extracts a zip into the destination directory", () => {
   execFileSync(testBash, [bashTestPath(path.resolve("desktop/extract-archive.sh")), "--extract-to", bashTestPath(out), bashTestPath(zip)], { stdio: "pipe" });
   expect(existsSync(path.join(out, "hello.txt"))).toBe(true);
   expect(readFileSync(path.join(out, "hello.txt"), "utf8")).toBe("hello-bot");
+  const named = path.join(root, "sample-named.zip");
+  writeFileSync(named, readFileSync(zip));
+  execFileSync(testBash, [bashTestPath(path.resolve("desktop/extract-archive.sh")), "--extract", bashTestPath(named)], { stdio: "pipe" });
+  expect(existsSync(path.join(root, "sample-named", "hello.txt"))).toBe(true);
+  const uri = `file://${named.replaceAll("\\", "/")}`;
+  execFileSync(testBash, [bashTestPath(path.resolve("desktop/extract-archive.sh")), "--extract", uri], { stdio: "pipe" });
+  expect(existsSync(path.join(root, "sample-named", "hello.txt"))).toBe(true);
   if (path.dirname(path.resolve(root)) !== parent) throw new Error("Unsafe extract test cleanup");
   rmSync(root, { recursive: true, force: true });
 });

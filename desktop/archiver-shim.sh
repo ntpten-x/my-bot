@@ -7,6 +7,42 @@ EXTRACT="$ROOT/extract-archive.sh"
 [[ -n "${EXTRACT:-}" && -x "$EXTRACT" ]] || { echo "extract-archive.sh missing" >&2; exit 1; }
 
 # Translate common libfm command lines into the non-interactive extractor.
+# file-roller may pass file:// URIs (%U); xarchiver usually passes paths (%F).
+percent_decode() {
+  local raw="$1" out="" hex
+  while [[ -n "$raw" ]]; do
+    case "$raw" in
+      %[0-9A-Fa-f][0-9A-Fa-f]*)
+        hex="${raw:1:2}"
+        printf -v out '%s\x'"$hex" "$out"
+        raw="${raw:3}"
+        ;;
+      *)
+        out+="${raw:0:1}"
+        raw="${raw:1}"
+        ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
+normalize_path() {
+  local raw="$1"
+  if [[ "$raw" == file://* ]]; then
+    raw="${raw#file://}"
+    raw="${raw#localhost}"
+    if [[ "$raw" =~ ^/[A-Za-z]:/ ]]; then
+      raw="${raw:1}"
+    fi
+    if command -v python3 >/dev/null 2>&1 && python3 -c 'import urllib.parse' >/dev/null 2>&1; then
+      raw="$(python3 -c 'import sys,urllib.parse; print(urllib.parse.unquote(sys.argv[1]))' "$raw")"
+    else
+      raw="$(percent_decode "$raw")"
+    fi
+  fi
+  printf '%s' "$raw"
+}
+
 args=("$@")
 if [[ ${#args[@]} -eq 0 ]]; then
   exec "$EXTRACT" --help
@@ -27,16 +63,16 @@ while [[ $i -lt ${#args[@]} ]]; do
     --extract-to)
       mode=extract_to
       i=$((i + 1))
-      dest="${args[$i]:-}"
+      dest="$(normalize_path "${args[$i]:-}")"
       ;;
     --extract-to=*)
       mode=extract_to
-      dest="${a#--extract-to=}"
+      dest="$(normalize_path "${a#--extract-to=}")"
       ;;
     --destination)
       mode=extract_to
       i=$((i + 1))
-      dest="${args[$i]:-}"
+      dest="$(normalize_path "${args[$i]:-}")"
       ;;
     --add|--compress|--batch|--dialog|--new)
       # Create/GUI paths are unused on the bot desktop; refuse instead of hanging.
@@ -46,7 +82,7 @@ while [[ $i -lt ${#args[@]} ]]; do
     -*)
       ;;
     *)
-      files+=("$a")
+      files+=("$(normalize_path "$a")")
       ;;
   esac
   i=$((i + 1))
