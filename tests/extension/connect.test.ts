@@ -8,9 +8,12 @@ function harness(desktop = false) {
   const area = (data: Record<string, unknown>) => ({ get: async (defaults: object) => ({ ...defaults, ...structuredClone(data) }), set: async (value: object) => Object.assign(data, structuredClone(value)), remove: async (key: string) => { delete data[key]; } });
   const tabs = { create: vi.fn(async (value: object) => ({ id: 10, ...value })), get: vi.fn(async () => ({ id: 1 })) };
   const deps = { loadConfig: async () => local, base: (cfg: { apiBase: string }) => cfg.apiBase, syncCustomBridge: vi.fn(async () => undefined), ready: vi.fn(async () => undefined) };
-  const context = vm.createContext({ URL, Date, Uint8Array, TextEncoder, crypto: globalThis.crypto,
-    fetch: async (url: string) => ({ ok: !url.endsWith('desktop-config.json') || desktop,
-      json: async () => url.endsWith('desktop-config.json') ? { dedicatedReaderDesktop: desktop } : { apiBase: "http://localhost:8001" } }),
+  const context = vm.createContext({ URL, Date, Uint8Array, TextEncoder, AbortSignal, crypto: globalThis.crypto,
+    fetch: async (url: string) => {
+      if (String(url).includes("/api/v1/health")) return { ok: true, json: async () => ({ ok: true, version: "1.3.7" }) };
+      return { ok: !url.endsWith("desktop-config.json") || desktop,
+        json: async () => url.endsWith("desktop-config.json") ? { dedicatedReaderDesktop: desktop } : { apiBase: "http://localhost:8001" } };
+    },
     chrome: { runtime: { getURL: (file: string) => `chrome-extension://synthetic/${file}` }, tabs, storage: { local: area(local), session: area(session) } },
   });
   vm.runInContext(readFileSync("extension/connect.js", "utf8"), context);
@@ -69,8 +72,9 @@ it("never overwrites existing pairing or owner pause on installation/update", as
 
 it("opens the bundled server automatically on a fresh install without credentials", async () => {
   const h = harness(); await h.connect.installed({ reason: "install" }, h.deps);
-  expect(h.local.apiBase).toBe("http://localhost:8001");
-  expect(h.tabs.create).toHaveBeenCalledWith({ url: "http://localhost:8001/settings/extension", active: true });
+  expect(h.local.apiBase).toBe("http://127.0.0.1:8001");
+  expect(h.tabs.create).toHaveBeenCalledWith({ url: "http://127.0.0.1:8001/settings/extension", active: true });
+  expect(h.local.apiBaseMode).toBe("auto");
   expect(h.local.token).toBeUndefined();
   expect(h.local.dedicatedReaderDesktop).toBeUndefined();
 });

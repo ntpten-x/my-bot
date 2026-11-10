@@ -385,6 +385,9 @@ describe.skipIf(!fixture.enabled)("browser comment durable workflow on disposabl
     it("keeps the rule and waiting queue running after repeated uncertain results", async () => {
         const s = await setup();
         await saveCommentRule({ ...s.input, areaCooldownSec: 30 }, s.ruleId);
+        // This test exercises the three new posts below, not rearming the setup
+        // post cancelled by the rule edit (covered separately).
+        await prisma.post.update({ where: { id: s.post.id }, data: { dismissed: true } });
         await prisma.autoCommentJob.updateMany({ where: { status: "browser_ready" }, data: { nextAttemptAt: new Date(0), lastError: "" } });
         for (let i = 0; i < 3; i++) {
             await prisma.post.create({ data: { sourceId: s.source.id, externalUrl: `https://www.facebook.com/groups/12345/posts/${9000 + i}/`, text: "หาช่างด่วน", normalizedText: "หาช่างด่วน", contentHash: `post-unc-${++serial}` } });
@@ -392,12 +395,19 @@ describe.skipIf(!fixture.enabled)("browser comment durable workflow on disposabl
             await prepareBrowserComments(active);
             await prisma.autoCommentJob.updateMany({ where: { status: "browser_ready" }, data: { nextAttemptAt: new Date(0), lastError: "" } });
             await prisma.autoCommentLog.updateMany({ where: { event: "dispatch" }, data: { createdAt: new Date(Date.now() - 120000) } });
+            const c = (await claim(s.device.id))!;
+            expect(c).toMatchObject({ externalUrl: `https://www.facebook.com/groups/12345/posts/${9000 + i}/` });
+            expect(await permit(s.device.id, c)).toMatchObject({ ttlMs: 3000 });
             if (i === 2) {
                 const rule = await prisma.autoCommentRule.findUniqueOrThrow({ where: { id: s.ruleId } });
                 const control = await readCommentControl();
+                const waitingPost = await prisma.post.create({ data: {
+                    sourceId: s.source.id, externalUrl: "https://www.facebook.com/groups/12345/posts/7771/",
+                    text: "หาช่างแอร์ รอคิว", normalizedText: "หาช่างแอร์ รอคิว", contentHash: `post-wait-${++serial}`,
+                } });
                 await prisma.autoCommentJob.create({
                     data: {
-                        ruleId: s.ruleId, postId: s.post.id, sourceId: s.source.id, pageId: "group:12345",
+                        ruleId: s.ruleId, postId: waitingPost.id, sourceId: s.source.id, pageId: "group:12345",
                         postKey: "group:12345:7771", dedupeKey: `hold-wait-${++serial}`,
                         externalUrl: "https://www.facebook.com/groups/12345/posts/7771/", message: "รอคิว", status: "browser_ready",
                         deliveryMode: "extension", browserDeviceId: s.device.id, browserFbUserId: s.input.browserFbUserId,
@@ -405,9 +415,6 @@ describe.skipIf(!fixture.enabled)("browser comment durable workflow on disposabl
                     },
                 });
             }
-            const c = (await claim(s.device.id))!;
-            expect(c).toBeTruthy();
-            await permit(s.device.id, c);
             await reportBrowserComment(s.device.id, c.id, c.claimToken, "uncertain");
         }
         expect(await readCommentControl()).toMatchObject({ state: "running" });
@@ -417,7 +424,15 @@ describe.skipIf(!fixture.enabled)("browser comment durable workflow on disposabl
         expect(waiting).toBeTruthy();
         expect(await prisma.autoCommentLog.count({ where: { ruleId: s.ruleId, event: "uncertain_noted" } })).toBeGreaterThanOrEqual(3);
         expect(await prisma.autoCommentLog.findFirst({ where: { ruleId: s.ruleId, event: "rule_paused" } })).toBeNull();
-        expect(await claim(s.device.id)).toMatchObject({ message: "รอคิว" });
+        // Uncertainty does not waive the last dispatch's real group cooldown.
+        expect(await claim(s.device.id)).toBeNull();
+        expect(await prisma.autoCommentJob.findUniqueOrThrow({ where: { id: waiting!.id } })).toMatchObject({ status: "browser_ready", lastError: "รอระยะพักของกลุ่ม" });
+        // Advance fixture dispatch times beyond that cooldown, then make the
+        // deferred row due; production limits and validity checks stay intact.
+        await prisma.autoCommentLog.updateMany({ where: { event: "dispatch" }, data: { createdAt: new Date(Date.now() - 120000) } });
+        await prisma.autoCommentJob.update({ where: { id: waiting!.id }, data: { nextAttemptAt: new Date(0) } });
+        expect(await claim(s.device.id)).toMatchObject({ id: waiting!.id, message: "รอคิว", externalUrl: "https://www.facebook.com/groups/12345/posts/7771/" });
+        expect(await prisma.autoCommentJob.count({ where: { ruleId: s.ruleId, status: "uncertain", attempts: 1 } })).toBe(3);
     });
     it("pauses global control on a Facebook checkpoint block", async () => {
         const s = await setup(), c = (await claim(s.device.id))!;

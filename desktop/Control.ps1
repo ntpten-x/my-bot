@@ -11,6 +11,9 @@ $Ports = Get-DesktopPortSettings $State
 $ViewerPort = $Ports.viewerPort
 $Texts = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'strings.th.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $ViewerUrl = "http://localhost:$ViewerPort/vnc.html?host=localhost&port=$ViewerPort&resize=scale"
+function Test-DesktopRuntimeReady($Data) {
+    return [bool]($Data.supervisor.phase -eq 'running' -and $Data.supervisor.desktop -eq 'running' -and $Data.webReady -and $Data.viewerReady -and $Data.vncListening -and $Data.viewerPort -eq $Ports.viewerPort -and $Data.vncPort -eq $Ports.vncPort)
+}
 if ($Action -in @('Resume', 'Rollback', 'Uninstall', 'Purge')) {
     Add-Type -AssemblyName System.Windows.Forms
     $Prompt = if ($Action -eq 'Resume') { $Texts.resumeConfirm } elseif ($Action -eq 'Rollback') { $Texts.rollbackConfirm } elseif ($Action -eq 'Purge') { $Texts.purgeConfirm } else { $Texts.uninstallConfirm }
@@ -45,7 +48,7 @@ if ($Action -in @('Start', 'Open')) {
                 $Report = & wsl.exe -d $Distro -u mybot -- bash /opt/mybot-desktop/current/desktop/control.sh status
                 if ($LASTEXITCODE -eq 0) {
                     $Data = ($Report -join "`n") | ConvertFrom-Json
-                    if ($Data.supervisor.desktop -eq 'running' -and $Data.viewerPort -eq $ViewerPort -and $Data.vncPort -eq $Ports.vncPort -and $Data.viewerReady -and $Data.vncListening) { $Ready = $true; break }
+                    if (Test-DesktopRuntimeReady $Data) { $Ready = $true; break }
                     $Detail = 'desktop=' + [string]$Data.supervisor.desktop + ' viewerReady=' + [string]$Data.viewerReady + ' vncListening=' + [string]$Data.vncListening
                 } else { $Detail = 'status command failed' }
             }
@@ -105,7 +108,7 @@ if ($Action -eq 'Status') {
     $Report = & wsl.exe -d $Distro -u mybot -- bash /opt/mybot-desktop/current/desktop/control.sh status
     if ($LASTEXITCODE -ne 0) { throw 'Could not read desktop status.' }
     $Data = ($Report -join "`n") | ConvertFrom-Json
-    $Ready = $Data.supervisor.phase -eq 'running' -and $Data.webReady -and $Data.vncListening -and $Data.viewerReady
+    $Ready = Test-DesktopRuntimeReady $Data
     $Message = if ($Ready) { $Texts.statusReady } else { $Texts.statusAttention }
     $InstalledVersion = [string]$State.desktopVersion
     $InstalledExtension = [string]$State.extensionVersion

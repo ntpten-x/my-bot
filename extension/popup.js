@@ -67,19 +67,46 @@ function showPairState(cfg) {
   pairState.appendChild(pill);
 }
 
-chrome.storage.local.get({ apiBase: DEFAULT_BASE, token: "", paused: false, quiet: null }, (cfg) => {
+function showRouteState(cfg) {
+  const route = document.getElementById("routeState");
+  if (!route) return;
+  const mode = cfg.apiBaseMode === "manual" ? "ล็อกไว้" : "อัตโนมัติ";
+  const reason = cfg.apiBaseRoute?.reason === "local_healthy" ? "local พร้อม"
+    : cfg.apiBaseRoute?.reason === "production_healthy" ? "production พร้อม"
+      : cfg.apiBaseRoute?.reason === "comment_in_flight" ? "ค้างงานคอมเมนต์"
+        : cfg.apiBaseRoute?.reason === "manual" ? "ตามที่บันทึก"
+          : cfg.apiBaseRoute?.reason || "ยังไม่ตรวจ";
+  const kind = /localhost|127\.0\.0\.1/.test(String(cfg.apiBase || "")) ? "local" : "production";
+  route.textContent = `เซิร์ฟเวอร์ตอนนี้: ${kind} · ${cfg.apiBase || "-"} (${mode} · ${reason})`;
+}
+
+chrome.storage.local.get({ apiBase: DEFAULT_BASE, apiBaseMode: "auto", apiBaseRoute: null, token: "", paused: false, quiet: null }, (cfg) => {
   apiBase.value = cfg.apiBase;
   token.value = String(cfg.token || "").startsWith("mbd_") ? "" : cfg.token;
   enabled.checked = !cfg.paused;
   showPairState(cfg);
+  showRouteState(cfg);
   if (cfg.quiet && cfg.quiet.reason && Date.now() - cfg.quiet.at < 5 * 60 * 1000) status.textContent = "พักชั่วคราว: " + cfg.quiet.reason;
 });
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== "local" || (!changes.token && !changes.apiBase)) return;
-  chrome.storage.local.get({ apiBase: DEFAULT_BASE, token: "", paused: false }, cfg => {
+  if (area !== "local" || (!changes.token && !changes.apiBase && !changes.apiBaseMode && !changes.apiBaseRoute)) return;
+  chrome.storage.local.get({ apiBase: DEFAULT_BASE, apiBaseMode: "auto", apiBaseRoute: null, token: "", paused: false }, cfg => {
     apiBase.value = cfg.apiBase;
     enabled.checked = !cfg.paused;
     showPairState(cfg);
+    showRouteState(cfg);
+  });
+});
+document.getElementById("routeAuto").addEventListener("click", () => {
+  status.textContent = "กำลังเลือกเซิร์ฟเวอร์อัตโนมัติ…";
+  chrome.runtime.sendMessage({ type: "server-route-now", mode: "auto" }, result => {
+    void chrome.runtime.lastError;
+    if (!result?.ok) return void (status.textContent = "เลือกเซิร์ฟเวอร์อัตโนมัติไม่สำเร็จ");
+    apiBase.value = result.apiBase;
+    status.textContent = result.reason === "local_healthy" ? "ใช้แอปบนเครื่องแล้ว" : result.reason === "production_healthy" ? "ใช้ production แล้ว" : "อัปเดตเซิร์ฟเวอร์แล้ว";
+    chrome.storage.local.get({ apiBase: DEFAULT_BASE, apiBaseMode: "auto", apiBaseRoute: null, token: "", paused: false }, cfg => {
+      showPairState(cfg); showRouteState(cfg);
+    });
   });
 });
 
@@ -129,10 +156,11 @@ document.getElementById("save").addEventListener("click", async () => {
     nextToken = stored.apiBase === parsed.base ? stored.token : "";
     status.textContent = "โทเคนแบบเดิมใช้ได้เฉพาะ localhost — กรุณาจับคู่ด้วยรหัสแทน";
   }
-  const cfg = { apiBase: parsed.base, token: nextToken, paused: !enabled.checked };
+  const cfg = { apiBase: parsed.base, apiBaseMode: "manual", token: nextToken, paused: !enabled.checked };
   await chrome.storage.local.set(cfg);
   showPairState(cfg);
-  if (!status.textContent.startsWith("โทเคนแบบเดิม")) status.textContent = "บันทึกแล้ว";
+  showRouteState({ ...cfg, apiBaseRoute: { reason: "manual" } });
+  if (!status.textContent.startsWith("โทเคนแบบเดิม")) status.textContent = "บันทึกแล้ว (ล็อกเซิร์ฟเวอร์นี้)";
   chrome.runtime.sendMessage({ type: "heartbeat-now" }, () => void chrome.runtime.lastError);
 });
 

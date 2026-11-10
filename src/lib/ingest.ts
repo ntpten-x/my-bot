@@ -18,6 +18,8 @@ import { syncDuplicateLabels } from "./smart/duplicate-labels";
 import { assignProducts } from "./products";
 import { pendingPostWork, runPostProcessing, type PostRevision } from "./post-processing";
 
+const MAX_POST_TEXT_LENGTH = 20_000;
+
 export type IncomingPost = {
   url: string;
   authorName?: string;
@@ -198,7 +200,11 @@ export async function ingestPosts(
   let outsideSource = 0;
   const itemOutcomes = new Map<string, string>();
   for (const raw of input.posts) {
-    const text = raw.text?.replace(/\u0000/g, "").trim().slice(0, 8000);
+    const cleaned = raw.text?.replace(/\u0000/g, "").trim();
+    // Preserve the full API-supported text, including late exclusions. Internal
+    // sources over the limit remain visibly incomplete and cannot authorize comments.
+    const text = cleaned && cleaned.length > MAX_POST_TEXT_LENGTH
+      ? `${cleaned.slice(0, MAX_POST_TEXT_LENGTH - 1)}…` : cleaned;
     if (!text || text.length < 4 || !raw.url) {
       if (raw.url) itemOutcomes.set(normalizeUrl(raw.url), "invalid");
       continue;
@@ -327,7 +333,7 @@ export async function ingestPosts(
       return {
         id: randomUUID(), sourceId: source.id, externalUrl: item.url,
         authorName: (item.raw.authorName || "").slice(0, 200),
-        text: item.raw.text.slice(0, 8000), normalizedText: item.lead.normalizedText.slice(0, 8000),
+        text: item.raw.text, normalizedText: item.lead.normalizedText.slice(0, MAX_POST_TEXT_LENGTH),
         truncated: isTruncatedText(item.raw.text), contentHash: item.lead.hash,
         postedAt: item.postedAt, imagesJson: JSON.stringify(cleanImages(item.raw.images)),
         categoryId: ids.categoryId, subcategoryId: ids.subcategoryId,

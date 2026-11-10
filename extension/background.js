@@ -4,6 +4,7 @@ importScripts("connect.js");
 
 const DEFAULTS = {
   apiBase: "https://my-bot-e6bt.onrender.com",
+  apiBaseMode: "auto",
   token: "",
   // Paired = reading starts on its own; "paused" is the owner's pause switch in the popup.
   paused: false,
@@ -24,6 +25,33 @@ function validApiBase(value) {
   } catch {
     return false;
   }
+}
+
+async function applyServerRoute() {
+  const stored = await chrome.storage.local.get({
+    apiBase: DEFAULTS.apiBase,
+    apiBaseMode: DEFAULTS.apiBaseMode,
+    commentJournal: null,
+  });
+  const picked = await globalThis.MyBotServerRoute.pickServerOrigin({
+    fetchFn: fetch,
+    getURL: path => chrome.runtime.getURL(path),
+    stored,
+    fallbackProduction: DEFAULTS.apiBase,
+  });
+  const current = String(stored.apiBase || "").replace(/\/$/, "");
+  if (picked.origin && picked.origin !== current) {
+    await chrome.storage.local.set({
+      apiBase: picked.origin,
+      apiBaseRoute: { at: Date.now(), reason: picked.reason, mode: picked.mode },
+    });
+    await syncCustomBridge().catch(() => undefined);
+  } else {
+    await chrome.storage.local.set({
+      apiBaseRoute: { at: Date.now(), reason: picked.reason, mode: picked.mode },
+    });
+  }
+  return picked;
 }
 
 async function loadConfig() {
@@ -121,11 +149,50 @@ async function fetchRetry(url, options = {}, { timeoutMs = 45000, retries = 2 } 
   let lastError = null;
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let reader, timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        if (reader) void reader.cancel().catch(() => undefined);
+        reject(new Error("MY-BOT ไม่ตอบภายในเวลาที่กำหนด"));
+      }, timeoutMs);
+    });
     try {
-      const response = await fetch(url, { ...options, signal: controller.signal });
-      if (!RETRY_STATUS.has(response.status) || attempt === retries) return response;
-      lastError = new Error(`MY-BOT ตอบกลับ ${response.status}`);
+      const response = await Promise.race([timeout, (async () => {
+        const response = await fetch(url, { ...options, signal: controller.signal });
+        if (controller.signal.aborted) {
+          void response.body?.cancel().catch(() => undefined);
+          throw new Error("MY-BOT ไม่ตอบภายในเวลาที่กำหนด");
+        }
+        if (RETRY_STATUS.has(response.status) && attempt < retries) {
+          void response.body?.cancel().catch(() => undefined);
+          lastError = new Error(`MY-BOT ตอบกลับ ${response.status}`);
+          return null;
+        }
+        // Buffer the bounded JSON transport while the same timeout is still active.
+        // Returning after headers alone leaves every caller's response.json() unbounded.
+        if (!response.body) return response;
+        reader = response.body.getReader();
+        const chunks = [];
+        let size = 0;
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            size += value.byteLength;
+            if (size > 8 * 1024 * 1024) throw new Error("MY-BOT ตอบกลับข้อมูลใหญ่เกินกำหนด");
+            chunks.push(value);
+          }
+          const body = new Uint8Array(size);
+          let offset = 0;
+          for (const chunk of chunks) { body.set(chunk, offset); offset += chunk.byteLength; }
+          return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+        } finally {
+          void reader.cancel().catch(() => undefined);
+          reader.releaseLock();
+        }
+      })()]);
+      if (response) return response;
     } catch (error) {
       lastError = error && error.name === "AbortError" ? new Error("MY-BOT ไม่ตอบภายในเวลาที่กำหนด") : error;
       if (attempt === retries) throw lastError;
@@ -191,6 +258,7 @@ const OUTBOX_MAX_TOTAL = 400;
 const OUTBOX_MAX_AGE_MS = 72 * 3600000;
 const CAPTURE_JOURNAL_MAX = 400;
 const JOURNAL_CHUNK = 40;
+const INGEST_TEXT_MAX = 20000;
 let outboxLock = Promise.resolve();
 function withOutboxLock(fn) {
   const task = outboxLock.then(fn); outboxLock = task.catch(() => undefined); return task;
@@ -270,15 +338,21 @@ function mergeJournalPosts(existing, incoming) {
 function chunkJournalPosts(posts, meta) {
   const list = (posts || []).filter((post) => post?.url && typeof post.text === "string");
   const chunks = [];
-  for (let offset = 0; offset < list.length; offset += JOURNAL_CHUNK) {
-    chunks.push({
-      id: outboxId(),
-      sourceUrl: meta.sourceUrl,
-      posts: list.slice(offset, offset + JOURNAL_CHUNK),
-      fbUserId: meta.fbUserId || null,
-      apiBase: meta.apiBase || null,
-      at: Date.now(),
-    });
+  // Never clip a post: exclusions after the cutoff must not disappear. Keep
+  // oversized originals for review, separately from peers the API can accept.
+  for (const oversized of [false, true]) {
+    const group = list.filter(post => (post.text.length > INGEST_TEXT_MAX) === oversized);
+    for (let offset = 0; offset < group.length; offset += JOURNAL_CHUNK) {
+      chunks.push({
+        id: outboxId(),
+        sourceUrl: meta.sourceUrl,
+        posts: group.slice(offset, offset + JOURNAL_CHUNK),
+        fbUserId: meta.fbUserId || null,
+        apiBase: meta.apiBase || null,
+        at: Date.now(),
+        ...(oversized ? { problem: "validation_text_too_long" } : {}),
+      });
+    }
   }
   return chunks;
 }
@@ -348,6 +422,7 @@ async function promoteCaptureJournalUnlocked() {
       apiBase,
       batchId: outboxId(),
       at: entry.at || Date.now(),
+      ...(entry.problem ? { problem: entry.problem } : {}),
     };
     outbox.push(queued);
     lastQueued = queued;
@@ -540,6 +615,7 @@ let beating = false;
 
 async function heartbeat() {
   if (beating) return;
+  await applyServerRoute().catch(() => undefined);
   const cfg = await loadConfig();
   if (!cfg.token) return;
   beating = true;
@@ -626,6 +702,9 @@ async function heartbeat() {
     await chrome.storage.local.set({ lastHeartbeat: { at: Date.now(), status: 0 } });
   } finally {
     beating = false;
+    // Heartbeat is the most reliable MV3 wake. Nudge discovery here so a dropped
+    // mybot-tick alarm cannot leave sources idle while telemetry still looks alive.
+    void cycle();
   }
 }
 
@@ -1764,10 +1843,21 @@ async function processFullTextQueue(cfg, groups, options = {}) {
 let cycling = false;
 const RUN_LOCK_MS = 12 * 60 * 1000;
 
+// True when this worker already holds a live run lock. A hung cycle that never hit finally
+// leaves `cycling` true forever unless we treat an expired/missing session lock as dead.
+async function runLockBusy() {
+  if (!cycling) return false;
+  const stored = await chrome.storage.session.get({ runLock: null }).catch(() => ({ runLock: null }));
+  const lock = stored.runLock;
+  if (lock && lock.boot === BOOT_ID && lock.until > Date.now()) return true;
+  cycling = false;
+  return false;
+}
+
 // One run at a time. The lock is also saved (with this worker's boot id and an expiry) so the popup
 // and a restarted service worker can see it; a lock from an older boot is dead and is ignored.
 async function takeRunLock(kind) {
-  if (cycling) return false;
+  if (await runLockBusy()) return false;
   cycling = true;
   fullTextBudget = MAX_FULL_TEXT_PER_ROUND;
   const stored = await chrome.storage.session.get({ runLock: null }).catch(() => ({ runLock: null }));
@@ -1785,8 +1875,19 @@ async function releaseRunLock() {
   await chrome.storage.session.remove("runLock").catch(() => undefined);
 }
 
+async function dropProblemOutbox() {
+  try {
+    // Reconcile under the enqueue lock. Rejected/expired originals remain
+    // durable for owner review and continue to consume bounded storage.
+    await drainCaptureJournal();
+  } catch {
+    // Storage mid-reload — next boot retries.
+  }
+}
+
 async function cycle() {
-  if (cycling) return;
+  if (await runLockBusy()) return;
+  await applyServerRoute().catch(() => undefined);
   const cfg = await loadConfig();
   if (cfg.paused || cfg.accountPaused || !cfg.token) return;
   if ((await chrome.storage.local.get({ outboxBlocked: false })).outboxBlocked) {
@@ -2000,7 +2101,7 @@ async function forwardManual(message, sender) {
 }
 
 async function pollTasks() {
-  if (cycling) return;
+  if (await runLockBusy()) return;
   const cfg = await loadConfig();
   if (cfg.paused || cfg.accountPaused || !cfg.token) return;
   if (!(await takeRunLock("tasks"))) return;
@@ -2027,11 +2128,11 @@ async function pollTasks() {
 function commentWorkerDeps() {
   return { loadConfig, postJson, currentFbUserId, base, waitComplete, sleep, rememberError };
 }
-function armAlarms(existing = []) {
-  for (const [name, periodInMinutes] of [["mybot-tick", 1], ["mybot-tasks", 0.5], ["mybot-heartbeat", 1]]) {
-    if (!existing.some(alarm => alarm.name === name && alarm.periodInMinutes === periodInMinutes)) {
-      void chrome.alarms.create(name, { periodInMinutes }).catch(() => undefined);
-    }
+function armAlarms(_existing = []) {
+  // Always (re)create by name. Chrome may drop or clamp an older period; skipping
+  // when a same-named alarm exists left discovery idle while heartbeat still ran.
+  for (const [name, periodInMinutes] of [["mybot-tick", 1], ["mybot-tasks", 1], ["mybot-heartbeat", 1]]) {
+    void chrome.alarms.create(name, { periodInMinutes }).catch(() => undefined);
   }
 }
 
@@ -2043,13 +2144,13 @@ chrome.runtime.onInstalled.addListener((details) => {
       if (!s.migrated180) return chrome.storage.local.set({ paused: false, migrated180: true }).then(() => chrome.storage.local.remove(["enabled", "dedicatedWindow"]));
     }).catch(() => undefined);
   }
-  void syncCustomBridge();
+  void applyServerRoute().then(() => syncCustomBridge()).catch(() => undefined);
   armAlarms();
   void heartbeat();
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  void syncCustomBridge();
+  void applyServerRoute().then(() => syncCustomBridge()).catch(() => undefined);
   armAlarms();
   void heartbeat();
 });
@@ -2068,9 +2169,12 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 
 // A fresh service worker (after Chrome stopped the old one) closes readers the old one left open
-// and makes sure the alarms exist.
+// and makes sure the alarms exist. Reconcile transport without discarding
+// rejected or expired batches that have not received an owner review.
+void dropProblemOutbox().catch(() => undefined);
 void closeOrphanReaders().catch(() => undefined);
 void chrome.alarms.getAll().then(alarms => armAlarms(alarms)).catch(() => undefined);
+void applyServerRoute().catch(() => undefined);
 
 async function handleTabLifecycleMessage(message, sender) {
   if (sender.url !== chrome.runtime.getURL("popup.html") || !["bot-tabs-status", "bot-tabs-cleanup"].includes(message?.type)) return null;
@@ -2107,6 +2211,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "server-route-now" && sender.url === chrome.runtime.getURL("popup.html")) {
+    const mode = message.mode === "manual" ? "manual" : "auto";
+    chrome.storage.local.set({ apiBaseMode: mode }).then(() => applyServerRoute())
+      .then(picked => {
+        sendResponse({ ok: true, apiBase: picked.origin, reason: picked.reason, mode: picked.mode });
+        void heartbeat();
+      })
+      .catch(() => sendResponse({ ok: false }));
+    return true;
+  }
   if (message?.type === "heartbeat-now") {
     heartbeat()
       .then(() => {

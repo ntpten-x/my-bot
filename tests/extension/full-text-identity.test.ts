@@ -23,7 +23,7 @@ it("discovers every due group with bounded parallelism then drains detail work o
  async function mapPool(items: {id:string}[], _concurrency:number, worker:(g:{id:string},i:number)=>Promise<unknown>) {
    return Promise.all(items.map((item, index) => worker(item, index)));
  }
- const context=vm.createContext({Date,setTimeout,clearTimeout,Math,cycling:false,RUN_LOCK_MS:720000,Promise,PARALLEL_SCRAPE:3,mapPool,
+ const context=vm.createContext({Date,setTimeout,clearTimeout,Math,cycling:false,runLockBusy:async()=>false,applyServerRoute:async()=>{},RUN_LOCK_MS:720000,Promise,PARALLEL_SCRAPE:3,mapPool,
  chrome:{storage:{local:{get:async(d:object)=>({...d,outboxBlocked:false,fbIdentity:null,throttledAt:0}),set:async()=>{}}}},
  loadConfig:async()=>({token:"synthetic",paused:false,schedules:{}}),takeRunLock:async()=>true,releaseRunLock:async()=>{},closeOrphanReaders:async()=>{},
  probeFacebookIdentity:async()=>null,
@@ -73,7 +73,7 @@ it.each([3, 4])("gives %i due groups and tail detail work one shared cycle budge
  const calls:{id:string;deadlineMs:number}[]=[];
  const details:{deadlineMs:number;budgetMs:number}[]=[];
  class Clock extends Date{static now(){return now;}}
- const context=vm.createContext({Date:Clock,Math,cycling:false,PARALLEL_SCRAPE:2,
+ const context=vm.createContext({Date:Clock,Math,cycling:false,runLockBusy:async()=>false,applyServerRoute:async()=>{},PARALLEL_SCRAPE:2,
  chrome:{storage:{local:{get:async(d:object)=>({...d}),set:async()=>{}}}},
  loadConfig:async()=>({token:"synthetic",paused:false,schedules:{}}),takeRunLock:async()=>true,releaseRunLock:async()=>{},closeOrphanReaders:async()=>{},
  probeFacebookIdentity:async()=>null,currentFbUserId:async()=>"",base:()=>"server",pruneContinuations:async()=>{},recoveryKey:()=>"key",

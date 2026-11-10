@@ -24,10 +24,13 @@
     <button id="connectAuto">เปิด MY-BOT และเชื่อมต่ออัตโนมัติ</button>
     <p style="margin-top:6px">หากยังไม่ได้เข้าสู่ระบบ ให้ล็อกอิน MY-BOT แล้วระบบจะเชื่อมต่อให้ ไม่ต้องกรอก URL หรือรหัสจับคู่</p>
     <div id="pairState" style="margin-top:8px"></div>
+    <p id="routeState" style="margin-top:6px;font-size:12px">กำลังเลือกเซิร์ฟเวอร์…</p>
+    <button id="routeAuto" class="ghost">ใช้เซิร์ฟเวอร์อัตโนมัติ (local ถ้ามี)</button>
     <details>
     <summary>เชื่อมต่อแบบเดิมหรือเปลี่ยนเซิร์ฟเวอร์</summary>
     <label for="apiBase">ที่อยู่เซิร์ฟเวอร์ MY-BOT</label>
     <input id="apiBase" placeholder="https://my-bot-e6bt.onrender.com" />
+    <p>ค่าเริ่มต้นเลือกอัตโนมัติ: ถ้ามีแอปที่ http://localhost:8001 จะใช้เครื่องนี้ ไม่งั้นใช้ production จากแพ็กเกจ บันทึกด้านล่างจะล็อกที่อยู่จนกด “ใช้เซิร์ฟเวอร์อัตโนมัติ” อีกครั้ง</p>
     <p>หลังติดตั้งหรืออัปเดต Extension ถ้ายังไม่เริ่มอ่าน ให้กด Reload ที่ chrome://extensions แล้วเปิด facebook.com ค้างไว้ (หรือรีเฟรชแท็บ Facebook)</p>
     <label for="code">รหัสจับคู่ (จากหน้า “ส่วนขยาย” บนเว็บ)</label>
     <input id="code" maxlength="9" placeholder="ABCD-EFGH" autocomplete="off" />

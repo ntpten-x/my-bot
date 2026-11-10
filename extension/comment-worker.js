@@ -12,6 +12,54 @@
     "submit_not_ready",
     "submit_not_unique_or_ready",
   ]);
+  // Match the server's message-image upload contract; never buffer arbitrary downloads.
+  const IMAGE_MAX_BYTES = 2 * 1024 * 1024;
+  async function bounded(work, timeoutMs) {
+    let timer;
+    try {
+      return await Promise.race([
+        Promise.resolve().then(work),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("comment response budget exhausted")), Math.max(1, timeoutMs)); }),
+      ]);
+    } finally { clearTimeout(timer); }
+  }
+  async function downloadImage(url, timeoutMs) {
+    const controller = new AbortController();
+    let reader;
+    try {
+      return await bounded(async () => {
+        const response = await fetch(String(url), { method: "GET", signal: controller.signal });
+        if (!response.ok) throw new Error("image unavailable");
+        const mime = (response.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+        if (!["image/jpeg", "image/png", "image/webp"].includes(mime)) throw new Error("unsupported image type");
+        const declared = Number(response.headers.get("content-length"));
+        if (declared > IMAGE_MAX_BYTES) throw new Error("image too large");
+        let bytes;
+        if (response.body?.getReader) {
+          reader = response.body.getReader();
+          const chunks = [];
+          let size = 0;
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            size += value.byteLength;
+            if (size > IMAGE_MAX_BYTES) throw new Error("image too large");
+            chunks.push(value);
+          }
+          bytes = new Uint8Array(size);
+          let offset = 0;
+          for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+        } else {
+          bytes = new Uint8Array(await response.arrayBuffer());
+        }
+        if (!bytes.length || bytes.length > IMAGE_MAX_BYTES) throw new Error("invalid image size");
+        return { bytes, mime };
+      }, timeoutMs);
+    } finally {
+      controller.abort();
+      if (reader) void reader.cancel().catch(() => undefined);
+    }
+  }
   async function pageAction(tabId, kind, payload, timeoutMs = 5000) {
     let timer;
     try {
@@ -46,9 +94,12 @@
     };
     let tabId, owned, job, cfg, authorizationRequested = false, sendInvoked = false, reportAttempted = false;
     const request = async body => {
-      const response = await deps.postJson(cfg, "/api/v1/extension/comments", body, { retries: 0, timeoutMs: body.action === "report" ? 15000 : Math.min(15000, remaining()) });
-      if (!response.ok) throw new Error("comment request rejected");
-      return response.json();
+      const timeoutMs = body.action === "report" ? 15000 : Math.min(15000, remaining());
+      return bounded(async () => {
+        const response = await deps.postJson(cfg, "/api/v1/extension/comments", body, { retries: 0, timeoutMs });
+        if (!response.ok) throw new Error("comment request rejected");
+        return response.json();
+      }, timeoutMs);
     };
     const report = async (outcome, commentUrl, reason) => {
       reportAttempted = true;
@@ -81,14 +132,7 @@
       let imagePayload = {};
       if (job.imageUrl) {
         try {
-          const imageResponse = await fetch(String(job.imageUrl), { method: "GET" });
-          if (!imageResponse.ok) {
-            await report("failed", undefined, "image_attach_failed");
-            return;
-          }
-          const mime = imageResponse.headers.get("content-type") || "image/jpeg";
-          const buffer = await imageResponse.arrayBuffer();
-          const bytes = new Uint8Array(buffer);
+          const { bytes, mime } = await downloadImage(job.imageUrl, Math.min(15000, remaining()));
           let binary = "";
           for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
           imagePayload = {
@@ -174,8 +218,11 @@
         pendingReport = { outcome: observed?.ok ? "observed" : journal.state === "sending" ? "uncertain" : journal.state === "authorizing" ? "not_sent" : "failed", ...(observed?.commentUrl ? { commentUrl: observed.commentUrl } : {}) };
         await chrome.storage.local.set({ commentJournal: { ...journal, pendingReport } });
       }
-      const response = await deps.postJson(cfg, "/api/v1/extension/comments", { action: "report", id: journal.id, claimToken: journal.claimToken, ...pendingReport }, { retries: 0, timeoutMs: 15000 });
-      if (response.ok && (await response.json()).ok === true) await chrome.storage.local.remove("commentJournal");
+      const acknowledged = await bounded(async () => {
+        const response = await deps.postJson(cfg, "/api/v1/extension/comments", { action: "report", id: journal.id, claimToken: journal.claimToken, ...pendingReport }, { retries: 0, timeoutMs: 15000 });
+        return response.ok && (await response.json()).ok === true;
+      }, 15000);
+      if (acknowledged) await chrome.storage.local.remove("commentJournal");
     } catch { /* no retry of sending */ }
     finally {
       await closeCommentTab(owned).catch(() => undefined);

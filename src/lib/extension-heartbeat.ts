@@ -4,7 +4,7 @@ import { upsertSettings } from "./settings";
 import { touchExtension } from "./extension-status";
 
 // Version this MY-BOT build expects from extension/manifest.json (tests keep the two in sync).
-export const EXPECTED_EXTENSION_VERSION = "1.11.28";
+export const EXPECTED_EXTENSION_VERSION = "1.11.30";
 /** Oldest patch still allowed for scrape/read work within the current minor line. */
 export const MINIMUM_EXTENSION_VERSION = "1.11.19";
 
@@ -26,14 +26,16 @@ export function isCurrentExtensionVersion(version: string | null | undefined) {
   return String(version || "").trim() === EXPECTED_EXTENSION_VERSION;
 }
 
-/** Accept the expected build and recent patches on the same minor line; reject older majors/minors. */
+/** Accept the expected minor line from MINIMUM upward (including patches newer than EXPECTED during local rollout). */
 export function isCompatibleExtensionVersion(version: string | null | undefined) {
   const value = String(version || "").trim();
   if (!value) return false;
   if (isCurrentExtensionVersion(value)) return true;
+  const parsed = parseExtensionVersion(value);
+  const expected = parseExtensionVersion(EXPECTED_EXTENSION_VERSION);
   const againstMin = compareExtensionVersion(value, MINIMUM_EXTENSION_VERSION);
-  const againstExpected = compareExtensionVersion(value, EXPECTED_EXTENSION_VERSION);
-  return againstMin != null && againstExpected != null && againstMin >= 0 && againstExpected <= 0;
+  if (!parsed || !expected || againstMin == null || againstMin < 0) return false;
+  return parsed.major === expected.major && parsed.minor === expected.minor;
 }
 
 export function extensionVersionFromRequest(request: Request) {

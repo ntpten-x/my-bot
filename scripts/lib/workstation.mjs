@@ -1,7 +1,36 @@
 import net from 'node:net';
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 
 export const WORKSTATION_INTERVAL_MS = 15_000;
 export const restartDelay = failures => Math.min(300_000, 3000 * 2 ** Math.min(7, Math.max(0, failures - 1)));
+
+const requestId = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
+export async function queueWorkstationRequest(directory, request) {
+  if (!requestId.test(request?.session) || !requestId.test(request?.nonce) || !['stop', 'resume-desktop'].includes(request?.action)) throw new Error('Invalid workstation request.');
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const file = path.join(directory, `${request.session}.${request.nonce}.json`);
+  // Separate exclusive files keep concurrent Stop and Resume commands from overwriting each other.
+  await writeFile(file, JSON.stringify(request), { mode: 0o600, flag: 'wx' });
+  return file;
+}
+
+export async function readWorkstationRequests(directory, session) {
+  if (!requestId.test(session)) return [];
+  let files;
+  try { files = await readdir(directory); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+  const requests = [];
+  for (const name of files) {
+    const suffix = name.slice(session.length + 1, -5);
+    if (!name.startsWith(`${session}.`) || !name.endsWith('.json') || !requestId.test(suffix)) continue;
+    const file = path.join(directory, name);
+    try {
+      const request = JSON.parse(await readFile(file, 'utf8'));
+      if (request.session === session && request.nonce === suffix && ['stop', 'resume-desktop'].includes(request.action)) requests.push({ file, request });
+    } catch { /* A command still being written is retried on the next pass. */ }
+  }
+  return requests.sort((a, b) => Number(b.request.action === 'stop') - Number(a.request.action === 'stop'));
+}
 
 // Listener availability alone cannot prove the desktop supervisor is progressing.
 export function desktopComponentsReady(details, session, now = Date.now()) {

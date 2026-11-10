@@ -5,6 +5,7 @@ import { constants } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createInterface } from 'node:readline';
 import { desktopPlan, desktopEnvironment } from './lib/bot-desktop.mjs';
 import { findBrowser } from './lib/bot-browser.mjs';
 import { profileInUse } from './lib/browser-profile.mjs';
@@ -16,8 +17,11 @@ const children = [];
 let stopping = false;
 const recoveryTimers = new Set();
 const componentState = {};
+const failedComponents = new Map();
+const handledComponentRequests = new Set();
 let stateWrite = Promise.resolve();
 let heartbeatTimer;
+let commandReader;
 function persistComponents() {
   const state = JSON.stringify({ session: process.env.MYBOT_WORKSTATION_SESSION || null, at: new Date().toISOString(), phase: stopping ? 'stopped' : Object.values(componentState).some(value => ['review', 'recovering'].includes(value)) ? 'degraded' : 'running', components: componentState });
   stateWrite = stateWrite.catch(() => undefined).then(async () => {
@@ -35,6 +39,7 @@ function shutdown(code) {
   if (stopping) return;
   stopping = true;
   clearInterval(heartbeatTimer);
+  commandReader?.close();
   if (Object.keys(componentState).length) persistComponents();
   for (const timer of recoveryTimers) clearTimeout(timer);
   // Signal only process groups created by this supervisor; no PID files or global pkill.
@@ -51,6 +56,7 @@ function shutdown(code) {
 }
 function start(name, executable, args, env, failures = 0) {
   if (stopping) throw new Error('The desktop is stopping.');
+  failedComponents.delete(name);
   const child = spawn(executable, args, { cwd: root, env, detached: true, stdio: name === 'Browser' ? 'ignore' : ['ignore', 'ignore', 'pipe'], shell: false });
   const startedAt = Date.now();
   // Do not log browser output or authority/profile contents.
@@ -68,7 +74,11 @@ function start(name, executable, args, env, failures = 0) {
     if (['Desktop viewer', 'Web viewer', 'Window manager', 'Desktop panel'].includes(name)) {
       const attempts = Date.now() - startedAt > 60_000 ? 1 : failures + 1;
       recordComponent(name, attempts > 5 ? 'review' : 'recovering');
-      if (attempts > 5) { console.error(`${name} needs owner review after 5 retries. Chrome was left running.`); return; }
+      if (attempts > 5) {
+        failedComponents.set(name, { executable, args, env });
+        console.error(`${name} needs owner review after 5 retries. Chrome was left running.`);
+        return;
+      }
       const delay = Math.min(60_000, 1000 * 2 ** (attempts - 1));
       console.error(`${name} stopped; retrying in ${delay / 1000}s without restarting Chrome.`);
       const timer = setTimeout(() => { recoveryTimers.delete(timer); if (!stopping) start(name, executable, args, env, attempts); }, delay);
@@ -82,6 +92,20 @@ function start(name, executable, args, env, failures = 0) {
   child.once('error', exited);
   child.once('exit', exited);
   return child;
+}
+function handleComponentRequest(request) {
+  const session = process.env.MYBOT_WORKSTATION_SESSION;
+  if (stopping || !session || request?.session !== session || request.action !== 'resume-components' ||
+    typeof request.nonce !== 'string' || !/^[a-zA-Z0-9-]{1,128}$/.test(request.nonce) || handledComponentRequests.has(request.nonce)) return 0;
+  handledComponentRequests.add(request.nonce);
+  if (handledComponentRequests.size > 256) handledComponentRequests.delete(handledComponentRequests.values().next().value);
+  let resumed = 0;
+  for (const [name, spec] of failedComponents) {
+    if (componentState[name] !== 'review') continue;
+    start(name, spec.executable, spec.args, spec.env);
+    resumed++;
+  }
+  return resumed;
 }
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function waitFor(test, label) {
@@ -255,6 +279,13 @@ try {
       start('Web viewer', 'websockify', plan.proxy, env);
       await waitFor(() => isListening(plan.viewerPort), 'Web viewer');
       start('Browser', browser, plan.chrome, env);
+      if (process.env.MYBOT_WORKSTATION_SESSION && !process.stdin.isTTY) {
+        commandReader = createInterface({ input: process.stdin, terminal: false });
+        commandReader.on('line', line => {
+          if (line.length > 512) return;
+          try { handleComponentRequest(JSON.parse(line)); } catch { /* Invalid commands cannot restart Chrome. */ }
+        });
+      }
       heartbeatTimer = setInterval(persistComponents, 15_000);
       heartbeatTimer.unref();
       console.log(`Bot desktop started. Open ${plan.viewer} and enter your local viewer password.`);

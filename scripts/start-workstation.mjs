@@ -2,16 +2,16 @@ import { spawn, execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { open, readFile, writeFile, rename, mkdir, chmod } from 'node:fs/promises';
+import { open, readFile, writeFile, rename, mkdir, chmod, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { desktopAction, desktopComponentsReady, desktopPorts, portOpen, webReady, viewerReady, restartDelay, workstationConfig, WORKSTATION_INTERVAL_MS } from './lib/workstation.mjs';
+import { desktopAction, desktopComponentsReady, desktopPorts, portOpen, webReady, viewerReady, restartDelay, workstationConfig, queueWorkstationRequest, readWorkstationRequests, WORKSTATION_INTERVAL_MS } from './lib/workstation.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dataRoot = process.env.MYBOT_DATA_ROOT || path.join(root, 'data');
 const runtime = path.join(dataRoot, 'bot-desktop');
 const statusFile = path.join(runtime, 'workstation.json');
-const requestFile = path.join(runtime, 'workstation-request.json');
+const requestDirectory = path.join(runtime, 'workstation-requests');
 const args = process.argv.slice(2);
 const readJson = async file => { try { return JSON.parse(await readFile(file, 'utf8')); } catch { return null; } };
 async function saveJson(file, value) {
@@ -47,7 +47,7 @@ async function main() {
   }
   if (['--stop', '--resume-desktop'].includes(args[0])) {
     if (!fresh(current)) throw new Error('The workstation supervisor is not running.');
-    await saveJson(requestFile, { session: current.session, action: args[0].slice(2), nonce: randomUUID() });
+    await queueWorkstationRequest(requestDirectory, { session: current.session, action: args[0].slice(2), nonce: randomUUID() });
     console.log('Request saved. The supervisor checks it within 15 seconds. Existing unmanaged services are left running.');
     return;
   }
@@ -77,15 +77,16 @@ async function main() {
   const state = { session: randomUUID(), phase: 'starting', at: new Date().toISOString(),
     web: 'checking', desktop: 'checking', webRestarts: 0, desktopRestarts: 0, mode: config.mode, serverOrigin: config.serverOrigin, ...ports };
   let stopping = false, firstCheck = true, desktopAttempted = false, webChild = null, desktopChild = null;
-  let webFailures = 0, webRetryAt = 0, desktopExited = false, lastRequest = '';
+  let webFailures = 0, webRetryAt = 0, desktopExited = false;
   let webUnhealthy = 0, webStartedAt = 0, webTerminating = false;
   const children = new Set();
   const persist = async () => { state.at = new Date().toISOString(); await saveJson(statusFile, state); };
   const start = (name, executable, childArgs, onExit) => {
     if (stopping) return null;
-    const child = spawn(executable, childArgs, { cwd: root, detached: true, stdio: ['ignore', 'inherit', 'inherit'], shell: false,
+    const child = spawn(executable, childArgs, { cwd: root, detached: true, stdio: [name === 'Isolated desktop' ? 'pipe' : 'ignore', 'inherit', 'inherit'], shell: false,
       env: { ...process.env, MYBOT_WORKSTATION_SESSION: state.session } });
     children.add(child);
+    child.stdin?.on('error', () => log(`${name}: control channel closed; inspect status before retrying.`));
     let finished = false;
     const done = () => { if (finished) return; finished = true; children.delete(child); if (!stopping) onExit(); };
     child.once('error', done); child.once('exit', done);
@@ -106,16 +107,20 @@ async function main() {
   await persist();
   try {
     while (!stopping) {
-      const request = await readJson(requestFile);
-      const requestText = JSON.stringify(request);
-      if (request?.session === state.session && requestText !== lastRequest) {
-        lastRequest = requestText;
-        if (request.action === 'stop') { shutdown(); break; }
-        if (request.action === 'resume-desktop' && !desktopChild) {
-          firstCheck = true; desktopAttempted = false; desktopExited = false;
-          state.desktopRestarts++;
+      for (const { file, request } of await readWorkstationRequests(requestDirectory, state.session)) {
+        if (request.action === 'stop') { await unlink(file).catch(() => undefined); shutdown(); break; }
+        if (request.action === 'resume-desktop') {
+          if (desktopChild) {
+            // Only this owned child's stream can receive the command. Adopted desktops are never signalled.
+            if (desktopChild.stdin?.writable) desktopChild.stdin.write(`${JSON.stringify({ ...request, action: 'resume-components' })}\n`);
+          } else {
+            firstCheck = true; desktopAttempted = false; desktopExited = false;
+            state.desktopRestarts++;
+          }
         }
+        await unlink(file).catch(() => undefined);
       }
+      if (stopping) break;
       const healthy = await webReady(fetch, config.serverOrigin);
       state.web = healthy ? (config.mode === 'remote' ? 'remote' : webChild ? 'running' : 'existing') : 'unavailable';
       if (healthy) { webFailures = 0; webUnhealthy = 0; }

@@ -256,7 +256,7 @@ export async function prepareBrowserComments(assertActive: () => Promise<void>, 
     }, { timeout: 20000, maxWait: 20000 });
   }
   // One transaction per job keeps the global control lock short on remote Postgres.
-  const jobs = await prisma.autoCommentJob.findMany({ where: { deliveryMode: "extension", status: "pending_ai", nextAttemptAt: { lte: new Date() } }, take: 50, orderBy: { nextAttemptAt: "asc" }, select: { id: true } });
+  const jobs = await prisma.autoCommentJob.findMany({ where: { deliveryMode: "extension", status: "pending_ai", nextAttemptAt: { lte: new Date() }, rule: { enabled: true, pausedReason: "" } }, take: 50, orderBy: { nextAttemptAt: "asc" }, select: { id: true } });
   for (const candidate of jobs) {
     if (Date.now() >= (options.deadlineMs ?? Infinity)) break;
     await assertActive();
@@ -287,8 +287,10 @@ export async function claimBrowserComment(deviceId: string, fbUserId: string) {
     if (!mayRun(control) || control.dryRun) return null;
     if (await tx.autoCommentJob.findFirst({ where: { deliveryMode: "extension", browserDeviceId: deviceId, status: { in: ["claimed", "sending"] } } })) return null;
     const now = new Date();
+    // Parked rules keep their durable rows, but must not fill the bounded candidate page.
+    // valid() still rechecks every consent/revision/account condition under this lock.
     const where = { deliveryMode: "extension", browserDeviceId: deviceId, browserFbUserId: fbUserId,
-      status: "browser_ready", generation: control.generation, dryRun: false, nextAttemptAt: { lte: now } };
+      status: "browser_ready", generation: control.generation, dryRun: false, nextAttemptAt: { lte: now }, rule: { enabled: true, pausedReason: "" } };
     const globalDelay = await globalDispatchDelay(tx, control, now);
     if (globalDelay) {
       await tx.autoCommentJob.updateMany({ where, data: { nextAttemptAt: globalDelay.retryAt, lastError: globalDelay.reason } });

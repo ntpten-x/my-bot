@@ -15,7 +15,7 @@ function harness(enabled = true, failAuthorize = false, authorizeDelay = 0) {
     if (body.action === "authorize" && failAuthorize) throw new Error("lost authorization response");
     return { ok: true, json: async () => body.action === "claim" ? { job: { id: "job", claimToken: "synthetic-claim", externalUrl: "https://www.facebook.com/groups/12345/posts/8888/", fbUserId: "99887766", message: "ข้อความทดสอบ" } } : body.action === "authorize" ? { grant: { ttlMs: 3000 } } : { ok: true } };
   });
-  const context = vm.createContext({ Date: Clock, URL, setTimeout, clearTimeout, chrome: { tabs, scripting: { executeScript: execute }, storage: { session: {get: async (defaults:object)=>({...defaults,...structuredClone(session)}),set: async (value:object)=>Object.assign(session,structuredClone(value))}, local: {
+  const context = vm.createContext({ Date: Clock, URL, setTimeout, clearTimeout, AbortController, btoa, fetch: vi.fn(), chrome: { tabs, scripting: { executeScript: execute }, storage: { session: {get: async (defaults:object)=>({...defaults,...structuredClone(session)}),set: async (value:object)=>Object.assign(session,structuredClone(value))}, local: {
     get: async (defaults: object) => ({ ...defaults, ...structuredClone(stored) }),
     set: async (value: object) => Object.assign(stored, structuredClone(value)),
     remove: async (key: string) => { delete stored[key]; },
@@ -23,10 +23,10 @@ function harness(enabled = true, failAuthorize = false, authorizeDelay = 0) {
   vm.runInContext(readFileSync("extension/focus.js", "utf8"), context);
   vm.runInContext(readFileSync("extension/tab-lifecycle.js", "utf8"), context);
   vm.runInContext(readFileSync("extension/comment-worker.js", "utf8"), context);
-  const worker = context.MyBotCommentWorker as { run(deps: object): Promise<boolean | undefined>; recover(deps: object): Promise<void>; drain(deps: object): Promise<void> };
+  const worker = context.MyBotCommentWorker as { run(deps: object): Promise<boolean | undefined>; recover(deps: object): Promise<void>; drain(deps: object): Promise<void>; isBusy(): boolean };
   const deps = { loadConfig: async () => ({ apiBase: "https://owner.example", token: "mbd_synthetic", paused: false }), base: (cfg: { apiBase: string }) => cfg.apiBase,
     currentFbUserId: async () => "99887766", postJson, waitComplete: async () => undefined, sleep: async (ms: number) => { clock+=ms; }, rememberError: vi.fn(async () => undefined) };
-  return { worker, deps, stored, session, execute, tabs, postJson, advance: (ms: number) => { clock+=ms; }, now:()=>clock };
+  return { worker, deps, stored, session, execute, tabs, postJson, context, advance: (ms: number) => { clock+=ms; }, now:()=>clock };
 }
 it("receives only server-approved work after pairing even when the obsolete local toggle is off", async () => {
   const h = harness(false); await h.worker.run(h.deps);
@@ -279,4 +279,103 @@ it('bounds observation work within the claim lease and reports uncertainty witho
   expect(h.execute.mock.calls.filter(([call])=>call.args[0]==='send')).toHaveLength(1);
   expect(h.postJson.mock.calls.filter(([, , body])=>body.action==='report').map(([, , body])=>body.outcome)).toEqual(['uncertain']);
   expect(h.tabs.remove).toHaveBeenCalledWith(1);
+});
+
+it.each(['claim', 'report'])('releases the comment runner when the %s response body stalls', async action => {
+  vi.useFakeTimers();
+  try {
+    const h = harness(); const original = h.postJson.getMockImplementation()!;
+    h.postJson.mockImplementation(async (cfg, path, body) => body.action === action
+      ? { ok: true, json: () => new Promise(() => {}) }
+      : original(cfg, path, body));
+    let finished = false;
+    const work = h.worker.run(h.deps).finally(() => { finished = true; });
+    await vi.advanceTimersByTimeAsync(16000);
+    expect(finished).toBe(true);
+    await work;
+    expect(h.worker.isBusy()).toBe(false);
+    expect(h.session.commentFocusLease || null).toBeNull();
+    if (action === 'report') {
+      expect(h.stored.commentJournal).toMatchObject({ pendingReport: { outcome: 'observed' } });
+      expect(h.execute.mock.calls.filter(([call]) => call.args[0] === 'send')).toHaveLength(1);
+    } else expect(h.tabs.create).not.toHaveBeenCalled();
+  } finally { vi.useRealTimers(); }
+});
+
+it('retains the journal and releases recovery when a report response body stalls', async () => {
+  vi.useFakeTimers();
+  try {
+    const h = harness();
+    h.stored.commentJournal = { id: 'old', claimToken: 'synthetic-old', apiBase: 'https://owner.example', state: 'sending', pendingReport: { outcome: 'uncertain' } };
+    h.postJson.mockResolvedValue({ ok: true, json: () => new Promise(() => {}) });
+    let finished = false;
+    const work = h.worker.recover(h.deps).finally(() => { finished = true; });
+    await vi.advanceTimersByTimeAsync(16000);
+    expect(finished).toBe(true);
+    await work;
+    expect(h.worker.isBusy()).toBe(false);
+    expect(h.stored.commentJournal).toMatchObject({ pendingReport: { outcome: 'uncertain' } });
+    expect(h.execute).not.toHaveBeenCalled();
+  } finally { vi.useRealTimers(); }
+});
+
+it.each(['headers', 'body'])('aborts an image stalled at %s and reports without requesting a send grant', async phase => {
+  vi.useFakeTimers();
+  try {
+    const h = harness(); const original = h.postJson.getMockImplementation()!;
+    h.postJson.mockImplementation(async (cfg, path, body) => {
+      if (body.action === 'claim') return { ok: true, json: async () => ({ job: { id: 'job', claimToken: 'synthetic-claim', externalUrl: 'https://www.facebook.com/groups/12345/posts/8888/', imageUrl: 'https://images.example/stalled' } }) };
+      return original(cfg, path, body);
+    });
+    let signal: AbortSignal | undefined;
+    h.context.fetch = vi.fn((_url, options) => {
+      signal = options?.signal;
+      return phase === 'headers' ? new Promise(() => {}) : Promise.resolve({ ok: true, headers: new Headers({ 'content-type': 'image/png' }), arrayBuffer: () => new Promise(() => {}) });
+    });
+    let finished = false;
+    const work = h.worker.run(h.deps).finally(() => { finished = true; });
+    await vi.advanceTimersByTimeAsync(16000);
+    expect(finished).toBe(true);
+    await work;
+    expect(signal?.aborted).toBe(true);
+    expect(h.worker.isBusy()).toBe(false);
+    expect(h.session.commentFocusLease).toBeNull();
+    expect(h.postJson.mock.calls.map(([, , body]) => body.action)).toEqual(['claim', 'report']);
+    expect(h.postJson.mock.calls[1][2]).toMatchObject({ outcome: 'failed', reason: 'image_attach_failed' });
+    expect(h.execute).not.toHaveBeenCalled();
+  } finally { vi.useRealTimers(); }
+});
+
+it('rejects an image stream exceeding the server upload limit before authorizing', async () => {
+  const h = harness(); const original = h.postJson.getMockImplementation()!;
+  h.postJson.mockImplementation(async (cfg, path, body) => {
+    if (body.action === 'claim') return { ok: true, json: async () => ({ job: { id: 'job', claimToken: 'synthetic-claim', externalUrl: 'https://www.facebook.com/groups/12345/posts/8888/', imageUrl: 'https://images.example/oversized' } }) };
+    return original(cfg, path, body);
+  });
+  let cancelled = false;
+  h.context.fetch = vi.fn(async () => new Response(new ReadableStream({
+    start(controller) { controller.enqueue(new Uint8Array(2 * 1024 * 1024 + 1)); },
+    pull(controller) { controller.close(); },
+    cancel() { cancelled = true; },
+  }, { highWaterMark: 0 }), { headers: { 'content-type': 'image/png' } }));
+  await h.worker.run(h.deps);
+  expect(h.postJson.mock.calls.map(([, , body]) => body.action)).toEqual(['claim', 'report']);
+  expect(h.postJson.mock.calls[1][2]).toMatchObject({ outcome: 'failed', reason: 'image_attach_failed' });
+  expect(cancelled).toBe(true);
+  expect(h.worker.isBusy()).toBe(false);
+});
+
+it('accepts an image at the server upload limit and sends it only once', async () => {
+  const h = harness(); const original = h.postJson.getMockImplementation()!;
+  h.postJson.mockImplementation(async (cfg, path, body) => {
+    if (body.action === 'claim') return { ok: true, json: async () => ({ job: { id: 'job', claimToken: 'synthetic-claim', externalUrl: 'https://www.facebook.com/groups/12345/posts/8888/', imageUrl: 'https://images.example/valid' } }) };
+    return original(cfg, path, body);
+  });
+  h.context.fetch = vi.fn(async () => new Response(new Uint8Array(2 * 1024 * 1024), { headers: { 'content-type': 'image/png' } }));
+  await h.worker.run(h.deps);
+  const payload = h.execute.mock.calls.find(([call]) => call.args[0] === 'prepare')?.[0].args[1] as { imageMime: string; imageBase64: string };
+  expect(payload.imageMime).toBe('image/png');
+  expect(payload.imageBase64).toHaveLength(2796204);
+  expect(h.execute.mock.calls.filter(([call]) => call.args[0] === 'send')).toHaveLength(1);
+  expect(h.stored.commentJournal).toBeUndefined();
 });
