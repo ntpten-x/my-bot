@@ -205,15 +205,15 @@ export default function SettingsPage() {
         </Card>
         <Card className="space-y-3">
           <h2 className="font-semibold">ลบข้อมูลเก่าอัตโนมัติ</h2>
-          <p className="text-sm text-muted-foreground">ระบบลบโพสต์ที่ดึงมาเก่ากว่าที่กำหนดทุกวันเวลา 03:30 น. พร้อมแจ้งเตือน และประวัติการดึงที่เก่ากว่ากัน โพสต์ที่ลบแล้วจะไม่ถูกเก็บหรือแจ้งเตือนซ้ำ</p>
+          <p className="text-sm text-muted-foreground">ระบบลบโพสต์ฟีดที่เก่ากว่าที่กำหนดอัตโนมัติทุกวันเวลา 03:30 น. ค่าเริ่มต้น 3 วัน (72 ชั่วโมง) พร้อมประวัติการดึงที่เก่ากว่ากัน โพสต์ที่ลบแล้วจะไม่ถูกเก็บหรือแจ้งเตือนซ้ำ</p>
           <div className="grid gap-3 md:grid-cols-2">
             <div>
-              <Label>เก็บโพสต์ไว้ (วัน)</Label>
-              <Input type="number" min={7} max={365} value={settings.postRetentionDays ?? 30} onChange={(event) => setSettings({ ...settings, postRetentionDays: Number(event.target.value) })} />
+              <Label>เก็บโพสต์ฟีดไว้ (วัน · ขั้นต่ำ 3 = 72 ชม.)</Label>
+              <Input type="number" min={3} max={365} value={settings.postRetentionDays ?? 3} onChange={(event) => setSettings({ ...settings, postRetentionDays: Number(event.target.value) })} />
             </div>
             <div>
               <Label>เก็บโพสต์ที่บันทึกไว้/ตอบแล้ว/เป็นลีด (วัน)</Label>
-              <Input type="number" min={7} max={730} value={settings.leadRetentionDays ?? 90} onChange={(event) => setSettings({ ...settings, leadRetentionDays: Number(event.target.value) })} />
+              <Input type="number" min={3} max={730} value={settings.leadRetentionDays ?? 90} onChange={(event) => setSettings({ ...settings, leadRetentionDays: Number(event.target.value) })} />
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2 text-sm">
