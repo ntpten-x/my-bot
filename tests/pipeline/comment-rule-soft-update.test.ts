@@ -31,7 +31,7 @@ describe("isQueuePreservingRuleUpdate", () => {
       templates: [{ body: "สนใจ" }, { body: "สนใจครับ" }],
     };
     const next = { ...baseInput(), selectionMode: "random" as const, browserDeviceId: "device-new", areaCooldownSec: 60, name: "รับเติม (desktop)" };
-    expect(isQueuePreservingRuleUpdate(previous, next, ["สนใจ", "สนใจครับ"], ["group-a", "group-b"])).toBe(true);
+    expect(isQueuePreservingRuleUpdate(previous, next, [{ body: "สนใจ" }, { body: "สนใจครับ" }], ["group-a", "group-b"])).toBe(true);
   });
 
   it("cancels the queue when keywords or templates change", () => {
@@ -47,7 +47,8 @@ describe("isQueuePreservingRuleUpdate", () => {
       sourceIdsJson: '["group-a"]',
       templates: [{ body: "สนใจ" }],
     };
-    expect(isQueuePreservingRuleUpdate(previous, { ...baseInput(), keywords: "ซื้อ" }, ["สนใจ"], ["group-a"])).toBe(false);
-    expect(isQueuePreservingRuleUpdate(previous, baseInput(), ["ข้อความใหม่"], ["group-a"])).toBe(false);
+    expect(isQueuePreservingRuleUpdate(previous, { ...baseInput(), keywords: "ซื้อ" }, [{ body: "สนใจ" }], ["group-a"])).toBe(false);
+    expect(isQueuePreservingRuleUpdate(previous, baseInput(), [{ body: "ข้อความใหม่" }], ["group-a"])).toBe(false);
+    expect(isQueuePreservingRuleUpdate(previous, baseInput(), [{ body: "สนใจ", imagePath: "templates/a/x.jpg" }], ["group-a"])).toBe(false);
   });
 });

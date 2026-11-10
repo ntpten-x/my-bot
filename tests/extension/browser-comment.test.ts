@@ -195,3 +195,28 @@ it("retries rejected empty input rather than mistaking it for an inserted draft"
  expect((await action('prepare',payload,f.env)).ok).toBe(true);
  expect(attempts).toBe(2);expect(f.click).not.toHaveBeenCalled();f.dom.window.close();
 });
+
+it("attaches a SYNTHETIC image file before inserting comment text", async () => {
+  const html = '<main role="main"><article role="article"><a href="/groups/12345/posts/8888/">post</a><form><textarea aria-label="Write a comment"></textarea><input type="file" accept="image/*" aria-label="Attach a photo"><button type="button" aria-label="Comment">Comment</button></form></article></main>';
+  const f = fixture(html);
+  const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+  const prepared = await action("prepare", { ...payload, imageBase64: tinyPng, imageMime: "image/png", imageName: "pixel.png" }, f.env);
+  expect(prepared).toMatchObject({ ok: true });
+  const input = f.doc.querySelector('input[type="file"]') as HTMLInputElement;
+  expect(input.files?.length).toBe(1);
+  expect(input.files?.[0]?.name).toBe("pixel.png");
+  expect(f.doc.querySelector("textarea")!.value).toBe(payload.message);
+  expect(f.click).not.toHaveBeenCalled();
+  f.dom.window.close();
+});
+
+it("fails closed when an image is required but no file input exists", async () => {
+  const f = fixture();
+  const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+  expect(await action("prepare", { ...payload, imageBase64: tinyPng, imageMime: "image/png" }, f.env)).toMatchObject({
+    ok: false, reason: "image_attach_failed",
+  });
+  expect(f.doc.querySelector("textarea")!.value).toBe("");
+  expect(f.click).not.toHaveBeenCalled();
+  f.dom.window.close();
+});

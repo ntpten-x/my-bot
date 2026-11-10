@@ -41,5 +41,32 @@
     <div role="dialog"><a href="/groups/12345/posts/8888/">a</a><form><textarea aria-label="Write a comment"></textarea><button aria-label="Comment">Comment</button></form></div>
     <div role="dialog"><a href="/groups/12345/posts/8888/">b</a><form><textarea aria-label="Write a comment"></textarea><button aria-label="Comment">Comment</button></form></div>
   </template>
+
+  <!-- image attach: composer with photo file input -->
+  <template id="image-attach">
+    <main role="main">
+      <article role="article">
+        <a href="/groups/12345/posts/8888/">post</a>
+        <form>
+          <textarea aria-label="Write a comment"></textarea>
+          <input type="file" accept="image/*" aria-label="Attach a photo">
+          <button type="button" aria-label="Comment">Comment</button>
+        </form>
+      </article>
+    </main>
+  </template>
+
+  <!-- image missing file input: must fail closed, never send text-only -->
+  <template id="image-missing-input">
+    <main role="main">
+      <article role="article">
+        <a href="/groups/12345/posts/8888/">post</a>
+        <form>
+          <textarea aria-label="Write a comment"></textarea>
+          <button type="button" aria-label="Comment">Comment</button>
+        </form>
+      </article>
+    </main>
+  </template>
 </body>
 </html>

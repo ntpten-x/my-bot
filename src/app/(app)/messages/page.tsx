@@ -8,8 +8,21 @@ import { Badge, Button, Card, Input, Label, Select, Textarea } from "@/component
 import { invalidateTemplates } from "@/components/templates-store";
 
 type Category = { id: string; slug: string; name: string; parentId: string | null };
-type Message = { id: string; name: string; body: string; categoryId: string | null; productId: string | null; sourceIds: string; useCount: number };
+type Message = {
+  id: string;
+  name: string;
+  body: string;
+  categoryId: string | null;
+  productId: string | null;
+  sourceIds: string;
+  useCount: number;
+  imagePath?: string | null;
+  imageUrl?: string | null;
+};
 type Group = { type: string; boundCategorySlug: string; defaultProductId: string | null };
+
+const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
+const IMAGE_MAX = 2 * 1024 * 1024;
 
 export default function MessagesPage() {
   const [categories, setCategories] = useState<Category[]>([]);
@@ -24,6 +37,10 @@ export default function MessagesPage() {
   const [categoryId, setCategoryId] = useState("");
   const [name, setName] = useState("");
   const [body, setBody] = useState("");
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [existingImageUrl, setExistingImageUrl] = useState<string | null>(null);
+  const [clearImage, setClearImage] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -41,19 +58,50 @@ export default function MessagesPage() {
     setGroups(sources.sources.filter(row => row.type === "facebook_group")); setTypes(products.products);
   }
   useEffect(() => { load().catch(err => setError(err instanceof Error ? err.message : "โหลดข้อความไม่สำเร็จ")).finally(() => setLoading(false)); }, []);
+  useEffect(() => () => { if (imagePreview?.startsWith("blob:")) URL.revokeObjectURL(imagePreview); }, [imagePreview]);
   async function run(action: () => Promise<void>) {
     setBusy(true); setError(""); setInfo("");
     try { await action(); } catch (err) { setError(err instanceof Error ? err.message : "บันทึกไม่สำเร็จ กรุณาลองอีกครั้ง"); }
     finally { setBusy(false); }
   }
-  function reset() { setEditing(null); setName(""); setBody(""); }
+  function reset() {
+    setEditing(null); setName(""); setBody(""); setImageFile(null); setClearImage(false);
+    setExistingImageUrl(null);
+    if (imagePreview?.startsWith("blob:")) URL.revokeObjectURL(imagePreview);
+    setImagePreview(null);
+  }
+  function pickImage(file: File | null) {
+    if (!file) { setImageFile(null); if (imagePreview?.startsWith("blob:")) URL.revokeObjectURL(imagePreview); setImagePreview(null); return; }
+    if (!IMAGE_TYPES.includes(file.type)) { setError("รองรับเฉพาะ JPEG, PNG หรือ WebP"); return; }
+    if (file.size > IMAGE_MAX) { setError("รูปต้องมีขนาดไม่เกิน 2 MB"); return; }
+    setError("");
+    setClearImage(false);
+    setImageFile(file);
+    if (imagePreview?.startsWith("blob:")) URL.revokeObjectURL(imagePreview);
+    setImagePreview(URL.createObjectURL(file));
+  }
+  async function uploadImage(templateId: string, file: File) {
+    const form = new FormData();
+    form.set("templateId", templateId);
+    form.set("file", file);
+    await api("/api/templates/image", { method: "POST", body: form });
+  }
   function save(event: FormEvent) {
     event.preventDefault();
     void run(async () => {
       if (!categories.some(row => row.id === categoryId)) throw new Error("กรุณาเลือกหมวดหมู่");
-      await api(editing ? `/api/templates/${editing}` : "/api/templates", {
-        method: editing ? "PATCH" : "POST", body: JSON.stringify({ categoryId, productId: productId || null, name, body }),
-      });
+      if (editing) {
+        await api(`/api/templates/${editing}`, {
+          method: "PATCH",
+          body: JSON.stringify({ categoryId, productId: productId || null, name, body, ...(clearImage ? { clearImage: true } : {}) }),
+        });
+        if (imageFile) await uploadImage(editing, imageFile);
+      } else {
+        const created = await api<{ template: Message }>("/api/templates", {
+          method: "POST", body: JSON.stringify({ categoryId, productId: productId || null, name, body }),
+        });
+        if (imageFile) await uploadImage(created.template.id, imageFile);
+      }
       setInfo(editing ? "บันทึกการแก้ไขข้อความแล้ว" : "สร้างข้อความแล้ว เพิ่มชุดถัดไปในประเภทเดิมได้เลย");
       reset(); invalidateTemplates(); await load();
     });
@@ -61,8 +109,9 @@ export default function MessagesPage() {
   const managed = messages.filter(row => categories.some(category => category.id === row.categoryId) && !row.sourceIds);
   const visible = managed.filter(row => (!filter || row.categoryId === filter) && (!filterType || (filterType === "__category" ? !row.productId : row.productId === filterType)) && `${row.name} ${row.body}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const selected = categories.find(row => row.id === categoryId);
+  const previewSrc = imagePreview || (!clearImage ? existingImageUrl : null);
   return <div className="space-y-6">
-    <div className="flex flex-wrap items-start justify-between gap-3"><div><h1 className="text-2xl font-semibold">จัดการข้อความ</h1><p className="mt-1 max-w-2xl text-sm leading-6 text-muted">เตรียมข้อความคอมเมนต์แยกตามหมวดหมู่และประเภท แต่ละประเภทสร้างได้หลายชุด ตั้งชื่อให้เลือกใช้ได้ง่าย</p></div><Link href="/groups" className="text-sm text-pine underline underline-offset-4">จัดการหมวดหมู่และประเภท</Link></div>
+    <div className="flex flex-wrap items-start justify-between gap-3"><div><h1 className="text-2xl font-semibold">จัดการข้อความ</h1><p className="mt-1 max-w-2xl text-sm leading-6 text-muted">เตรียมข้อความคอมเมนต์แยกตามหมวดหมู่และประเภท แต่ละประเภทสร้างได้หลายชุด ตั้งชื่อให้เลือกใช้ได้ง่าย แนบรูปได้หนึ่งรูปต่อข้อความ</p></div><Link href="/groups" className="text-sm text-pine underline underline-offset-4">จัดการหมวดหมู่และประเภท</Link></div>
     {error ? <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{error}</p> : null}
     {info ? <p role="status" className="rounded-lg bg-pine/10 p-3 text-sm text-pine">{info}</p> : null}
     <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
@@ -75,6 +124,12 @@ export default function MessagesPage() {
           </div>
           <div><Label htmlFor="message-name">ชื่อข้อความ</Label><Input id="message-name" required maxLength={60} disabled={busy} value={name} onChange={event => setName(event.target.value)} placeholder="เช่น แนะนำร้าน / แจ้งโปรโมชัน / สอบถามรายละเอียด" /></div>
           <div><Label htmlFor="message-body">ข้อความที่จะนำไปคอมเมนต์</Label><Textarea id="message-body" required rows={7} maxLength={2000} disabled={busy} value={body} onChange={event => setBody(event.target.value)} placeholder="พิมพ์ข้อความที่ต้องการใช้คอมเมนต์..." /><p className="mt-1 text-right text-xs text-muted">{body.length.toLocaleString()} / 2,000 ตัวอักษร</p></div>
+          <div>
+            <Label htmlFor="message-image">รูปประกอบ (ไม่บังคับ)</Label>
+            <Input id="message-image" type="file" accept="image/jpeg,image/png,image/webp" disabled={busy} onChange={event => pickImage(event.target.files?.[0] ?? null)} />
+            <p className="mt-1 text-xs text-muted">JPEG / PNG / WebP ไม่เกิน 2 MB · เมื่อกฎเลือกข้อความนี้ บอทจะส่งข้อความพร้อมรูป</p>
+            {previewSrc ? <div className="mt-3 flex flex-wrap items-end gap-3"><img src={previewSrc} alt="ตัวอย่างรูปข้อความ" className="h-24 w-24 rounded-md border border-line object-cover" /><Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => { pickImage(null); setClearImage(Boolean(editing && existingImageUrl)); }}>ลบรูป</Button></div> : null}
+          </div>
           {body.trim() ? <div className="rounded-lg border border-line p-3"><p className="mb-2 text-xs text-muted">ตัวอย่างข้อความ</p><p className="whitespace-pre-wrap break-words text-sm">{body}</p></div> : null}
           <div className="flex flex-wrap gap-2"><Button variant="pine" type="submit" disabled={loading || busy || !categoryId || !name.trim() || !body.trim() || (!editing && messages.length >= limit)}>{busy ? "กำลังบันทึก..." : editing ? "บันทึกการแก้ไข" : "สร้างข้อความ"}</Button>{editing ? <Button variant="outline" type="button" disabled={busy} onClick={reset}>ยกเลิกแก้ไข</Button> : null}</div>
           {messages.length >= limit ? <p className="text-sm text-red-800">ข้อความครบ {limit} ชุดแล้ว ลบข้อความที่ไม่ใช้ก่อนเพิ่มชุดใหม่</p> : null}
@@ -87,8 +142,11 @@ export default function MessagesPage() {
         <div><Label htmlFor="filter-message-type">กรองประเภท</Label><Select id="filter-message-type" value={filterType} onChange={event => setFilterType(event.target.value)}><option value="">ทุกประเภท</option><option value="__category">ข้อความที่ใช้ทั้งหมวดหมู่</option>{types.filter(row => !filter || row.categorySlug === categories.find(cat => cat.id === filter)?.slug).map(row => <option key={row.id} value={row.id}>{categories.find(cat => cat.slug === row.categorySlug)?.name} / {row.name}</option>)}</Select></div>
         {loading ? <p role="status" className="py-6 text-sm text-muted">กำลังโหลดข้อความ...</p> : !visible.length ? <Card><p className="py-4 text-sm text-muted">{managed.length ? "ไม่พบข้อความ ลองเปลี่ยนประเภทหรือคำค้น" : "ยังไม่มีชุดข้อความ เลือกประเภท ตั้งชื่อ แล้วสร้างข้อความแรกได้เลย"}</p></Card> : visible.map(row => <Card key={row.id}>
           <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="break-words font-semibold">{row.name}</h3><Badge tone="pine">{categories.find(category => category.id === row.categoryId)?.name} / {row.productId ? types.find(type => type.id === row.productId)?.name ?? "ประเภทที่ถูกลบ" : "ทุกประเภท"}</Badge></div>
-          <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-6">{row.body}</p>
-          <div className="mt-4 flex flex-wrap gap-2"><Button size="sm" variant="outline" disabled={busy} onClick={() => { setEditing(row.id); setCategoryId(row.categoryId ?? ""); setProductId(row.productId ?? ""); setName(row.name); setBody(row.body); setError(""); setInfo(""); document.getElementById("message-name")?.focus(); }}>แก้ไข</Button>
+          <div className="mt-3 flex gap-3">
+            {row.imageUrl ? <img src={row.imageUrl} alt="" className="h-16 w-16 shrink-0 rounded-md border border-line object-cover" /> : null}
+            <p className="min-w-0 whitespace-pre-wrap break-words text-sm leading-6">{row.body}</p>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2"><Button size="sm" variant="outline" disabled={busy} onClick={() => { setEditing(row.id); setCategoryId(row.categoryId ?? ""); setProductId(row.productId ?? ""); setName(row.name); setBody(row.body); setImageFile(null); setClearImage(false); setExistingImageUrl(row.imageUrl ?? null); if (imagePreview?.startsWith("blob:")) URL.revokeObjectURL(imagePreview); setImagePreview(null); setError(""); setInfo(""); document.getElementById("message-name")?.focus(); }}>แก้ไข</Button>
             <Button size="sm" variant="outline" disabled={busy} onClick={() => void run(async () => { await navigator.clipboard.writeText(row.body); setInfo(`คัดลอก “${row.name}” แล้ว`); })}>คัดลอก</Button>
             <Button size="sm" variant="danger" disabled={busy} onClick={() => { if (!confirm(`ลบข้อความ “${row.name}”?`)) return; void run(async () => { await api(`/api/templates/${row.id}`, { method: "DELETE" }); if (editing === row.id) reset(); invalidateTemplates(); setInfo(`ลบข้อความ “${row.name}” แล้ว`); await load(); }); }}>ลบ</Button>
           </div>

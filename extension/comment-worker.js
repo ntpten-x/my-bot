@@ -78,7 +78,30 @@
       await chrome.storage.session.set({ commentTab: owned });
       await deps.waitComplete(tabId, Math.min(25000, remaining()));
       if (tab.windowId !== undefined) await chrome.windows.update(tab.windowId, { focused: true });
-      const execute = (kind, payload = {}) => pageAction(tabId, kind, { ...job, ...payload }, Math.min(5000, remaining()));
+      let imagePayload = {};
+      if (job.imageUrl) {
+        try {
+          const imageResponse = await fetch(String(job.imageUrl), { method: "GET" });
+          if (!imageResponse.ok) {
+            await report("failed", undefined, "image_attach_failed");
+            return;
+          }
+          const mime = imageResponse.headers.get("content-type") || "image/jpeg";
+          const buffer = await imageResponse.arrayBuffer();
+          const bytes = new Uint8Array(buffer);
+          let binary = "";
+          for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+          imagePayload = {
+            imageBase64: btoa(binary),
+            imageMime: mime,
+            imageName: mime.includes("png") ? "mybot-comment.png" : mime.includes("webp") ? "mybot-comment.webp" : "mybot-comment.jpg",
+          };
+        } catch {
+          await report("failed", undefined, "image_attach_failed");
+          return;
+        }
+      }
+      const execute = (kind, payload = {}) => pageAction(tabId, kind, { ...job, ...imagePayload, ...payload }, Math.min(5000, remaining()));
       let prepared;
       for (let attempt = 0; attempt < 8; attempt++) {
         prepared = await execute("prepare");

@@ -30,7 +30,7 @@ export async function saveCommentRule(input: z.infer<typeof autoCommentRuleSchem
       if (!sourceIds.includes(source.id)) sourceIds.push(source.id);
     }
     const { pageToken, managerToken, clearCredentials, templates, days, sourceIds: _sources, typeProductId, replyTemplateIds, ...data } = input;
-    let bodies = templates;
+    let snapshots = templates.map(body => ({ body, imagePath: null as string | null }));
     if (typeProductId) {
       if (input.deliveryMode !== "extension" || input.messageMode !== "template") throw new RuleSetupError("กฎตามประเภทต้องส่งข้อความผ่านส่วนขยาย");
       const product = await tx.product.findUnique({ where: { id: typeProductId } });
@@ -42,8 +42,11 @@ export async function saveCommentRule(input: z.infer<typeof autoCommentRuleSchem
       const ids = [...new Set(replyTemplateIds ?? [])];
       const messages = await tx.replyTemplate.findMany({ where: { id: { in: ids } } });
       if (!ids.length || messages.length !== ids.length || messages.some(message => message.categoryId !== category.id || (message.productId && message.productId !== product.id) || Boolean(message.sourceIds))) throw new RuleSetupError("ข้อความต้องใช้กับประเภทที่เลือกและไม่เจาะจงกลุ่มอื่น");
-      bodies = ids.map(id => messages.find(message => message.id === id)!.body.trim());
-      if (bodies.some(body => !body || body.length > 2000)) throw new RuleSetupError("ข้อความต้องยาว 1–2,000 ตัวอักษร");
+      snapshots = ids.map(id => {
+        const message = messages.find(row => row.id === id)!;
+        return { body: message.body.trim(), imagePath: message.imagePath || null };
+      });
+      if (snapshots.some(row => !row.body || row.body.length > 2000)) throw new RuleSetupError("ข้อความต้องยาว 1–2,000 ตัวอักษร");
       if (input.browserFbUserId && !await tx.fbAccount.findUnique({ where: { id: input.browserFbUserId } })) throw new RuleSetupError("เลือกบัญชี Facebook ที่ระบบเคยเชื่อมต่อ");
       if (input.browserDeviceId && !await tx.extensionDevice.findFirst({ where: { id: input.browserDeviceId, revokedAt: null } })) throw new RuleSetupError("ไม่พบอุปกรณ์ที่ใช้ส่ง");
 
@@ -57,7 +60,7 @@ export async function saveCommentRule(input: z.infer<typeof autoCommentRuleSchem
     const previous = id
       ? await tx.autoCommentRule.findUnique({ where: { id }, include: { templates: { orderBy: { sortOrder: "asc" } } } })
       : null;
-    const preserveQueue = Boolean(previous && isQueuePreservingRuleUpdate(previous, input, bodies, sourceIds));
+    const preserveQueue = Boolean(previous && isQueuePreservingRuleUpdate(previous, input, snapshots, sourceIds));
     const rule = id
       ? await tx.autoCommentRule.update({ where: { id }, data: { ...value, revision: { increment: 1 } } })
       : await tx.autoCommentRule.create({ data: value });
@@ -86,7 +89,7 @@ export async function saveCommentRule(input: z.infer<typeof autoCommentRuleSchem
       const key = `${TYPE_SETUP_PREFIX}${rule.id}`, value = JSON.stringify({ productId: typeProductId, templateIds: [...new Set(replyTemplateIds)] });
       await tx.setting.upsert({ where: { key }, create: { key, value }, update: { value } });
     }
-    await tx.autoCommentTemplate.createMany({ data: bodies.map((body, sortOrder) => ({ ruleId: rule.id, body, sortOrder })) });
+    await tx.autoCommentTemplate.createMany({ data: snapshots.map((row, sortOrder) => ({ ruleId: rule.id, body: row.body, imagePath: row.imagePath, sortOrder })) });
     await tx.autoCommentLog.create({
       data: {
         ruleId: rule.id,
@@ -104,17 +107,23 @@ function sameSorted(left: string[], right: string[]) {
   return [...left].map(String).sort().join("\0") === [...right].map(String).sort().join("\0");
 }
 
+type TemplateSnapshot = { body: string; imagePath?: string | null };
+
+function templateFingerprint(row: TemplateSnapshot) {
+  return `${row.body}\0${row.imagePath || ""}`;
+}
+
 /** Keep waiting jobs when the owner only retargets device/schedule/limits, not match text or templates. */
 export function isQueuePreservingRuleUpdate(
-  previous: { deliveryMode: string; messageMode: string; requireAi: boolean; intentMode: string; keywordMode: string; keywords: string; excludeKeywords: string; selectionMode: string; sourceIdsJson: string; templates: { body: string }[] },
+  previous: { deliveryMode: string; messageMode: string; requireAi: boolean; intentMode: string; keywordMode: string; keywords: string; excludeKeywords: string; selectionMode: string; sourceIdsJson: string; templates: TemplateSnapshot[] },
   input: z.infer<typeof autoCommentRuleSchema>,
-  bodies: string[],
+  snapshots: TemplateSnapshot[],
   sourceIds: string[],
 ) {
   if (previous.deliveryMode !== input.deliveryMode || previous.messageMode !== input.messageMode || previous.requireAi !== input.requireAi) return false;
   if (previous.intentMode !== input.intentMode || previous.keywordMode !== input.keywordMode || previous.selectionMode !== input.selectionMode) return false;
   if (previous.keywords !== input.keywords || previous.excludeKeywords !== input.excludeKeywords) return false;
-  if (!sameSorted(previous.templates.map(row => row.body), bodies)) return false;
+  if (!sameSorted(previous.templates.map(templateFingerprint), snapshots.map(templateFingerprint))) return false;
   let previousSources: string[] = [];
   try { previousSources = JSON.parse(previous.sourceIdsJson) as string[]; } catch { return false; }
   return sameSorted(previousSources, sourceIds);

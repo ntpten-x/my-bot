@@ -145,11 +145,62 @@
       // Facebook often nests the composer without a real <form>; fall back to the article/dialog surface.
       const form = box.closest('form,[role="form"]') || (article.contains(box) ? article : null);
       if (!form || (!article.contains(form) && form !== article)) return { ok: false, outcome: "failed", reason: "unsupported_dom" };
+      const needsImage = Boolean(payload.imageBase64 || payload.imageUrl);
+      const attachImage = async () => {
+        if (!needsImage) return { ok: true };
+        let bytes = null;
+        let mime = String(payload.imageMime || "image/jpeg");
+        if (payload.imageBase64) {
+          try {
+            const binary = view.atob(String(payload.imageBase64));
+            bytes = Uint8Array.from(binary, ch => ch.charCodeAt(0));
+          } catch { return { ok: false, reason: "image_attach_failed" }; }
+        } else if (payload.imageUrl) {
+          try {
+            const response = await view.fetch(String(payload.imageUrl));
+            if (!response.ok) return { ok: false, reason: "image_attach_failed" };
+            mime = response.headers.get("content-type") || mime;
+            bytes = new Uint8Array(await response.arrayBuffer());
+          } catch { return { ok: false, reason: "image_attach_failed" }; }
+        }
+        if (!bytes || !bytes.length) return { ok: false, reason: "image_attach_failed" };
+        const inputs = Array.from(form.querySelectorAll('input[type="file"]')).filter(el => {
+          const accept = String(el.getAttribute("accept") || "image/*").toLowerCase();
+          return accept.includes("image") || accept.includes("*/*") || !accept;
+        });
+        const input = inputs.find(el => !el.disabled) || null;
+        if (!input) return { ok: false, reason: "image_attach_failed" };
+        const ext = mime.includes("png") ? "png" : mime.includes("webp") ? "webp" : "jpg";
+        const FileCtor = view.File;
+        if (!FileCtor) return { ok: false, reason: "image_attach_failed" };
+        const file = new FileCtor([bytes], payload.imageName || `mybot-comment.${ext}`, { type: mime });
+        let files = null;
+        if (view.DataTransfer) {
+          try {
+            const transfer = new view.DataTransfer();
+            transfer.items.add(file);
+            files = transfer.files;
+          } catch { files = null; }
+        }
+        if (!files) files = { 0: file, length: 1, item: index => index === 0 ? file : null };
+        try { input.files = files; }
+        catch {
+          try { Object.defineProperty(input, "files", { configurable: true, value: files }); }
+          catch { return { ok: false, reason: "image_attach_failed" }; }
+        }
+        input.dispatchEvent(new view.Event("change", { bubbles: true }));
+        input.dispatchEvent(new view.Event("input", { bubbles: true }));
+        return { ok: true };
+      };
       const prior = memory.__mybotCommentSession;
-      const ownDraft = prior && prior.id === payload.id && prior.box === box && !prior.clicked && prior.message === payload.message && normalize(box.value ?? box.textContent) === normalize(payload.message);
+      const ownDraft = prior && prior.id === payload.id && prior.box === box && !prior.clicked && prior.message === payload.message && prior.needsImage === needsImage && normalize(box.value ?? box.textContent) === normalize(payload.message);
       if (normalize(box.value ?? box.textContent) && !ownDraft) return { ok: false, outcome: "failed", reason: "owner_draft" };
-      memory.__mybotCommentSession = { id: payload.id, box, article, before: prior?.id === payload.id ? prior.before : links(article), message: payload.message, at: now(), clicked: false, profiles: collectOwnProfiles() };
+      memory.__mybotCommentSession = { id: payload.id, box, article, before: prior?.id === payload.id ? prior.before : links(article), message: payload.message, needsImage, at: now(), clicked: false, profiles: collectOwnProfiles() };
       if (!environment && !doc.hasFocus()) return { ok: false, outcome: "failed", reason: "editor_requires_focused_tab" };
+      if (!ownDraft) {
+        const attached = await attachImage();
+        if (!attached.ok) return { ok: false, outcome: "failed", reason: attached.reason || "image_attach_failed" };
+      }
       box.focus();
       if (!ownDraft && box.tagName === "TEXTAREA") {
         const setter = Object.getOwnPropertyDescriptor(view.HTMLTextAreaElement.prototype, "value")?.set;

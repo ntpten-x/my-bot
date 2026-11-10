@@ -8,6 +8,7 @@ import { explainCommentRule, isKeywordBotRule, matchesCommentRule, templateIndex
 import { lockCommentControl, mayRun, readCommentControl, storeCommentControl, type CommentControl } from "./control";
 import { migrateStaleBrowserDevicePins } from "./admin";
 import { facebookGroupKey } from "../sources";
+import { signedMessageImageUrl } from "../supabase-storage";
 
 export const BROWSER_GRANT_MS = 3000;
 /** Prepare failures that may use the bounded pre-grant retry slots. Missing reason keeps legacy retry behavior. */
@@ -185,7 +186,9 @@ export async function scanBrowserComments(assertActive: () => Promise<void>, opt
             }
             reasons.push({ ruleId: rule.id, codes });
             if (codes.length || !target) continue;
-            const message = rule.templates[templateIndex(rule.selectionMode, rule.templates.length, rule.nextTemplate)].body;
+            const selected = rule.templates[templateIndex(rule.selectionMode, rule.templates.length, rule.nextTemplate)];
+            const message = selected.body;
+            const imagePath = selected.imagePath || null;
             const dedupeKey = `${control.dryRun ? `dry:${control.generation}` : "live"}:${target.key}`;
             const existing = await tx.autoCommentJob.findUnique({ where: { dedupeKey } });
             // Keyword bots go straight to the Extension claim queue — no AI prepare hop.
@@ -194,7 +197,7 @@ export async function scanBrowserComments(assertActive: () => Promise<void>, opt
               externalUrl: target.url, postKey: target.key, remotePostId: "", pageId: target.area,
               deliveryMode: "extension", browserDeviceId: rule.browserDeviceId, browserFbUserId: rule.browserFbUserId,
               generation: control.generation, ruleRevision: rule.revision, textRevision: post.textRevision,
-              dryRun: control.dryRun, message, status: readyNow ? "browser_ready" : "pending_ai", nextAttemptAt: now,
+              dryRun: control.dryRun, message, imagePath, status: readyNow ? "browser_ready" : "pending_ai", nextAttemptAt: now,
             };
             // Only re-evaluate cancelled work that provably never received a send grant
             // in this generation. Never clear or reuse a historical live dispatch key.
@@ -279,7 +282,7 @@ export async function prepareBrowserComments(assertActive: () => Promise<void>, 
 }
 
 export async function claimBrowserComment(deviceId: string, fbUserId: string) {
-  return prisma.$transaction(async tx => {
+  const claimed = await prisma.$transaction(async tx => {
     const control = await lockCommentControl(tx);
     if (!mayRun(control) || control.dryRun) return null;
     if (await tx.autoCommentJob.findFirst({ where: { deliveryMode: "extension", browserDeviceId: deviceId, status: { in: ["claimed", "sending"] } } })) return null;
@@ -312,11 +315,42 @@ export async function claimBrowserComment(deviceId: string, fbUserId: string) {
       const claimToken = randomUUID(), claimUntil = new Date(Date.now() + 120000);
       await tx.autoCommentJob.update({ where: { id: job.id }, data: { status: "claimed", claimToken, claimUntil, lastError: "" } });
       const aliases = [facebookGroupKey(state.post.source.url), state.post.source.fbGroupId || ""].filter(Boolean);
-      return { id: job.id, claimToken, externalUrl: job.externalUrl, message: job.message, fbUserId: job.browserFbUserId, claimUntil: claimUntil.toISOString(), groupAliases: [...new Set(aliases)] };
+      return {
+        id: job.id,
+        claimToken,
+        externalUrl: job.externalUrl,
+        message: job.message,
+        imagePath: job.imagePath || null,
+        fbUserId: job.browserFbUserId,
+        claimUntil: claimUntil.toISOString(),
+        groupAliases: [...new Set(aliases)],
+      };
     }
     await storeDeferrals();
     return null;
   }, { timeout: 10000, maxWait: 3000 });
+  if (!claimed) return null;
+  if (!claimed.imagePath) {
+    const { imagePath: _ignored, ...rest } = claimed;
+    void _ignored;
+    return rest;
+  }
+  const imageUrl = await signedMessageImageUrl(claimed.imagePath, 600).catch(() => null);
+  if (!imageUrl) {
+    await prisma.$transaction(async tx => {
+      const job = await tx.autoCommentJob.findFirst({ where: { id: claimed.id, claimToken: claimed.claimToken, status: "claimed" } });
+      if (!job) return;
+      await tx.autoCommentJob.update({
+        where: { id: job.id },
+        data: { status: "failed", claimToken: null, claimUntil: null, lastError: "image_url_unavailable" },
+      });
+      await log(tx, job, "failed", "สร้างลิงก์รูปสำหรับส่งคอมเมนต์ไม่สำเร็จ");
+    });
+    return null;
+  }
+  const { imagePath: _ignored, ...rest } = claimed;
+  void _ignored;
+  return { ...rest, imageUrl };
 }
 
 /** Durable sending marker before returning a very short lived single-use click grant. */

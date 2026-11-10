@@ -4,7 +4,7 @@ export async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     ...init,
     headers: {
-      ...(init?.body ? { "content-type": "application/json" } : {}),
+      ...(init?.body && !(init.body instanceof FormData) ? { "content-type": "application/json" } : {}),
       ...init?.headers,
     },
   });

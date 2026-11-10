@@ -315,6 +315,8 @@ model ReplyTemplate {
   id         String   @id @default(cuid())
   name       String
   body       String
+  /// Private Supabase Storage object path in bucket message-images; null = text only.
+  imagePath  String?
   categoryId String?
   /// Game/product scope (level 3); null = any product.
   productId  String?
@@ -623,6 +625,8 @@ model AutoCommentTemplate {
   ruleId    String
   rule      AutoCommentRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
   body      String
+  /// Snapshot of ReplyTemplate.imagePath when the rule was saved.
+  imagePath String?
   sortOrder Int      @default(0)
   createdAt DateTime @default(now())
 
@@ -651,6 +655,8 @@ model AutoCommentJob {
   generation      String
   dryRun          Boolean  @default(true)
   message         String
+  /// Snapshot path for the image attached to this comment job, if any.
+  imagePath       String?
   status          String   @default("pending")
   attempts        Int      @default(0)
   claimToken      String?
