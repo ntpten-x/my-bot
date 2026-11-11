@@ -102,6 +102,14 @@ export default function GroupsPage() {
   function patch(group: Group, data: Record<string, unknown>) {
     void run(async () => { await api(`/api/sources/${group.id}`, { method: "PATCH", body: JSON.stringify(data) }); setInfo(`บันทึก “${group.name}” แล้ว`); await load(); });
   }
+  function removeGroup(group: Group) {
+    if (!confirm(`ลบกลุ่ม “${group.name}” และโพสต์ที่เก็บจากกลุ่มนี้ทั้งหมด (${group.postCount} โพสต์)? การกระทำนี้ย้อนกลับไม่ได้`)) return;
+    void run(async () => {
+      await api(`/api/sources/${group.id}`, { method: "DELETE" });
+      setInfo(`ลบกลุ่ม “${group.name}” แล้ว`);
+      await load();
+    });
+  }
   const known = new Set(categories.map(row => row.slug));
   const visible = groups.filter(row => (!filter || (filter === "__unassigned" ? !known.has(row.boundCategorySlug) : row.boundCategorySlug === filter)) && (!filterType || (filterType === "__unassigned" ? !row.defaultProductId : row.defaultProductId === filterType)) && `${row.name} ${row.url}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()));
   const actions = (kind: "category" | "type", row: { id: string; name: string; slug?: string }) => managing ? <div className="mt-1 flex gap-2"><Button size="sm" variant="ghost" disabled={busy} aria-label={`แก้ชื่อ ${row.name}`} onClick={() => setEditing({ kind, id: row.id, name: row.name })}>แก้ชื่อ</Button><Button size="sm" variant="danger" disabled={busy} aria-label={`ลบ ${row.name}`} onClick={() => remove(kind, row)}>ลบ</Button></div> : null;
@@ -131,7 +139,10 @@ export default function GroupsPage() {
           {loading ? <p role="status" className="py-6 text-sm text-muted">กำลังโหลด...</p> : !visible.length ? <Card><p className="py-4 text-sm text-muted">{groups.length ? "ไม่พบกลุ่มตามตัวกรอง ลองเลือกหมวดหมู่หรือประเภทอื่น" : "ยังไม่มีกลุ่ม สร้างหมวดหมู่และประเภท แล้ววางลิงก์เพื่อเริ่มต้น"}</p></Card> : visible.map(group => <Card key={group.id}>
             <div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="break-all font-semibold">{group.name}</h3><Badge tone={group.enabled ? "pine" : "neutral"}>{group.enabled ? "เปิดอ่าน" : "พักอ่าน"}</Badge>{!group.defaultProductId ? <Badge tone="amber">ยังไม่เลือกประเภท</Badge> : null}</div><a href={group.url} target="_blank" rel="noreferrer" className="mt-1 block break-all text-sm text-pine underline">{group.url}</a><p className="mt-2 text-xs text-muted">เก็บแล้ว {group.postCount} โพสต์</p></div><Button variant="outline" size="sm" disabled={busy} onClick={() => patch(group, { enabled: !group.enabled })}>{group.enabled ? "พักอ่าน" : "เปิดอ่าน"}</Button></div>
             <div className="mt-4"><GroupPlacement key={`${group.boundCategorySlug}-${group.defaultProductId}`} group={group} categories={categories} types={types} disabled={busy} onSave={(cat, type) => patch(group, { boundCategorySlug: cat, defaultProductId: type || null })} /></div>
-            <Button className="mt-2" variant="ghost" size="sm" disabled={busy} onClick={() => { const next = prompt("ชื่อกลุ่ม", group.name); if (next?.trim() && next.trim() !== group.name) patch(group, { name: next.trim() }); }}>แก้ไขชื่อกลุ่ม</Button>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Button variant="ghost" size="sm" disabled={busy} onClick={() => { const next = prompt("ชื่อกลุ่ม", group.name); if (next?.trim() && next.trim() !== group.name) patch(group, { name: next.trim() }); }}>แก้ไขชื่อกลุ่ม</Button>
+              <Button variant="danger" size="sm" disabled={busy} aria-label={`ลบกลุ่ม ${group.name}`} onClick={() => removeGroup(group)}>ลบกลุ่ม</Button>
+            </div>
           </Card>)}
         </section>
       </div>

@@ -84,8 +84,8 @@ if ($Action -eq 'Purge') {
     $Distros = ((& wsl.exe --list --quiet) -replace "`0", '') | ForEach-Object { $_.Trim() }
     $Exists = $Distros -contains $Distro
     if ($Exists) {
-        # Never unregister a same-named distro unless Linux ownership matches exactly.
-        Assert-DesktopOwnedDistro -Distribution $Distro -Message $Texts.purgeOwnership
+        # Allow purge of our incomplete install (valid Windows state, marker not stamped yet).
+        Assert-DesktopOwnedOrResumable -Distribution $Distro -ResumableByState -Message $Texts.purgeOwnership | Out-Null
         & wsl.exe -d $Distro -u mybot -- bash /opt/mybot-desktop/current/desktop/control.sh disable 2>$null
     }
     $Startup = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\MY-BOT-Desktop.vbs'

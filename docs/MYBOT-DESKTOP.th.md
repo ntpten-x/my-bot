@@ -22,8 +22,8 @@
 ## โครงสร้างและการรักษาข้อมูล
 
 - `src/lib/desktop-package.ts` สร้าง ZIP จาก allowlist ไฟล์ runtime และ extension เท่านั้น มี checksum รายไฟล์และ release ID ที่ผูกกับ origin ไม่รวม `.env`, `data/`, backups, Prisma, Node dependencies หรือ worker
-- `desktop/Install.ps1` ตรวจ checksum ก่อนรันไฟล์ ตั้ง ownership record ของ distro เพื่อ resume การติดตั้งที่สะดุด และปฏิเสธ distro ชื่อชนกันที่ยืนยันเจ้าของไม่ได้ (ต้องมี `/etc/mybot-desktop-owner=MYBOT-Desktop-V1` ครบ) ตรวจพอร์ต viewer ไม่ให้แย่งจอเดิมและใช้ mutex กัน installer ซ้อน
-- `desktop/ownership.ps1` ใช้ร่วมกับ Control: Start/Status/Uninstall/Rollback/Purge ยืนยัน marker ก่อนสั่งงาน Purge จะไม่ `wsl --unregister` ถ้า marker ไม่ตรง
+- `desktop/Install.ps1` ตรวจ checksum ก่อนรันไฟล์ ตั้ง ownership record ของ distro ทันทีหลัง import (และตอนต้น `provision.sh` ก่อน apt) เพื่อ resume การติดตั้งที่สะดุด และปฏิเสธ distro ชื่อชนกันที่ยืนยันเจ้าของไม่ได้ — ถ้ามี `install-state.json` ของเราแต่ marker ยังไม่ครบ จะปั๊ม `/etc/mybot-desktop-owner=MYBOT-Desktop-V1` แล้วติดตั้งต่อ ไม่ adopt distro คนอื่น ตรวจพอร์ต viewer ไม่ให้แย่งจอเดิมและใช้ mutex กัน installer ซ้อน
+- `desktop/ownership.ps1` อ่าน marker แบบไม่ throw เมื่อไฟล์ยังไม่มี (กัน `$ErrorActionPreference Stop` ตัดการ resume) ใช้ร่วมกับ Control: Start/Status/Uninstall/Rollback/Purge ยืนยัน marker ก่อนสั่งงาน Purge ยอมลบเคสติดตั้งค้างของเรา แต่จะไม่ `wsl --unregister` ถ้า marker คนละเจ้าของ
 - `scripts/lib/desktop-release.mjs` + `provision.sh` คัดลอก runtime ไป staging แล้ว rename เป็น release พร้อม marker `.mybot-release-complete` กันโฟลเดอร์ค้างครึ่งทาง
 - ทางลัด **ย้อนรุ่นก่อนหน้า** เรียก `desktop/rollback.sh` หลังหยุด service สลับ `current` ไปยัง release ที่สมบูรณ์รุ่นก่อน เก็บโปรไฟล์/pairing
 - Status เทียบทั้ง `X-MYBOT-Desktop-Version` และ `X-MYBOT-Extension-Version` กับค่าที่บันทึกตอนติดตั้ง

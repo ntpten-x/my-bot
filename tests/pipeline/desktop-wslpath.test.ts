@@ -21,12 +21,23 @@ it('requires exact Linux ownership before update, purge and control actions', ()
   const install = readFileSync('desktop/Install.ps1', 'utf8');
   const control = readFileSync('desktop/Control.ps1', 'utf8');
   const ownership = readFileSync('desktop/ownership.ps1', 'utf8');
+  const provision = readFileSync('desktop/provision.sh', 'utf8');
   expect(ownership).toContain("DesktopOwnerValue = 'MYBOT-Desktop-V1'");
-  expect(install).toContain('Assert-DesktopOwnedDistro');
+  expect(ownership).toContain('Assert-DesktopOwnedOrResumable');
+  expect(ownership).toContain('Set-DesktopOwnerMarker');
+  expect(ownership).toContain('Test-DesktopMybotUser');
+  expect(ownership).toContain("$ErrorActionPreference = 'Continue'");
+  expect(install).toContain('Assert-DesktopOwnedOrResumable');
+  expect(install).toContain('Set-DesktopOwnerMarker');
+  expect(install).toContain('Test-DesktopMybotUser');
   expect(control).toContain('Assert-DesktopOwnedDistro');
+  expect(control).toContain('Assert-DesktopOwnedOrResumable');
   expect(control).toContain('purgeOwnership');
   expect(control).toContain('X-MYBOT-Extension-Version');
   expect(control).toContain('Rollback');
+  expect(provision.indexOf("printf '%s\\n' 'MYBOT-Desktop-V1' > /etc/mybot-desktop-owner")).toBeLessThan(
+    provision.indexOf('apt-get install -y --no-install-recommends ca-certificates'),
+  );
   expect(readFileSync('desktop/rollback.sh', 'utf8')).toContain('Ownership marker missing');
 });
 

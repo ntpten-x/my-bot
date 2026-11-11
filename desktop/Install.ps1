@@ -1,4 +1,4 @@
-param([switch]$CheckOnly, [switch]$CheckPorts)
+﻿param([switch]$CheckOnly, [switch]$CheckPorts)
 $ErrorActionPreference = 'Stop'
 $Distro = 'MYBOT-Desktop-V1'
 $PackageDir = $PSScriptRoot
@@ -60,17 +60,30 @@ try {
     if ($Exists -and (-not $State -or $State.distribution -ne $Distro -or $State.product -ne 'MY-BOT Desktop')) { throw $Texts.existingUnknown }
     if ($State -and $State.serverOrigin -ne $Metadata.serverOrigin) { throw 'This install belongs to another server. Existing pairing was not changed.' }
     if ($Exists) {
-        # Never adopt a same-named distro without an exact ownership marker.
-        Assert-DesktopOwnedDistro -Distribution $Distro -Message $Texts.existingUnknown
-        & wsl.exe -d $Distro -u mybot -- bash -lc 'export XDG_RUNTIME_DIR=/run/user/$(id -u); systemctl --user is-active --quiet mybot-workstation.service' 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            # Updating while Chromium holds the profile risks corrupting cookies/pairing; stop first with owner consent.
-            if (-not (Confirm-Install $Texts.updateStopConfirm)) { throw $Texts.updateBlocked }
-            Write-Host $Texts.stopping
-            & wsl.exe -d $Distro -u mybot -- bash /opt/mybot-desktop/current/desktop/control.sh stop
-            if ($LASTEXITCODE -ne 0) { throw $Texts.updateStopFailed }
-            & wsl.exe -d $Distro -u mybot -- bash -lc 'export XDG_RUNTIME_DIR=/run/user/$(id -u); systemctl --user is-active --quiet mybot-workstation.service' 2>$null
-            if ($LASTEXITCODE -eq 0) { throw $Texts.updateStopFailed }
+        # Valid install-state means we own this distro even when provision crashed before the Linux marker/user.
+        $Ownership = Assert-DesktopOwnedOrResumable -Distribution $Distro -ResumableByState -Message $Texts.existingUnknown
+        # Incomplete first install has ownership but no mybot user yet — skip update-stop probe and continue provision.
+        if ($Ownership -eq 'owned' -and (Test-DesktopMybotUser -Distribution $Distro)) {
+            $Previous = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try {
+                & wsl.exe -d $Distro -u mybot -- bash -lc 'export XDG_RUNTIME_DIR=/run/user/$(id -u); systemctl --user is-active --quiet mybot-workstation.service' 2>$null
+                $ServiceActive = ($LASTEXITCODE -eq 0)
+                if ($ServiceActive) {
+                    # Updating while Chromium holds the profile risks corrupting cookies/pairing; stop first with owner consent.
+                    $ErrorActionPreference = $Previous
+                    if (-not (Confirm-Install $Texts.updateStopConfirm)) { throw $Texts.updateBlocked }
+                    Write-Host $Texts.stopping
+                    $ErrorActionPreference = 'Continue'
+                    & wsl.exe -d $Distro -u mybot -- bash /opt/mybot-desktop/current/desktop/control.sh stop
+                    $StopOk = ($LASTEXITCODE -eq 0)
+                    & wsl.exe -d $Distro -u mybot -- bash -lc 'export XDG_RUNTIME_DIR=/run/user/$(id -u); systemctl --user is-active --quiet mybot-workstation.service' 2>$null
+                    $StillActive = ($LASTEXITCODE -eq 0)
+                    if (-not $StopOk -or $StillActive) { throw $Texts.updateStopFailed }
+                }
+            } finally {
+                $ErrorActionPreference = $Previous
+            }
         }
     }
     $Ports = Select-DesktopPorts -Existing $State
@@ -94,6 +107,8 @@ try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         Save-DesktopImage -Path $ImagePath -Image $Image
         Run-Wsl -WslArguments @('--import', $Distro, (Join-Path $AppRoot 'linux'), $ImagePath, '--version', '2')
+        # Stamp Linux ownership before apt/provision so a crash mid-setup remains resumable.
+        Set-DesktopOwnerMarker -Distribution $Distro
         # Record ownership immediately so an interrupted setup can resume without adopting another distro.
         [IO.File]::WriteAllText($StatePath, ($NewState | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
     }
