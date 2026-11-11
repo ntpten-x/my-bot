@@ -28,7 +28,8 @@ vi.mock("../../src/lib/prisma", () => ({
   },
 }));
 vi.mock("../../src/lib/supabase-storage", () => ({
-  MESSAGE_IMAGE_MAX_BYTES: 2 * 1024 * 1024,
+  MESSAGE_IMAGE_MAX_BYTES: Math.floor(2.5 * 1024 * 1024),
+  MESSAGE_IMAGE_MAX_LABEL: "2.5 MB",
   messageImageStorageConfigured: mocks.configured,
   validateMessageImage: mocks.validate,
   messageImageObjectPath: mocks.path,

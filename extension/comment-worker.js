@@ -13,7 +13,7 @@
     "submit_not_unique_or_ready",
   ]);
   // Match the server's message-image upload contract; never buffer arbitrary downloads.
-  const IMAGE_MAX_BYTES = 2 * 1024 * 1024;
+  const IMAGE_MAX_BYTES = Math.floor(2.5 * 1024 * 1024);
   async function bounded(work, timeoutMs) {
     let timer;
     try {

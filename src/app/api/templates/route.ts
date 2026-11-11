@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { authed } from "@/lib/guard";
 import { json } from "@/lib/http";
 import { MAX_TEMPLATES, templateSchema } from "@/lib/automation-schema";
-import { withMessageImageUrls } from "@/lib/supabase-storage";
+import { messageImageStorageConfigured, withMessageImageUrls } from "@/lib/supabase-storage";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +11,11 @@ export async function GET() {
   const { error } = await authed();
   if (error) return error;
   const templates = await prisma.replyTemplate.findMany({ orderBy: [{ sortOrder: "asc" }, { useCount: "desc" }, { createdAt: "asc" }] });
-  return json({ templates: await withMessageImageUrls(templates), max: MAX_TEMPLATES });
+  return json({
+    templates: await withMessageImageUrls(templates),
+    max: MAX_TEMPLATES,
+    imageStorageReady: messageImageStorageConfigured(),
+  });
 }
 
 export async function POST(request: Request) {

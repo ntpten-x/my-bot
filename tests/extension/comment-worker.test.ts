@@ -354,7 +354,7 @@ it('rejects an image stream exceeding the server upload limit before authorizing
   });
   let cancelled = false;
   h.context.fetch = vi.fn(async () => new Response(new ReadableStream({
-    start(controller) { controller.enqueue(new Uint8Array(2 * 1024 * 1024 + 1)); },
+    start(controller) { controller.enqueue(new Uint8Array(Math.floor(2.5 * 1024 * 1024) + 1)); },
     pull(controller) { controller.close(); },
     cancel() { cancelled = true; },
   }, { highWaterMark: 0 }), { headers: { 'content-type': 'image/png' } }));
@@ -371,11 +371,12 @@ it('accepts an image at the server upload limit and sends it only once', async (
     if (body.action === 'claim') return { ok: true, json: async () => ({ job: { id: 'job', claimToken: 'synthetic-claim', externalUrl: 'https://www.facebook.com/groups/12345/posts/8888/', imageUrl: 'https://images.example/valid' } }) };
     return original(cfg, path, body);
   });
-  h.context.fetch = vi.fn(async () => new Response(new Uint8Array(2 * 1024 * 1024), { headers: { 'content-type': 'image/png' } }));
+  const limitBytes = Math.floor(2.5 * 1024 * 1024);
+  h.context.fetch = vi.fn(async () => new Response(new Uint8Array(limitBytes), { headers: { 'content-type': 'image/png' } }));
   await h.worker.run(h.deps);
   const payload = h.execute.mock.calls.find(([call]) => call.args[0] === 'prepare')?.[0].args[1] as { imageMime: string; imageBase64: string };
   expect(payload.imageMime).toBe('image/png');
-  expect(payload.imageBase64).toHaveLength(2796204);
+  expect(payload.imageBase64).toHaveLength(4 * Math.ceil(limitBytes / 3));
   expect(h.execute.mock.calls.filter(([call]) => call.args[0] === 'send')).toHaveLength(1);
   expect(h.stored.commentJournal).toBeUndefined();
 });

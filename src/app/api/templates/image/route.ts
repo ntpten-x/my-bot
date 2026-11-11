@@ -3,6 +3,7 @@ import { json } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import {
   MESSAGE_IMAGE_MAX_BYTES,
+  MESSAGE_IMAGE_MAX_LABEL,
   messageImageObjectPath,
   messageImageStorageConfigured,
   removeMessageImage,
@@ -33,7 +34,9 @@ export async function POST(request: Request) {
     if (!(file instanceof File)) return json({ error: "ต้องแนบไฟล์รูป" }, 400);
     mime = file.type || "";
     const buf = Buffer.from(await file.arrayBuffer());
-    if (buf.byteLength > MESSAGE_IMAGE_MAX_BYTES) return json({ error: "รูปต้องมีขนาดไม่เกิน 2 MB" }, 400);
+    if (buf.byteLength > MESSAGE_IMAGE_MAX_BYTES) {
+      return json({ error: `รูปต้องมีขนาดไม่เกิน ${MESSAGE_IMAGE_MAX_LABEL}` }, 400);
+    }
     bytes = buf;
   } else {
     const raw = await request.json().catch(() => null) as { templateId?: string; mime?: string; dataBase64?: string } | null;

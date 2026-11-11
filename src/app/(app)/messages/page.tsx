@@ -22,7 +22,8 @@ type Message = {
 type Group = { type: string; boundCategorySlug: string; defaultProductId: string | null };
 
 const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
-const IMAGE_MAX = 2 * 1024 * 1024;
+const IMAGE_MAX = Math.floor(2.5 * 1024 * 1024);
+const IMAGE_MAX_LABEL = "2.5 MB";
 
 export default function MessagesPage() {
   const [categories, setCategories] = useState<Category[]>([]);
@@ -46,14 +47,16 @@ export default function MessagesPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
+  const [imageStorageReady, setImageStorageReady] = useState(true);
   async function load() {
     const [templates, taxonomy, sources, products] = await Promise.all([
-      api<{ templates: Message[]; max: number }>("/api/templates"),
+      api<{ templates: Message[]; max: number; imageStorageReady?: boolean }>("/api/templates"),
       api<{ categories: Category[] }>("/api/categories"),
       api<{ sources: Group[] }>("/api/sources"),
       api<{ products: GroupType[] }>("/api/products"),
     ]);
     setMessages(templates.templates); setLimit(templates.max);
+    setImageStorageReady(templates.imageStorageReady !== false);
     setCategories(taxonomy.categories.filter(row => !row.parentId));
     setGroups(sources.sources.filter(row => row.type === "facebook_group")); setTypes(products.products);
   }
@@ -73,7 +76,8 @@ export default function MessagesPage() {
   function pickImage(file: File | null) {
     if (!file) { setImageFile(null); if (imagePreview?.startsWith("blob:")) URL.revokeObjectURL(imagePreview); setImagePreview(null); return; }
     if (!IMAGE_TYPES.includes(file.type)) { setError("รองรับเฉพาะ JPEG, PNG หรือ WebP"); return; }
-    if (file.size > IMAGE_MAX) { setError("รูปต้องมีขนาดไม่เกิน 2 MB"); return; }
+    if (file.size > IMAGE_MAX) { setError(`รูปต้องมีขนาดไม่เกิน ${IMAGE_MAX_LABEL}`); return; }
+    if (!imageStorageReady) { setError("ยังไม่ได้ตั้งค่า Storage สำหรับรูปข้อความ (ต้องมี SUPABASE_SERVICE_ROLE_KEY)"); return; }
     setError("");
     setClearImage(false);
     setImageFile(file);
@@ -126,8 +130,9 @@ export default function MessagesPage() {
           <div><Label htmlFor="message-body">ข้อความที่จะนำไปคอมเมนต์</Label><Textarea id="message-body" required rows={7} maxLength={2000} disabled={busy} value={body} onChange={event => setBody(event.target.value)} placeholder="พิมพ์ข้อความที่ต้องการใช้คอมเมนต์..." /><p className="mt-1 text-right text-xs text-muted">{body.length.toLocaleString()} / 2,000 ตัวอักษร</p></div>
           <div>
             <Label htmlFor="message-image">รูปประกอบ (ไม่บังคับ)</Label>
-            <Input id="message-image" type="file" accept="image/jpeg,image/png,image/webp" disabled={busy} onChange={event => pickImage(event.target.files?.[0] ?? null)} />
-            <p className="mt-1 text-xs text-muted">JPEG / PNG / WebP ไม่เกิน 2 MB · เมื่อกฎเลือกข้อความนี้ บอทจะส่งข้อความพร้อมรูป</p>
+            <Input id="message-image" type="file" accept="image/jpeg,image/png,image/webp" disabled={busy || !imageStorageReady} onChange={event => pickImage(event.target.files?.[0] ?? null)} />
+            <p className="mt-1 text-xs text-muted">JPEG / PNG / WebP ไม่เกิน {IMAGE_MAX_LABEL} · เมื่อกฎเลือกข้อความนี้ บอทจะส่งข้อความพร้อมรูป</p>
+            {!imageStorageReady ? <p role="alert" className="mt-2 text-xs text-red-800">ยังแนบรูปไม่ได้ — ตั้งค่า `SUPABASE_URL` และ `SUPABASE_SERVICE_ROLE_KEY` ใน `.env` (และบน Render) แล้วรีสตาร์ทแอป</p> : null}
             {previewSrc ? <div className="mt-3 flex flex-wrap items-end gap-3"><img src={previewSrc} alt="ตัวอย่างรูปข้อความ" className="h-24 w-24 rounded-md border border-line object-cover" /><Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => { pickImage(null); setClearImage(Boolean(editing && existingImageUrl)); }}>ลบรูป</Button></div> : null}
           </div>
           {body.trim() ? <div className="rounded-lg border border-line p-3"><p className="mb-2 text-xs text-muted">ตัวอย่างข้อความ</p><p className="whitespace-pre-wrap break-words text-sm">{body}</p></div> : null}

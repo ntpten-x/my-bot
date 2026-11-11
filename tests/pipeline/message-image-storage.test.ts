@@ -5,11 +5,13 @@ import {
   validateMessageImage,
 } from "../../src/lib/supabase-storage";
 
-it("accepts jpeg/png/webp under 2MB and builds a template object path", () => {
+it("accepts jpeg/png/webp under 2.5MB and builds a template object path", () => {
+  expect(MESSAGE_IMAGE_MAX_BYTES).toBe(Math.floor(2.5 * 1024 * 1024));
   expect(validateMessageImage({ mime: "image/jpeg", bytes: 12 })).toBeNull();
   expect(validateMessageImage({ mime: "image/png", bytes: 12 })).toBeNull();
   expect(validateMessageImage({ mime: "image/webp", bytes: 12 })).toBeNull();
   expect(validateMessageImage({ mime: "image/gif", bytes: 12 })).toMatch(/JPEG/);
-  expect(validateMessageImage({ mime: "image/png", bytes: MESSAGE_IMAGE_MAX_BYTES + 1 })).toMatch(/2 MB/);
+  expect(validateMessageImage({ mime: "image/png", bytes: MESSAGE_IMAGE_MAX_BYTES })).toBeNull();
+  expect(validateMessageImage({ mime: "image/png", bytes: MESSAGE_IMAGE_MAX_BYTES + 1 })).toMatch(/2\.5 MB/);
   expect(messageImageObjectPath("tmpl_1", "image/png")).toMatch(/^templates\/tmpl_1\/.+\.png$/);
 });
