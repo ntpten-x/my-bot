@@ -15,6 +15,7 @@ it("packages only public origin configuration and explicitly scoped install perm
 it("rejects credential-bearing URLs and remote plaintext origins", () => {
   for (const origin of ["http://remote.example", "https://owner:password@custom.example", "https://custom.example/path", "https://custom.example?token=bad"]) expect(()=>extensionFiles(undefined,origin)).toThrow();
   expect(()=>extensionFiles(undefined,"http://localhost:8001")).not.toThrow();
+  expect(()=>extensionFiles(undefined,"http://192.168.1.40:8001")).not.toThrow();
 });
 it("does not serve a cached bundle configured for another origin", () => {
   const one = extensionZip("https://one.example"), two = extensionZip("https://two.example");

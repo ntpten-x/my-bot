@@ -1,6 +1,6 @@
 import { inflateRawSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
-import { allowedCorsOrigin, isHttpsRequest, isLocalRequest, transportAllowed } from "../../src/lib/request-security";
+import { allowedCorsOrigin, isHttpsRequest, isLocalNetworkHost, isLocalRequest, isPrivateLanHost, transportAllowed } from "../../src/lib/request-security";
 import { isWeakPassword, passwordProblems } from "../../src/lib/password-policy";
 import { LOGIN_POLICY, checkLogin, memoryGuardStore, recordLogin } from "../../src/lib/login-guard";
 import { newDeviceToken, newPairingCode, normalizeCode, sha256, tokenHint } from "../../src/lib/extension-devices";
@@ -18,6 +18,10 @@ describe("request security", () => {
 
   it("allows tokens only over https or on the local machine", () => {
     expect(transportAllowed(h({ host: "127.0.0.1:8001" }), "http://127.0.0.1:8001/api")).toBe(true);
+    expect(transportAllowed(h({ host: "192.168.1.40:8001" }), "http://192.168.1.40:8001/api")).toBe(true);
+    expect(isPrivateLanHost("192.168.1.40:8001")).toBe(true);
+    expect(isLocalNetworkHost("10.0.0.5")).toBe(true);
+    expect(isLocalRequest(h({ host: "192.168.1.40:8001" }))).toBe(false);
     expect(transportAllowed(h({ host: "evil.example", "x-forwarded-proto": "http" }), "http://evil.example/api")).toBe(false);
     expect(transportAllowed(h({ host: "my-bot-e6bt.onrender.com", "x-forwarded-proto": "https" }), "http://my-bot-e6bt.onrender.com/api")).toBe(true);
   });

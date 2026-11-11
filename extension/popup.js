@@ -48,9 +48,10 @@ function normalizeBase(value) {
   } catch {
     return { error: "ที่อยู่ไม่ถูกต้อง" };
   }
-  const local = url.hostname === "localhost" || url.hostname === "127.0.0.1";
-  if (url.protocol === "https:" || (url.protocol === "http:" && local)) return { base: url.origin };
-  return { error: "ต้องเป็น https:// (หรือ http://localhost สำหรับเครื่องนี้)" };
+  const loopback = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
+  const lan = typeof MyBotServerRoute !== "undefined" && MyBotServerRoute.isPrivateLanHostname?.(url.hostname);
+  if (url.protocol === "https:" || (url.protocol === "http:" && (loopback || lan))) return { base: url.origin };
+  return { error: "ต้องเป็น https:// (หรือ http://localhost / IP ในเครือข่ายบ้าน สำหรับเครื่องนี้)" };
 }
 
 function needsOptionalPermission(base) {

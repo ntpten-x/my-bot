@@ -1,6 +1,6 @@
 importScripts("assist.js", "identity.js", "scrape.js", "quiet.js");
 importScripts("focus.js", "tab-lifecycle.js", "browser-comment.js", "comment-worker.js");
-importScripts("connect.js");
+importScripts("server-route.js", "connect.js");
 
 const DEFAULTS = {
   apiBase: "https://my-bot-e6bt.onrender.com",
@@ -16,12 +16,15 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Only the local app over http, or any server over HTTPS, ever receives the token.
+// Only the local app over http (loopback or private LAN), or any server over HTTPS, ever receives the token.
 function validApiBase(value) {
   try {
     const url = new URL(String(value || ""));
     if (url.protocol === "https:") return true;
-    return url.protocol === "http:" && (url.hostname === "localhost" || url.hostname === "127.0.0.1");
+    if (url.protocol !== "http:") return false;
+    const host = url.hostname;
+    return host === "localhost" || host === "127.0.0.1" || host === "[::1]"
+      || Boolean(globalThis.MyBotServerRoute?.isPrivateLanHostname?.(host));
   } catch {
     return false;
   }
@@ -80,7 +83,9 @@ async function syncCustomBridge() {
   } catch {
     return;
   }
-  if (url.protocol !== "https:") return;
+  const loopback = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
+  const lan = Boolean(globalThis.MyBotServerRoute?.isPrivateLanHostname?.(url.hostname));
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && (loopback || lan))) return;
   const pattern = `${url.origin}/*`;
   if (chrome.runtime.getManifest().content_scripts?.some(script => script.js.includes("bridge.js") && script.matches.includes(pattern))) return;
   if (!(await chrome.permissions.contains({ origins: [pattern] }))) return;

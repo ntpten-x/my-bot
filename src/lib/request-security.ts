@@ -13,6 +13,21 @@ export function isLocalHost(host: string | null | undefined) {
   return Boolean(host) && LOCAL_HOSTNAMES.has(hostname(String(host)));
 }
 
+/** RFC1918 LAN addresses used when opening the local app from Desktop/WSL via the Windows host IP. */
+export function isPrivateLanHost(host: string | null | undefined) {
+  const name = hostname(String(host || ""));
+  const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(name);
+  if (!match) return false;
+  const parts = match.slice(1).map(Number);
+  if (parts.some((part) => part > 255)) return false;
+  const [a, b] = parts;
+  return a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31);
+}
+
+export function isLocalNetworkHost(host: string | null | undefined) {
+  return isLocalHost(host) || isPrivateLanHost(host);
+}
+
 /** Local = the Host header is localhost/127.0.0.1 (a public proxy such as Render never forwards that). */
 export function isLocalRequest(headers: HeaderLike, url?: string) {
   const host = headers.get("host") ?? (url ? new URL(url).host : "");
@@ -25,9 +40,10 @@ export function isHttpsRequest(headers: HeaderLike, url?: string) {
   return Boolean(url && url.startsWith("https://"));
 }
 
-/** Extension endpoints: HTTPS everywhere, plain HTTP only for the local app. */
+/** Extension endpoints: HTTPS everywhere, plain HTTP on loopback or private LAN. */
 export function transportAllowed(headers: HeaderLike, url?: string) {
-  return isHttpsRequest(headers, url) || isLocalRequest(headers, url);
+  const host = headers.get("host") ?? (url ? new URL(url).host : "");
+  return isHttpsRequest(headers, url) || isLocalNetworkHost(host);
 }
 
 /** CORS: only the MY-BOT extension and this site's own origin. */

@@ -12,11 +12,12 @@ const route = createRequire(import.meta.url)("../../extension/server-route.js") 
 };
 
 describe("extension server auto-route", () => {
-  it("normalizes only https and loopback http origins", () => {
+  it("normalizes https, loopback http, and private LAN http origins", () => {
     expect(route.normalizeOrigin("https://my-bot-e6bt.onrender.com/")).toBe("https://my-bot-e6bt.onrender.com");
     expect(route.normalizeOrigin("http://localhost:8001")).toBe("http://localhost:8001");
     expect(route.normalizeOrigin("http://127.0.0.1:8001/")).toBe("http://127.0.0.1:8001");
-    expect(route.normalizeOrigin("http://192.168.1.6:8001")).toBeNull();
+    expect(route.normalizeOrigin("http://192.168.1.6:8001")).toBe("http://192.168.1.6:8001");
+    expect(route.normalizeOrigin("http://evil.example:8001")).toBeNull();
   });
 
   it("prefers healthy local over production in auto mode", async () => {

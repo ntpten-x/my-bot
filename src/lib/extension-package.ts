@@ -3,7 +3,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import manifest from "../../extension/manifest.json";
 import { createZip, type ZipEntry } from "./zip";
-import { isLocalHost } from "./request-security";
+import { isLocalNetworkHost } from "./request-security";
 
 export const EXTENSION_VERSION: string = manifest.version;
 
@@ -23,10 +23,13 @@ export function extensionFiles(root = path.join(process.cwd(), "extension"), api
   walk(root, "");
   if (apiBase) {
     const url = new URL(apiBase);
-    if (url.username || url.password || url.search || url.hash || url.pathname !== "/" || !(url.protocol === "https:" || (url.protocol === "http:" && isLocalHost(url.host)))) throw new Error("Invalid extension server origin");
+    if (url.username || url.password || url.search || url.hash || url.pathname !== "/" || !(url.protocol === "https:" || (url.protocol === "http:" && isLocalNetworkHost(url.host)))) throw new Error("Invalid extension server origin");
     const pattern = `${url.origin}/*`;
+    const installConfig = url.protocol === "http:" && isLocalNetworkHost(url.host)
+      ? { apiBase: url.origin, localApiBases: [url.origin] }
+      : { apiBase: url.origin };
     for (const entry of out) {
-      if (entry.name === "mybot-extension/install-config.json") entry.data = Buffer.from(JSON.stringify({ apiBase: url.origin }));
+      if (entry.name === "mybot-extension/install-config.json") entry.data = Buffer.from(JSON.stringify(installConfig));
       if (entry.name === "mybot-extension/manifest.json") {
         const configured = JSON.parse(entry.data.toString());
         configured.host_permissions = [...new Set([...configured.host_permissions, pattern])];

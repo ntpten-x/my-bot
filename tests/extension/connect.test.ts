@@ -16,6 +16,7 @@ function harness(desktop = false) {
     },
     chrome: { runtime: { getURL: (file: string) => `chrome-extension://synthetic/${file}` }, tabs, storage: { local: area(local), session: area(session) } },
   });
+  vm.runInContext(readFileSync("extension/server-route.js", "utf8"), context);
   vm.runInContext(readFileSync("extension/connect.js", "utf8"), context);
   type Reply = { ok: boolean; paired?: boolean; nonce?: string; tokenHash?: string; tokenHint?: string };
   const connect = context.MyBotConnect as { handle(message: object, sender: object, deps: object): Promise<Reply>; installed(details: object, deps: object): Promise<void> };
