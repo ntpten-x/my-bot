@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button, Card, Input, Label } from "@/components/ui";
 import { ApiError, api } from "@/components/api";
@@ -54,6 +55,11 @@ export default function LoginPage() {
             <Button type="submit" disabled={busy} className="w-full">
               {busy ? "กำลังตรวจ..." : "เข้าสู่ระบบ"}
             </Button>
+            <p className="text-center text-sm text-muted">
+              <Link href="/reset-password" className="text-clay underline-offset-2 hover:underline">
+                ลืมรหัสผ่าน
+              </Link>
+            </p>
           </form>
         ) : (
           <p className="text-sm text-muted">กำลังตรวจสถานะ...</p>

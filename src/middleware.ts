@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { SESSION_COOKIE } from "./lib/auth-cookie";
 import { allowedCorsOrigin, selfOriginOf } from "./lib/request-security";
 
-const PUBLIC_PATHS = new Set(["/login", "/setup"]);
+const PUBLIC_PATHS = new Set(["/login", "/setup", "/reset-password"]);
 
 function applyCors(request: NextRequest, response: NextResponse) {
   const origin = allowedCorsOrigin(request.headers.get("origin"), selfOriginOf(request.headers, request.url));
