@@ -58,7 +58,7 @@ function harness(pages: Page[], local: Storage = {}, session: Storage = {}) {
       tabs: { get: async (id: number) => { if (lookupWait) { lookupEntered?.(); await lookupWait; } const tab = tabs.get(id); if (!tab) throw Error("missing tab"); return { ...tab, status: "complete" }; },
         reload, remove: async (id: number) => { tabs.delete(id); }, update: async () => {} },
     },
-    base: () => cfg.apiBase, loadConfig: async () => ({ ...cfg, paused }), currentFbUserId: async () => "12345",
+    base: () => cfg.apiBase, loadConfig: async () => ({ ...cfg, paused, schedules: local.schedules || { source: now + 30000 } }), currentFbUserId: async () => "12345",
     sourceKind: () => "group", scrapeSettingsFor: async () => scrape.scrapeSettings({ scrollScreens: 1, maxPostsPerRun: 40 }),
     sleep: async (ms: number) => { now += ms + sleepJump; }, waitComplete: async () => {}, injectReaders: async () => {},
     waitForGrowth: async (id: number) => ({ count: pages[Math.min(tabs.get(id)!.cursor, pages.length - 1)].posts.length, grew: false }),
@@ -112,6 +112,26 @@ function harness(pages: Page[], local: Storage = {}, session: Storage = {}) {
 }
 
 describe("continuous read-only collection", () => {
+  it("releases a far-future reader only after validating its durable recovery", async () => {
+    const h = harness(Array.from({ length: 100 }, (_, i) => ({ posts: [post(i * 3 + 1), post(i * 3 + 2), post(i * 3 + 3)] })));
+    await h.run();
+    const recovery = structuredClone(h.local.coverageRecovery);
+    h.local.schedules = { source: h.now() + 90001 };
+    await h.recover();
+    expect(h.tabs.size).toBe(0); expect(h.local.coverageRecovery).toEqual(recovery);
+    await h.run(); expect(h.accepted.size).toBeGreaterThan(0);
+  });
+  it("keeps a parked reader when the latest pending snapshot is missing from durable recovery", async () => {
+    const h = harness(Array.from({ length: 100 }, (_, i) => ({ posts: [post(i * 3 + 1), post(i * 3 + 2), post(i * 3 + 3)] })));
+    await h.run();
+    const reader: any = Object.values(h.session.readers)[0];
+    reader.continuation.run.fresh = [post(999)];
+    h.local.schedules = { source: h.now() + 90001 };
+    await h.recover();
+    expect(h.tabs.has(reader.tabId)).toBe(true);
+    h.advance(6 * 60_000); h.pause(); await h.recover({ parked: true });
+    expect(h.tabs.has(reader.tabId)).toBe(true);
+  });
   it("releases an abandoned parked tab after five minutes, retaining durable recovery", async () => {
     const h = harness(Array.from({ length: 100 }, (_, i) => ({ posts: [post(i * 3 + 1), post(i * 3 + 2), post(i * 3 + 3)] })));
     await h.run();

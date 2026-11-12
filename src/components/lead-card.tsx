@@ -212,7 +212,7 @@ export function LeadCard({
         <div className="mt-3 flex gap-2 overflow-x-auto">
           {lead.images.slice(0, 4).map((src) => (
             // eslint-disable-next-line @next/next/no-img-element
-            <img key={src} src={src} alt="" className="h-20 w-20 rounded-lg object-cover" />
+            <img key={src} src={src} alt="" loading="lazy" decoding="async" width={80} height={80} className="h-20 w-20 rounded-lg object-cover" />
           ))}
         </div>
       ) : null}

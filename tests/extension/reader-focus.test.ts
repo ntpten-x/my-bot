@@ -30,6 +30,8 @@ function harness() {
     sleep:async()=>{},withScrapeWindowLock:async(fn:any)=>fn()});
   vm.runInContext(readFileSync('extension/focus.js','utf8'),context);
   vm.runInContext(readFileSync("extension/tab-lifecycle.js", "utf8"), context);
+  vm.runInContext(readFileSync("extension/scrape.js", "utf8"), context);
+  vm.runInContext(source.slice(source.indexOf("function cleanPost("), source.indexOf("async function setReadingStatus(")), context);
   vm.runInContext(source.slice(source.indexOf('/** Activate only'),source.indexOf('// Lazy loading stalled')),context);
   vm.runInContext(source.slice(source.indexOf('const BOOT_ID ='),source.indexOf('async function closeOrphanReaders(')),context);
   vm.runInContext(source.slice(source.indexOf('async function openReader('),source.indexOf('function sameReaderUrl(')),context);
@@ -191,12 +193,14 @@ it('bounds allocations when closing readers already fill the pool',async()=>{
 
 it('releases paused parked tabs without deleting their durable pending recovery',async()=>{
   const h=harness();const reader=await h.open();
-  h.session.readers[String(reader.tabId)].continuation={url:reader.url,apiBase:'https://owner.example',fbUserId:'12345'};
-  h.local.coverageRecovery={pending:{posts:['synthetic']}};
+  const pending=[{url:reader.url+'/posts/999',text:'synthetic'}];
+  h.session.readers[String(reader.tabId)].continuation={url:reader.url,sourceUrl:reader.url,apiBase:'https://owner.example',fbUserId:'12345',run:{fresh:pending}};
+  h.local.coverageRecovery={[JSON.stringify(['https://owner.example','12345',reader.url])]:{sourceUrl:reader.url,apiBase:'https://owner.example',fbUserId:'12345',pending}};
+  const recovery=structuredClone(h.local.coverageRecovery);
   h.context.loadConfig=async()=>({apiBase:'https://owner.example',paused:true});
   await h.context.closeOrphanReaders();
   expect(h.chrome.tabs.remove).toHaveBeenCalledWith(reader.tabId);
-  expect(h.local.coverageRecovery).toEqual({pending:{posts:['synthetic']}});
+  expect(h.local.coverageRecovery).toEqual(recovery);
 });
 it('reuses its own window and replaces a closed one',async()=>{
   const h=harness(); await h.open(); await h.open(); expect(h.chrome.windows.create).toHaveBeenCalledTimes(1);

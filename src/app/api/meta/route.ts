@@ -8,13 +8,12 @@ export async function GET() {
   const { error } = await authed();
   if (error) return error;
   const [categories, sources, keywords, provinces] = await Promise.all([
-    prisma.category.findMany({ orderBy: { sortOrder: "asc" } }),
-    prisma.source.findMany({ orderBy: { name: "asc" } }),
-    prisma.keyword.findMany({ orderBy: { word: "asc" } }),
-    prisma.post.findMany({
+    prisma.category.findMany({ orderBy: { sortOrder: "asc" }, select: { id: true, name: true, slug: true, parentId: true, matchWords: true } }),
+    prisma.source.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true, type: true, url: true } }),
+    prisma.keyword.findMany({ orderBy: { word: "asc" }, select: { id: true, word: true, type: true } }),
+    prisma.post.groupBy({
+      by: ["province"],
       where: { province: { not: null } },
-      distinct: ["province"],
-      select: { province: true },
     }),
   ]);
   return json({

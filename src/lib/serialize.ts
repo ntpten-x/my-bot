@@ -1,4 +1,5 @@
 import { prisma } from "./prisma";
+import type { Prisma } from "@prisma/client";
 import { extractContacts } from "./pipeline/contacts";
 
 type Ref = { id: string; name: string; slug: string } | null;
@@ -97,6 +98,38 @@ export const postInclude = {
   source: true,
   notes: { orderBy: { createdAt: "asc" as const } },
 };
+
+// Keep the serialized API contract, without reading vectors, normalized copies or worker state.
+export const postSelect = {
+  id: true,
+  text: true,
+  authorName: true,
+  externalUrl: true,
+  postedAt: true,
+  createdAt: true,
+  imagesJson: true,
+  intent: true,
+  province: true,
+  isAd: true,
+  isRead: true,
+  isSaved: true,
+  forbiddenHit: true,
+  keywordHitsJson: true,
+  pipelineStatus: true,
+  suggestedReply: true,
+  aiProvider: true,
+  score: true,
+  scoreReason: true,
+  duplicateOfId: true,
+  dismissed: true,
+  extraUrlsJson: true,
+  ocrText: true,
+  followUpAt: true,
+  statusChangedAt: true,
+  repliedAt: true,
+  productBy: true,
+  ...postInclude,
+} satisfies Prisma.PostSelect;
 
 export type AlsoIn = { id: string; url: string; source: string };
 

@@ -2,7 +2,7 @@ import { z } from "zod";
 import { authed } from "@/lib/guard";
 import { json } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
-import { postInclude, serializePost, withAlsoIn } from "@/lib/serialize";
+import { postSelect, serializePost, withAlsoIn } from "@/lib/serialize";
 import { getSettings } from "@/lib/settings";
 import { OPEN_STATUSES, followUpDate } from "@/lib/automation";
 import { recordFeedback } from "@/lib/smart/feedback";
@@ -31,7 +31,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       data: { statusChangedAt: new Date(), followUpAt: open ? followUpDate((await getSettings()).followUpDays) : null },
     });
   }
-  const post = await prisma.post.findUnique({ where: { id }, include: postInclude });
+  const post = await prisma.post.findUnique({ where: { id }, select: postSelect });
   if (!post) return json({ error: "ไม่พบประกาศ" }, 404);
   return json({ post: (await withAlsoIn([serializePost(post)]))[0] });
 }

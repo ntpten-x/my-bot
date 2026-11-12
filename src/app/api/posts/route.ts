@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { authed } from "@/lib/guard";
 import { json } from "@/lib/http";
-import { postInclude, serializePost, withAlsoIn } from "@/lib/serialize";
+import { postSelect, serializePost, withAlsoIn } from "@/lib/serialize";
 import { getSettings } from "@/lib/settings";
 import { isListedAd, searchTokens } from "@/lib/smart/search";
 import { recordTiming } from "@/lib/metrics";
@@ -81,7 +81,7 @@ export async function GET(request: Request) {
     {
       const [total, posts] = await Promise.all([
         prisma.post.count({ where: keywordWhere }),
-        prisma.post.findMany({ where: keywordWhere, include: postInclude, relationLoadStrategy: "join", orderBy: [{ isAd: "asc" }, { score: "desc" }, { createdAt: "desc" }, { id: "asc" }], skip: (page - 1) * pageSize, take: pageSize }),
+        prisma.post.findMany({ where: keywordWhere, select: postSelect, relationLoadStrategy: "join", orderBy: [{ isAd: "asc" }, { score: "desc" }, { createdAt: "desc" }, { id: "asc" }], skip: (page - 1) * pageSize, take: pageSize }),
       ]);
       return json({ posts: await withAlsoIn(posts.map(serializePost)), total, page, pageSize, semantic: false, searchScope: "ค้นด้วยคำจากโพสต์ทั้งหมดที่ตรงตัวกรอง" });
     }
@@ -98,7 +98,7 @@ export async function GET(request: Request) {
     prisma.post.count({ where }),
     prisma.post.findMany({
       where,
-      include: postInclude, relationLoadStrategy: "join",
+      select: postSelect, relationLoadStrategy: "join",
       orderBy: sort,
       skip: (page - 1) * pageSize,
       take: pageSize,

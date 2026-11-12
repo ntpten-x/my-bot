@@ -1,6 +1,21 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { startVisibleRefresh } from "../../src/lib/visible-refresh";
 afterEach(() => vi.useRealTimers());
+it("has no background wake timer while hidden and resumes immediately", async () => {
+  vi.useFakeTimers();
+  const doc = Object.assign(new EventTarget(), { hidden: true });
+  const refresh = vi.fn().mockResolvedValue(undefined);
+  const stop = startVisibleRefresh(refresh, doc);
+  expect(vi.getTimerCount()).toBe(0);
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(refresh).not.toHaveBeenCalled();
+  doc.hidden = false; doc.dispatchEvent(new Event("visibilitychange"));
+  expect(refresh).toHaveBeenCalledTimes(1);
+  await Promise.resolve();
+  doc.hidden = true; doc.dispatchEvent(new Event("visibilitychange"));
+  expect(vi.getTimerCount()).toBe(0);
+  stop();
+});
 it("refreshes updated scores serially, pauses hidden pages and repairs on visibility", async () => {
   vi.useFakeTimers();
   const doc = Object.assign(new EventTarget(), { hidden: false });

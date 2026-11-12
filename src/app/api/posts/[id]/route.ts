@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { authed } from "@/lib/guard";
 import { json } from "@/lib/http";
-import { postInclude, serializePost, withAlsoIn } from "@/lib/serialize";
+import { postSelect, serializePost, withAlsoIn } from "@/lib/serialize";
 import { getSettings } from "@/lib/settings";
 import { OPEN_STATUSES, followUpDate } from "@/lib/automation";
 
@@ -45,7 +45,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   if (rest.categoryId !== undefined || rest.subcategoryId !== undefined) data.aiProvider = "owner";
   if (followUpAt !== undefined) data.followUpAt = followUpAt ? new Date(followUpAt) : null;
   try {
-    const post = await prisma.post.update({ where: { id }, data: data as Prisma.PostUncheckedUpdateInput, include: postInclude });
+    const post = await prisma.post.update({ where: { id }, data: data as Prisma.PostUncheckedUpdateInput, select: postSelect });
     return json({ post: (await withAlsoIn([serializePost(post)]))[0] });
   } catch {
     return json({ error: "ไม่พบประกาศ" }, 404);

@@ -51,11 +51,9 @@ export function findNearDuplicate(input: {
 }) {
   const windowMs = input.windowMs ?? DUPLICATE_WINDOW_MS;
   const threshold = input.threshold ?? NEAR_DUPLICATE;
-  const ownHash = input.normalizedText ? normalizedTextHash(input.normalizedText) : "";
   for (const other of input.others) {
     if (other.id === undefined) continue;
-    const otherHash = other.normalizedText ? normalizedTextHash(other.normalizedText) : "";
-    const sameText = Boolean(ownHash) && ownHash === otherHash;
+    const sameText = Boolean(input.normalizedText) && input.normalizedText === other.normalizedText;
     if (sameText && input.normalizedText.length >= CROSS_TEXT_DUP_MIN) {
       return { id: other.id, reason: "text" as const };
     }

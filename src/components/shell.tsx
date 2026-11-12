@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { Activity, Bell, BookOpen, Bookmark, Bug, LayoutDashboard, Lightbulb, LogOut, MessageSquareText, Radar, Rss, Settings, Sun, Tags, Users, Workflow } from "lucide-react";
 import { api } from "./api";
 import { cn } from "@/lib/utils";
+import { startVisibleRefresh } from "@/lib/visible-refresh";
 
 const NAV = [
   { href: "/getting-started", label: "เริ่มใช้งาน", icon: Activity },
@@ -36,18 +37,24 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let stop = false;
-    const load = () => {
-      api<{ unread: number }>("/api/notifications")
+    let loading = false;
+    const controller = new AbortController();
+    const load = async () => {
+      if (stop || loading) return;
+      loading = true;
+      await api<{ unread: number }>("/api/notifications?countOnly=1", { signal: controller.signal })
         .then((data) => {
           if (!stop) setUnread(data.unread);
         })
-        .catch(() => undefined);
+        .catch(() => undefined)
+        .finally(() => { loading = false; });
     };
-    load();
-    const timer = setInterval(load, 20000);
+    if (!document.hidden) void load();
+    const stopRefresh = startVisibleRefresh(load, document, 20000);
     return () => {
       stop = true;
-      clearInterval(timer);
+      stopRefresh();
+      controller.abort();
     };
   }, [pathname]);
 

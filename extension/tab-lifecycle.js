@@ -91,5 +91,19 @@
     }
     return value;
   }
-  root.MyBotTabs = { bounded, lookup, inspect, close, samePostUrl, due, retry, note, summary };
+  function parkedReleaseIds(readers, active, options = {}) {
+    const now = options.now ?? Date.now(), schedules = options.schedules || {}, recoverable = options.recoverable || new Set();
+    const parked = Object.values(readers || {}).filter(reader => reader.continuation && !reader.closing && !active.has(reader.tabId));
+    const candidates = parked.filter(reader => recoverable.has(reader.tabId));
+    const slots = Math.max(0, (options.budget ?? 4) - (parked.length - candidates.length));
+    const release = new Set();
+    const near = candidates.filter(reader => {
+      const at = schedules[reader.continuation.sourceId];
+      if (!Number.isFinite(at) || at > now + 90000 || now - (reader.at || 0) >= 300000) { release.add(reader.tabId); return false; }
+      return true;
+    }).sort((a, b) => schedules[a.continuation.sourceId] - schedules[b.continuation.sourceId] || (b.at || 0) - (a.at || 0) || a.tabId - b.tabId);
+    for (const reader of near.slice(slots)) release.add(reader.tabId);
+    return release;
+  }
+  root.MyBotTabs = { bounded, lookup, inspect, close, samePostUrl, due, retry, note, summary, parkedReleaseIds };
 })(typeof globalThis !== "undefined" ? globalThis : this);

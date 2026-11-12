@@ -21,6 +21,18 @@ function parseFixture(name: string) {
   return dom.window.MyBotParser.parseFacebookPosts(dom.window.document);
 }
 
+it("can parse an explicit article slice without revisiting other articles", () => {
+  const dom = new JSDOM(readFileSync("extension/fixtures/group-feed.html", "utf8"), {
+    runScripts: "dangerously", url: "https://www.facebook.com/groups/123",
+  });
+  try {
+    loadScripts(dom);
+    const articles = [...dom.window.document.querySelectorAll('[role="article"]')];
+    const posts = dom.window.MyBotParser.parseFacebookPosts(dom.window.document, [articles[1]]);
+    expect(posts).toHaveLength(1); expect(posts[0].text).toContain("ขายการ์ดจอ");
+  } finally { dom.window.close(); }
+});
+
 describe("facebook parser", () => {
   it("reads article posts with author, permalink, time, and images", () => {
     const posts = parseFixture("group-feed.html");

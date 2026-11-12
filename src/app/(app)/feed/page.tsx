@@ -147,20 +147,28 @@ export default function FeedPage() {
   const [sound, setSound] = useState(true);
   const loadSequence = useRef(0);
   const loadsInFlight = useRef(0);
+  const loadController = useRef<AbortController | null>(null);
+  const liveView = useRef({ page, filters, sound });
+
+  useEffect(() => { liveView.current = { page, filters, sound }; }, [page, filters, sound]);
+  useEffect(() => () => { loadSequence.current++; loadController.current?.abort(); }, []);
 
   const load = useCallback(async (nextPage: number, nextFilters: Filters) => {
+    loadController.current?.abort();
+    const controller = new AbortController();
+    loadController.current = controller;
     loadsInFlight.current++;
     const sequence = ++loadSequence.current;
     setLoading(true);
     setError("");
     try {
-      const data = await api<{ posts: Lead[]; total: number; searchScope?: string }>(`/api/posts?${queryFrom(nextFilters, nextPage)}`);
+      const data = await api<{ posts: Lead[]; total: number; searchScope?: string }>(`/api/posts?${queryFrom(nextFilters, nextPage)}`, { signal: controller.signal });
       if (sequence !== loadSequence.current) return;
       setPosts(data.posts);
       setTotal(data.total);
       setSearchScope(data.searchScope ?? "");
     } catch (err) {
-      if (sequence === loadSequence.current) setError(err instanceof ApiError ? err.message : "โหลดฟีดไม่สำเร็จ");
+      if (!controller.signal.aborted && sequence === loadSequence.current) setError(err instanceof ApiError ? err.message : "โหลดฟีดไม่สำเร็จ");
     } finally {
       loadsInFlight.current--;
       if (sequence === loadSequence.current) setLoading(false);
@@ -205,24 +213,28 @@ export default function FeedPage() {
   useEffect(() => {
     if (!ready) return;
     const stream = new EventSource("/api/v1/stream");
-    const stopRepair = startVisibleRefresh(() => loadsInFlight.current ? Promise.resolve() : load(page, filters));
+    const reload = () => {
+      const view = liveView.current;
+      return loadsInFlight.current ? Promise.resolve() : load(view.page, view.filters);
+    };
+    const stopRepair = startVisibleRefresh(reload);
     stream.onmessage = (event) => {
       let data: { type: string; posts?: Lead[] };
       try { data = JSON.parse(event.data); } catch { return; }
       if (!data || typeof data.type !== "string") return;
-      if (data.type === "hello") { if (!loadsInFlight.current) void load(page, filters); return; } // Reconnect repairs gaps with the normal filtered query.
+      if (data.type === "hello") { void reload(); return; } // Reconnect repairs gaps with the normal filtered query.
       if (data.type !== "posts" || !Array.isArray(data.posts) || !data.posts.length) return;
       const interesting = data.posts.filter((post) => !post.isAd && !post.forbiddenHit && !post.duplicateOfId);
-      if (sound && interesting.length) beep();
+      if (liveView.current.sound && interesting.length) beep();
       if (typeof Notification !== "undefined" && Notification.permission === "granted") {
         for (const post of interesting.slice(0, 2)) {
           new Notification("MY-BOT พบลีดใหม่", { body: post.text.slice(0, 140) });
         }
       }
-      if (!loadsInFlight.current) void load(page, filters);
+      void reload();
     };
     return () => { stopRepair(); stream.close(); };
-  }, [ready, filters, load, page, sound]);
+  }, [ready, load]);
 
   const parents = meta?.categories.filter((item) => !item.parentId) ?? [];
   const children = meta?.categories.filter((item) => item.parentId === filters.categoryId) ?? [];

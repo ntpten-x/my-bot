@@ -5,11 +5,14 @@ export function memo<T>(key: string, ttlMs: number, load: () => Promise<T>): Pro
   const now = Date.now();
   const hit = store.get(key);
   if (hit && hit.until > now) return hit.value as Promise<T>;
+  // Share pending work regardless of duration; start freshness when the read finishes.
   const value = load();
-  store.set(key, { until: now + ttlMs, value });
-  value.catch(() => {
-    if (store.get(key)?.value === value) store.delete(key);
-  });
+  const entry = { until: Infinity, value };
+  store.set(key, entry);
+  void value.then(
+    () => { if (store.get(key) === entry) entry.until = Date.now() + ttlMs; },
+    () => { if (store.get(key) === entry) store.delete(key); },
+  );
   return value;
 }
 

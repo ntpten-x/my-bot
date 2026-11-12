@@ -264,6 +264,34 @@ const OUTBOX_MAX_AGE_MS = 72 * 3600000;
 const CAPTURE_JOURNAL_MAX = 400;
 const JOURNAL_CHUNK = 40;
 const INGEST_TEXT_MAX = 20000;
+const CAPTURE_STORAGE_BUDGET = 8 * 1024 * 1024;
+const CAPTURE_PROMOTION_BUDGET = 9 * 1024 * 1024;
+async function captureCapacity() {
+  const storage = chrome.storage.local;
+  if (!storage.getBytesInUse) return null;
+  const bytes = await storage.getBytesInUse(null);
+  return { bytes, budgetBytes: CAPTURE_STORAGE_BUDGET, blocked: bytes + 1024 > CAPTURE_STORAGE_BUDGET };
+}
+async function writeCaptureState(patch, promotion = false) {
+  const storage = chrome.storage.local;
+  if (storage.getBytesInUse) {
+    const keys = Object.keys(patch);
+    const [used, replaced] = await Promise.all([storage.getBytesInUse(null), storage.getBytesInUse(keys)]);
+    const encoder = new TextEncoder();
+    const written = keys.reduce((sum, key) => sum + encoder.encode(key).byteLength + encoder.encode(JSON.stringify(patch[key])).byteLength, 0);
+    const nextBytes = used - replaced + written + 1024;
+    const status = { bytes: used, budgetBytes: CAPTURE_STORAGE_BUDGET, blocked: nextBytes > CAPTURE_STORAGE_BUDGET };
+    const ceiling = promotion ? CAPTURE_PROMOTION_BUDGET : CAPTURE_STORAGE_BUDGET;
+    if (nextBytes > ceiling && nextBytes > used + 1024) {
+      await storage.set({ captureStorage: status }).catch(() => undefined);
+      const error = new Error("capture storage budget reached; pending data retained");
+      error.code = "CAPTURE_STORAGE_BUDGET";
+      throw error;
+    }
+    patch = { ...patch, captureStorage: { ...status, bytes: nextBytes - 1024 } };
+  }
+  await storage.set(patch);
+}
 let outboxLock = Promise.resolve();
 function withOutboxLock(fn) {
   const task = outboxLock.then(fn); outboxLock = task.catch(() => undefined); return task;
@@ -397,21 +425,25 @@ async function appendCaptureJournalUnlocked(item) {
   }
   const next = others.concat(chunks);
   const pending = next.reduce((sum, row) => sum + (row.posts?.length || 0), 0);
-  await chrome.storage.local.set({ captureJournal: next, captureJournalPending: pending });
+  await writeCaptureState({ captureJournal: next, captureJournalPending: pending });
   return { pending, added };
 }
 async function promoteCaptureJournalUnlocked() {
   let journal = await loadCaptureJournal();
   let outbox = await loadOutbox();
   if (!journal.length) {
-    await chrome.storage.local.set({ captureJournalPending: 0, outboxBlocked: outbox.length >= OUTBOX_MAX_TOTAL });
+    const capacity = await captureCapacity();
+    await chrome.storage.local.set({ captureJournalPending: 0, outboxBlocked: outbox.length >= OUTBOX_MAX_TOTAL,
+      ...(capacity ? { captureStorage: capacity } : {}) });
     return { promoted: 0, remaining: 0, lastQueued: null };
   }
   const kept = [];
   let promoted = 0;
+  let cleaned = false;
   let lastQueued = null;
   for (const entry of journal) {
     const posts = (Array.isArray(entry.posts) ? entry.posts : []).filter((post) => post?.url && typeof post.text === "string");
+    if (!posts.length || posts.length !== entry.posts?.length) cleaned = true;
     if (!posts.length) continue;
     const apiBase = entry.apiBase || null;
     if (!outboxHasRoom(outbox, apiBase)) {
@@ -436,22 +468,27 @@ async function promoteCaptureJournalUnlocked() {
   }
   const remaining = kept.reduce((sum, row) => sum + (row.posts?.length || 0), 0);
   const currentBlocked = !outboxHasRoom(outbox, lastQueued?.apiBase || null) && remaining > 0;
-  await chrome.storage.local.set({
-    outbox,
-    captureJournal: kept,
+  const patch = {
     captureJournalPending: remaining,
     outboxBlocked: outbox.length >= OUTBOX_MAX_TOTAL || currentBlocked || remaining > 0,
-  });
+  };
+  // A blocked journal is unchanged: do not serialize/write both queues every wake.
+  if (promoted > 0 || cleaned) await writeCaptureState({ ...patch, ...(promoted > 0 ? { outbox } : {}), captureJournal: kept }, true);
+  else await chrome.storage.local.set(patch);
   return { promoted, remaining, lastQueued };
 }
 async function queueOutbox(item) {
   return withOutboxLock(async () => {
     const appended = await appendCaptureJournalUnlocked(item);
-    const promoted = await promoteCaptureJournalUnlocked();
+    // Budget pressure after durable admission may defer promotion; other write failures retain the original recovery path.
+    const promoted = await promoteCaptureJournalUnlocked().catch(error => {
+      if (error?.code === "CAPTURE_STORAGE_BUDGET") return { lastQueued: null };
+      throw error;
+    });
     if (promoted.lastQueued) return promoted.lastQueued;
     // Journal write already durable — callers may acknowledge. Transport waits for promote.
     await chrome.storage.local.set({ outboxBlocked: true });
-    if (appended.added > 0) {
+    if (appended.pending > 0) {
       await rememberError("คิวข้อมูลเต็ม เก็บไว้ในสมุดจับภาพแล้ว จะส่งต่อเมื่อมีช่องว่าง");
       return { batchId: null, journalOnly: true, posts: item.posts, sourceUrl: item.sourceUrl, fbUserId: item.fbUserId || null, apiBase: item.apiBase || null, at: Date.now() };
     }
@@ -513,7 +550,13 @@ async function flushOutbox(cfg, options = {}) {
       await countSent(Number(data.inserted) || 0);
     }
     return results;
-  } finally { flushing = false; }
+  } finally {
+    await withOutboxLock(async () => {
+      const capacity = await captureCapacity();
+      if (capacity) await chrome.storage.local.set({ captureStorage: capacity });
+    }).catch(() => undefined);
+    flushing = false;
+  }
 }
 
 async function countSent(count) {
@@ -616,15 +659,23 @@ async function readingTabs() {
   return tabs.slice(0, 15).map((tab) => ({ title: String(tab.title || "").slice(0, 120), url: String(tab.url || "").split("?")[0].slice(0, 200) }));
 }
 
-let beating = false;
+let heartbeatWork = null;
 
-async function heartbeat() {
-  if (beating) return;
-  await applyServerRoute().catch(() => undefined);
-  const cfg = await loadConfig();
-  if (!cfg.token) return;
-  beating = true;
+function heartbeat() {
+  if (heartbeatWork) return heartbeatWork;
+  const work = heartbeatOnce();
+  heartbeatWork = work;
+  const release = () => { if (heartbeatWork === work) heartbeatWork = null; };
+  void work.then(release, release);
+  return work;
+}
+async function heartbeatOnce() {
+  let shouldCycle = false;
   try {
+    await applyServerRoute().catch(() => undefined);
+    const cfg = await loadConfig();
+    if (!cfg.token) return;
+    shouldCycle = true;
     await probeFacebookIdentity();
     const stored = await chrome.storage.local.get({
       fbIdentity: null,
@@ -704,12 +755,11 @@ async function heartbeat() {
       if (!status.accountPaused && (outbox.length || journal.length)) await flushOutbox(await loadConfig());
     }
   } catch {
-    await chrome.storage.local.set({ lastHeartbeat: { at: Date.now(), status: 0 } });
+    await chrome.storage.local.set({ lastHeartbeat: { at: Date.now(), status: 0 } }).catch(() => undefined);
   } finally {
-    beating = false;
     // Heartbeat is the most reliable MV3 wake. Nudge discovery here so a dropped
     // mybot-tick alarm cannot leave sources idle while telemetry still looks alive.
-    void cycle();
+    if (shouldCycle) void cycle();
   }
 }
 
@@ -1171,13 +1221,28 @@ async function closeOrphanReaders(options = {}) {
   let changed = false;
   const cfg = await loadConfig();
   const fbUserId = await currentFbUserId();
+  const localRecovery = await chrome.storage.local.get({ coverageRecovery: {} });
+  const recoverable = new Set();
+  for (const reader of Object.values(readers)) {
+    const saved = reader.continuation;
+    if (!saved || !Array.isArray(saved.run?.fresh)) continue;
+    const recovery = localRecovery.coverageRecovery?.[JSON.stringify([saved.apiBase, saved.fbUserId, saved.sourceUrl])];
+    if (!recovery || recovery.apiBase !== saved.apiBase || recovery.fbUserId !== saved.fbUserId || recovery.sourceUrl !== saved.sourceUrl || !Array.isArray(recovery.pending)) continue;
+    const durable = new Set(recovery.pending.map(post => JSON.stringify(cleanPost(post))));
+    if (saved.run.fresh.every(post => durable.has(JSON.stringify(cleanPost(post))))) recoverable.add(reader.tabId);
+  }
+  const parkedRelease = globalThis.MyBotTabs.parkedReleaseIds?.(readers, activeReaderTabs, {
+    schedules: cfg.schedules || {}, recoverable,
+  }) || new Set();
   for (const [key, reader] of Object.entries(readers)) {
     if (Date.now() >= deadlineMs) break;
     if (activeReaderTabs.has(reader.tabId)) continue;
     const saved = reader.continuation;
+    // Missing/mismatched durable data is never a reason to discard the last session snapshot.
+    if (saved && !recoverable.has(reader.tabId)) continue;
     // The DOM cursor is useful only while we actually resume it. Durable recovery
     // and pending posts were saved before parking; do not leave abandoned tabs forever.
-    const parkedExpired = saved && (options.parked || Date.now() - (reader.at || 0) >= 5 * 60_000);
+    const parkedExpired = saved && (options.parked || parkedRelease.has(reader.tabId) || Date.now() - (reader.at || 0) >= 5 * 60_000);
     let ownershipChanged = false;
     // MV3 can restart while a feed is parked. Adopt the saved tab instead of closing it.
     if (!parkedExpired && !reader.closing && !cfg.paused && !cfg.accountPaused && saved && saved.apiBase === base(cfg) && saved.fbUserId === fbUserId) {
@@ -1293,6 +1358,7 @@ async function saveContinuation(cfg, group, reader, run) {
     const stored = await chrome.storage.session.get({ readers: {} });
     const readers = { ...stored.readers };
     readers[String(reader.tabId)] = { ...reader, boot: BOOT_ID, at: Date.now(), continuation: {
+      sourceId: group.id,
       sourceUrl: group.url, url: globalThis.MyBotScrape.scrapeUrl(group.url, sourceKind(group)), apiBase: base(cfg), fbUserId,
       run: globalThis.MyBotScrape.snapshotRun(run),
     } };
@@ -1661,9 +1727,9 @@ async function scrapeGroupPass(cfg, group, remote, options) {
     const knownKeys = group.knownKeys || [];
     const canRead = async () => {
       const latest = await loadConfig();
-      const blocked = await chrome.storage.local.get({ outboxBlocked: false });
+      const blocked = await chrome.storage.local.get({ outboxBlocked: false, captureStorage: null });
       if (await globalThis.MyBotFocus.blocked()) return "กำลังส่งคอมเมนต์ — พักการอ่านชั่วคราว";
-      if (latest.paused || latest.accountPaused || latest.token !== cfg.token || base(latest) !== base(cfg) || blocked.outboxBlocked) return "paused";
+      if (latest.paused || latest.accountPaused || latest.token !== cfg.token || base(latest) !== base(cfg) || blocked.outboxBlocked || blocked.captureStorage?.blocked) return "paused";
       return quietReason(remote?.quiet);
     };
     const runPass = (pass, hold, current) => {
@@ -1895,9 +1961,11 @@ async function cycle() {
   await applyServerRoute().catch(() => undefined);
   const cfg = await loadConfig();
   if (cfg.paused || cfg.accountPaused || !cfg.token) return;
-  if ((await chrome.storage.local.get({ outboxBlocked: false })).outboxBlocked) {
+  const admission = await chrome.storage.local.get({ outboxBlocked: false, captureStorage: null });
+  if (admission.outboxBlocked || admission.captureStorage?.blocked) {
     await flushOutbox(cfg);
-    if ((await chrome.storage.local.get({ outboxBlocked: false })).outboxBlocked) return;
+    const after = await chrome.storage.local.get({ outboxBlocked: false, captureStorage: null });
+    if (after.outboxBlocked || after.captureStorage?.blocked) return;
   }
   // Facebook logged out (seen in the last 30 min): wait; a later cycle probes again.
   await probeFacebookIdentity();
@@ -2077,8 +2145,14 @@ async function forwardManual(message, sender) {
   const cfg = await loadConfig();
   if (cfg.paused || cfg.accountPaused || !cfg.token) return { accepted: false, retryAfterMs: 15000 };
   const fbUserId = await currentFbUserId();
+  const scopeMatches = () => !message.captureScope || (message.captureScope.apiBase === base(cfg) && message.captureScope.fbUserId === fbUserId);
+  if (!scopeMatches()) return { accepted: false, retryAfterMs: 15000 };
   // Per-post dedupe, never a per-source time gate: two posts a second apart must both survive.
   const work = manualTail.then(async () => {
+    const current = await loadConfig();
+    if (current.paused || current.accountPaused || current.token !== cfg.token || base(current) !== base(cfg) || await currentFbUserId() !== fbUserId) {
+      return { accepted: false, retryAfterMs: 15000 };
+    }
     const rows = (message.posts || []).slice(0, 40).filter(post => post?.url && post.text).map(post => ({ post,
       key: JSON.stringify([base(cfg), cfg.token, fbUserId, message.sourceUrl, globalThis.MyBotScrape.postKey(post.url)]),
       fingerprint: JSON.stringify([post.text, post.images || []]),
@@ -2095,6 +2169,7 @@ async function forwardManual(message, sender) {
   });
   manualTail = work.catch(() => undefined);
   const result = await work;
+  if (!result.accepted) return result;
   // Durable receipt is immediate; transport has its own bounded, restart-safe outbox.
   const latest = await loadConfig();
   if (!latest.paused && !latest.accountPaused && latest.token === cfg.token && base(latest) === base(cfg)) {

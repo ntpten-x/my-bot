@@ -85,3 +85,30 @@ it("does not start Chrome work after the shared cleanup deadline", async () => {
   expect(await h.api.close(h.ref, h.api.samePostUrl, { deadlineMs: Date.now() - 1 })).toBe("retry");
   expect(h.tabs.get).not.toHaveBeenCalled();expect(h.tabs.query).not.toHaveBeenCalled();expect(h.tabs.remove).not.toHaveBeenCalled();
 });
+
+it("releases far-future or excess parked readers while preserving active and unrecovered work", () => {
+  const h = harness(), now = Date.now();
+  const readers = Object.fromEntries(Array.from({ length: 8 }, (_, index) => [String(index + 1), {
+    tabId: index + 1, at: now, continuation: { sourceId: `source-${index + 1}` },
+  }]));
+  const schedules = Object.fromEntries(Array.from({ length: 8 }, (_, index) => [`source-${index + 1}`, now + (index + 1) * 10000]));
+  const result = h.api.parkedReleaseIds(readers, new Set([1]), {
+    now, schedules, recoverable: new Set([2, 3, 4, 5, 6, 7]),
+  });
+  // Active 1 is outside the parked budget; unrecovered 8 consumes one of four slots.
+  expect([...result]).toEqual([5, 6, 7]);
+  expect(result.has(1)).toBe(false); expect(result.has(8)).toBe(false);
+});
+
+it("releases distant and unknown schedules only after durable recovery is confirmed", () => {
+  const h = harness(), now = Date.now();
+  const readers = {
+    a: { tabId: 1, at: now, continuation: { sourceId: "distant" } },
+    b: { tabId: 2, at: now, continuation: { sourceId: "missing" } },
+    c: { tabId: 3, at: now, continuation: { sourceId: "distant" } },
+    d: { tabId: 4, at: now, closing: true, continuation: { sourceId: "distant" } },
+  };
+  expect([...h.api.parkedReleaseIds(readers, new Set(), {
+    now, schedules: { distant: now + 90001 }, recoverable: new Set([1, 2, 4]),
+  })]).toEqual([1, 2]);
+});

@@ -2,7 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { authed } from "@/lib/guard";
 import { json } from "@/lib/http";
 import { bangkokStart } from "@/lib/format";
-import { postInclude, serializePost } from "@/lib/serialize";
+import { postSelect, serializePost } from "@/lib/serialize";
 import { heartbeatIsStale, sourceIsStale } from "@/lib/extension-health";
 import { EXTENSION_SOURCE_TYPES } from "@/lib/scrape-plan";
 import { memo } from "@/lib/memo";
@@ -36,7 +36,7 @@ async function loadStats() {
         where: { isAd: false, forbiddenHit: false, duplicateOfId: null },
         orderBy: [{ sortAt: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }],
         take: 6,
-        include: postInclude,
+        select: postSelect,
         relationLoadStrategy: "join",
       }),
       prisma.fetchLog.findMany({ orderBy: { createdAt: "desc" }, take: 6, include: { source: true }, relationLoadStrategy: "join" }),

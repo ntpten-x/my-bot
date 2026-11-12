@@ -1,6 +1,6 @@
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { postInclude, serializePost } from "@/lib/serialize";
+import { postSelect, serializePost } from "@/lib/serialize";
 import { initialPostStreamCursor, postStreamWhere, type PostStreamCursor } from "@/lib/post-stream";
 
 export const dynamic = "force-dynamic";
@@ -36,7 +36,7 @@ export async function GET(request: Request) {
             where: postStreamWhere(cursor),
             orderBy: [{ createdAt: "asc" }, { id: "asc" }],
             take: 20,
-            include: postInclude,
+            select: postSelect,
           });
           if (closed) return;
           if (posts.length) {

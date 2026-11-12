@@ -7,6 +7,7 @@ import { Card } from "./ui";
 import { cn } from "@/lib/utils";
 import type { SystemOverview } from "@/lib/system-overview";
 import type { Level } from "@/lib/system-status";
+import { startVisibleRefresh } from "@/lib/visible-refresh";
 
 export type { SystemOverview };
 
@@ -45,11 +46,8 @@ export function useSystemOverview(intervalMs = 15000) {
   }, []);
 
   useEffect(() => {
-    void load();
-    const timer = setInterval(() => {
-      if (typeof document === "undefined" || document.visibilityState === "visible") void load();
-    }, intervalMs);
-    return () => clearInterval(timer);
+    if (!document.hidden) void load();
+    return startVisibleRefresh(() => load(), document, intervalMs);
   }, [load, intervalMs]);
 
   return { data, error, loading, reload: load };

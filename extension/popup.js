@@ -166,8 +166,9 @@ document.getElementById("save").addEventListener("click", async () => {
 });
 
 async function showOutbox() {
-  const { outbox = [], outboxRejectedItems = 0, fullTextMetrics: detail, fullTextOverflow = 0 } = await chrome.storage.local.get({ outbox: [], outboxRejectedItems: 0, fullTextMetrics: null, fullTextOverflow: 0 });
+  const { outbox = [], outboxRejectedItems = 0, captureStorage, fullTextMetrics: detail, fullTextOverflow = 0 } = await chrome.storage.local.get({ outbox: [], outboxRejectedItems: 0, captureStorage: null, fullTextMetrics: null, fullTextOverflow: 0 });
   document.getElementById("outboxStatus").textContent = `คิวข้อมูล ${outbox.length} ชุด · ต้องตรวจ ${outbox.filter(item => item.problem).length} ชุด · ไม่รับเพิ่มเพราะเต็ม ${outboxRejectedItems} รายการ` + (detail ? ` · อ่านรายละเอียด: ลอง ${detail.tried} สำเร็จ ${detail.succeeded} ไม่สำเร็จ ${detail.failed} เหลือ ${detail.remaining} ต้องตรวจ ${detail.review || 0} เกินคิว ${fullTextOverflow} เก่าสุด ${Math.round((detail.oldestAgeMs || 0) / 60000)} นาที (${Math.round(detail.durationMs / 1000)} วินาที)` : "");
+  if (captureStorage) document.getElementById("outboxStatus").textContent += ` · พื้นที่ ${(captureStorage.bytes / 1048576).toFixed(1)}/${(captureStorage.budgetBytes / 1048576).toFixed(0)} MiB${captureStorage.blocked ? " พักรับข้อมูลใหม่ รอระบายคิว" : ""}`;
 }
 document.getElementById("clearOutboxProblems").addEventListener("click", async () => {
   if (!confirm("ยืนยันว่าตรวจรายการหมดอายุ/ถูกปฏิเสธแล้ว และยอมรับการลบข้อมูลเฉพาะรายการเหล่านี้?")) return;
@@ -180,7 +181,7 @@ void showOutbox();
 function showTabStatus(tabs) {
   document.getElementById("tabStatus").textContent = tabs
     ? `กำลังอ่าน ${tabs.activeReaders} · คอมเมนต์ ${tabs.activeComments} · รออ่านต่อ ${tabs.parkedReaders} · รอปิด ${tabs.closing} · รอเก็บกวาด ${tabs.idleReaders} · คืนให้เจ้าของแล้ว ${tabs.released}`
-      + (tabs.closing ? " — Chrome ยังไม่ยืนยันการปิด ระบบจะลองใหม่" : tabs.parkedReaders ? " — เก็บตำแหน่งอ่านต่อ ปิดอัตโนมัติเมื่อพักเกิน 5 นาที หรือกดเก็บกวาดได้" : "")
+      + (tabs.closing ? " — Chrome ยังไม่ยืนยันการปิด ระบบจะลองใหม่" : tabs.parkedReaders ? " — เก็บแท็บที่ใกล้ถึงคิวไว้ คืนแท็บที่ไม่จำเป็นเมื่อข้อมูลกู้คืนพร้อม หรือกดเก็บกวาดได้" : "")
     : "ยังอ่านสถานะแท็บบอทไม่ได้ ลองเปิดป๊อปอัปใหม่";
 }
 function refreshTabStatus(type = "bot-tabs-status") {

@@ -5,9 +5,13 @@ import { json } from "@/lib/http";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: Request) {
   const { error } = await authed();
   if (error) return error;
+  if (new URL(request.url).searchParams.get("countOnly") === "1") {
+    const unread = await prisma.notification.count({ where: { read: false, channel: "in_app" } });
+    return json({ unread });
+  }
   const [items, unread] = await Promise.all([
     prisma.notification.findMany({ where: { channel: { not: { startsWith: "external_" } } }, orderBy: { createdAt: "desc" }, take: 80 }),
     prisma.notification.count({ where: { read: false, channel: "in_app" } }),

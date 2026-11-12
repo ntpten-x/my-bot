@@ -4,7 +4,7 @@ import { initialPostStreamCursor, POST_STREAM_OVERLAP_MS, postStreamWhere } from
 const mocks = vi.hoisted(() => ({ session: vi.fn(), find: vi.fn() }));
 vi.mock("../../src/lib/auth", () => ({ getSession: mocks.session }));
 vi.mock("../../src/lib/prisma", () => ({ prisma: { post: { findMany: mocks.find } } }));
-vi.mock("../../src/lib/serialize", () => ({ postInclude: {}, serializePost: (post: { id: string }) => ({ id: post.id }) }));
+vi.mock("../../src/lib/serialize", () => ({ postSelect: {}, serializePost: (post: { id: string }) => ({ id: post.id }) }));
 import { GET } from "../../src/app/api/v1/stream/route";
 
 beforeEach(() => { vi.useFakeTimers(); vi.clearAllMocks(); mocks.session.mockResolvedValue({ userId: "synthetic" }); });

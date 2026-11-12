@@ -222,12 +222,12 @@
     return images.slice(0, 6);
   }
 
-  function parseFacebookPosts(doc) {
+  function parseFacebookPosts(doc, articles) {
     const rootDoc = doc || (typeof document !== "undefined" ? document : null);
     if (!rootDoc || !rootDoc.querySelectorAll || !SELECTORS) return [];
     const posts = [];
     const seen = new Set();
-    for (const article of collectArticles(rootDoc)) {
+    for (const article of articles || collectArticles(rootDoc)) {
       const text = extractText(article);
       const url = extractPermalink(article);
       if (!text || text.length < 8 || !url) continue;
@@ -270,13 +270,18 @@
     return match ? match[1] : "";
   }
 
-  function parseMarketplaceListings(doc) {
+  function collectMarketplaceCards(doc) {
+    const selector = SELECTORS.marketplace.card.join(",");
+    return [...(doc.matches?.(selector) ? [doc] : []), ...doc.querySelectorAll(selector)];
+  }
+
+  function parseMarketplaceListings(doc, cards) {
     const rootDoc = doc || (typeof document !== "undefined" ? document : null);
     const mp = SELECTORS && SELECTORS.marketplace;
     if (!rootDoc || !rootDoc.querySelectorAll || !mp) return [];
     const listings = [];
     const seen = new Set();
-    rootDoc.querySelectorAll(mp.card.join(",")).forEach((card) => {
+    (cards || collectMarketplaceCards(rootDoc)).forEach((card) => {
       const id = listingId(card.getAttribute("href"));
       if (!id || seen.has(id)) return;
       const texts = leafTexts(card).filter((value) => value.length <= 200);
@@ -310,7 +315,7 @@
     return listings;
   }
 
-  const api = { parseFacebookPosts, parseMarketplaceListings, readGroupId, isTruncatedText, SELECTORS };
+  const api = { parseFacebookPosts, parseMarketplaceListings, collectArticles, collectMarketplaceCards, readGroupId, isTruncatedText, SELECTORS };
   root.MyBotParser = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);

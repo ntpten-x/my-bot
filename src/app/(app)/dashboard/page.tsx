@@ -7,6 +7,7 @@ import { ApiError, api } from "@/components/api";
 import { INTENT_LABEL, timeAgo } from "@/lib/format";
 import type { Lead } from "@/lib/lead";
 import { SystemOverviewWidget } from "@/components/system-overview";
+import { startVisibleRefresh } from "@/lib/visible-refresh";
 
 type Stats = {
   postsToday: number;
@@ -32,19 +33,20 @@ export default function DashboardPage() {
   useEffect(() => {
     let stopped = false;
     let loading = false;
+    const controller = new AbortController();
     const load = async () => {
       if (loading) return;
       loading = true;
       try {
-        const data = await api<Stats>("/api/stats");
+        const data = await api<Stats>("/api/stats", { signal: controller.signal });
         if (!stopped) { setStats(data); setError(""); }
       } catch (err) {
         if (!stopped) setError(err instanceof ApiError ? err.message : "โหลดแดชบอร์ดไม่สำเร็จ");
       } finally { loading = false; }
     };
-    void load();
-    const timer = setInterval(() => { void load(); }, 15000);
-    return () => { stopped = true; clearInterval(timer); };
+    if (!document.hidden) void load();
+    const stopRefresh = startVisibleRefresh(load, document, 15000);
+    return () => { stopped = true; stopRefresh(); controller.abort(); };
   }, []);
 
   const cards = stats

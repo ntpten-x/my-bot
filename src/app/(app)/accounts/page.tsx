@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/components/api";
 import { Badge, Button, Card, Input, Label, Select } from "@/components/ui";
 import { timeAgo } from "@/lib/format";
+import { startVisibleRefresh } from "@/lib/visible-refresh";
 
 type Account = { id: string; name: string; browser: string; profileLabel: string; enabled: boolean; connected: boolean; localEnabled: boolean; status: string; postsCaptured: number; lastSeenAt: string; devices: { id: string; browser: string; profileLabel: string; lastSeenAt: string; connected: boolean; localEnabled: boolean; version: string; currentVersion: boolean }[] };
 const STATUS: Record<string, string> = { ready: "พร้อมรับงาน", paused: "หยุดงานจากระบบ", offline: "รอเชื่อมต่อ", local_paused: "พักงานที่ส่วนขยาย", upgrade_required: "ต้องอัปเดตส่วนขยาย" };
@@ -28,7 +29,12 @@ export default function AccountsPage() {
     } catch (err) { if (id === requestId.current.value) setError(err instanceof Error ? err.message : "โหลดบัญชีไม่สำเร็จ"); }
     finally { if (id === requestId.current.value) setLoading(false); }
   }, []);
-  useEffect(() => { const sequence = requestId.current; void load(); const timer = setInterval(() => void load(), 15000); return () => { clearInterval(timer); sequence.value++; }; }, [load]);
+  useEffect(() => {
+    const sequence = requestId.current;
+    if (!document.hidden) void load();
+    const stopRefresh = startVisibleRefresh(load, document, 15000);
+    return () => { stopRefresh(); sequence.value++; };
+  }, [load]);
   async function toggle(account: Account) {
     setBusy(account.id); setError(""); setInfo(""); requestId.current.value++;
     try {

@@ -12,7 +12,8 @@ function harness() {
   });
   vm.runInContext(source.slice(source.indexOf("async function forwardManual("), source.indexOf("async function pollTasks(")), context);
   return { queue, flush, setConfig: (value: Partial<typeof cfg>) => { cfg = { ...cfg, ...value }; },
-    run: (id: number, text = "synthetic") => context.forwardManual({ sourceUrl: "https://www.facebook.com/groups/12345", posts: [{ url: `https://www.facebook.com/groups/12345/posts/${id}/`, text }] }, {}) };
+    hold: () => { let release!: () => void; context.manualTail = new Promise<void>(resolve => { release = resolve; }); return () => release(); },
+    run: (id: number, text = "synthetic", captureScope?: object) => context.forwardManual({ captureScope, sourceUrl: "https://www.facebook.com/groups/12345", posts: [{ url: `https://www.facebook.com/groups/12345/posts/${id}/`, text }] }, {}) };
 }
 it("queues two new posts from the same group immediately instead of dropping the second for 20 seconds", async () => {
   const h = harness(); await h.run(1); await h.run(2);
@@ -40,4 +41,18 @@ it("defers paused accounts without queueing or flushing", async () => {
   const h = harness(); h.setConfig({ accountPaused: true });
   expect(await h.run(1)).toMatchObject({ accepted: false, retryAfterMs: 15000 });
   expect(h.queue).not.toHaveBeenCalled();expect(h.flush).not.toHaveBeenCalled();
+});
+it("defers captures bound to another server or Facebook account", async () => {
+  const h = harness();
+  expect(await h.run(1, "synthetic", { apiBase: "https://other.example", fbUserId: "12345" })).toMatchObject({ accepted: false });
+  expect(await h.run(1, "synthetic", { apiBase: "https://owner.example", fbUserId: "67890" })).toMatchObject({ accepted: false });
+  expect(h.queue).not.toHaveBeenCalled();
+});
+it("rechecks credentials after waiting for the durable manual queue lock", async () => {
+  const h = harness(), release = h.hold();
+  const pending = h.run(1, "synthetic", { apiBase: "https://owner.example", fbUserId: "12345" });
+  await new Promise(resolve => setImmediate(resolve));
+  h.setConfig({ token: "replacement-synthetic" }); release();
+  expect(await pending).toMatchObject({ accepted: false });
+  expect(h.queue).not.toHaveBeenCalled(); expect(h.flush).not.toHaveBeenCalled();
 });
