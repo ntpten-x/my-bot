@@ -6,10 +6,10 @@ import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
-import { desktopPlan, desktopEnvironment } from './lib/bot-desktop.mjs';
+import { desktopPlan, desktopEnvironment, prepareViewer } from './lib/bot-desktop.mjs';
 import { findBrowser } from './lib/bot-browser.mjs';
 import { profileInUse } from './lib/browser-profile.mjs';
-import { desktopPorts } from './lib/workstation.mjs';
+import { desktopPorts, viewerHealth, viewerReady, vncBannerReady } from './lib/workstation.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dataRoot = process.env.MYBOT_DATA_ROOT || path.join(root, 'data');
@@ -21,9 +21,11 @@ const failedComponents = new Map();
 const handledComponentRequests = new Set();
 let stateWrite = Promise.resolve();
 let heartbeatTimer;
+let transportHealth = null;
+let healthBusy = false, healthFailures = 0;
 let commandReader;
 function persistComponents() {
-  const state = JSON.stringify({ session: process.env.MYBOT_WORKSTATION_SESSION || null, at: new Date().toISOString(), phase: stopping ? 'stopped' : Object.values(componentState).some(value => ['review', 'recovering'].includes(value)) ? 'degraded' : 'running', components: componentState });
+  const state = JSON.stringify({ session: process.env.MYBOT_WORKSTATION_SESSION || null, at: new Date().toISOString(), viewer: transportHealth, phase: stopping ? 'stopped' : transportHealth?.ok === false ? 'degraded' : Object.values(componentState).some(value => ['review', 'recovering'].includes(value)) ? 'degraded' : 'running', components: componentState });
   stateWrite = stateWrite.catch(() => undefined).then(async () => {
     const file = path.join(dataRoot, 'bot-desktop/components.json');
     const temporary = `${file}.${process.pid}.tmp`;
@@ -58,6 +60,7 @@ function start(name, executable, args, env, failures = 0) {
   if (stopping) throw new Error('The desktop is stopping.');
   failedComponents.delete(name);
   const child = spawn(executable, args, { cwd: root, env, detached: true, stdio: name === 'Browser' ? 'ignore' : ['ignore', 'ignore', 'pipe'], shell: false });
+  child.componentName = name;
   const startedAt = Date.now();
   // Do not log browser output or authority/profile contents.
   child.stderr?.resume();
@@ -109,7 +112,8 @@ function handleComponentRequest(request) {
 }
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function waitFor(test, label) {
-  for (let i = 0; i < 80 && !stopping; i++) { if (await test()) return; await sleep(250); }
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline && !stopping) { if (await test()) return; await sleep(250); }
   throw new Error(`${label} did not become ready.`);
 }
 async function isListening(port) {
@@ -154,13 +158,10 @@ try {
   if (check) {
     console.log(`Desktop dependencies: ${missing.length ? `MISSING: ${missing.join(', ')}` : 'PASS'}`);
     console.log(`Local viewer password: ${passwordOk ? 'PASS' : 'MISSING or insecure permissions; run --password'}`);
-    let viewerReady = false;
-    if (await isListening(plan.vncPort)) {
-      try { viewerReady = (await fetch(`http://127.0.0.1:${plan.viewerPort}/vnc.html`, { method: 'HEAD', redirect: 'error', signal: AbortSignal.timeout(1500) })).ok; } catch {}
-    }
-    console.log(`Desktop service: ${viewerReady ? `RUNNING: ${plan.viewer}` : 'NOT RUNNING: run npm run browser:desktop after password setup'}`);
+    const ready = await viewerReady(fetch, plan.viewerPort);
+    console.log(`Desktop service: ${ready ? `RUNNING: ${plan.viewer}` : 'NOT RUNNING: run npm run browser:desktop after password setup'}`);
     console.log('App/database/pairing/Facebook login and real feed progress require separate checks.');
-    if (missing.length || !passwordOk || !viewerReady) process.exitCode = 1;
+    if (missing.length || !passwordOk || !ready) process.exitCode = 1;
   } else {
     if (missing.length) throw new Error(`Missing: ${missing.join(', ')}. Run --help for the install command.`);
     await mkdir(plan.runtime, { recursive: true, mode: 0o700 });
@@ -276,8 +277,9 @@ try {
       }
       start('Desktop viewer', 'x11vnc', plan.vnc, env);
       await waitFor(() => isListening(plan.vncPort), 'Desktop viewer');
+      await prepareViewer(root, plan);
       start('Web viewer', 'websockify', plan.proxy, env);
-      await waitFor(() => isListening(plan.viewerPort), 'Web viewer');
+      await waitFor(() => viewerReady(fetch, plan.viewerPort), 'Web viewer transport');
       start('Browser', browser, plan.chrome, env);
       if (process.env.MYBOT_WORKSTATION_SESSION && !process.stdin.isTTY) {
         commandReader = createInterface({ input: process.stdin, terminal: false });
@@ -286,7 +288,38 @@ try {
           try { handleComponentRequest(JSON.parse(line)); } catch { /* Invalid commands cannot restart Chrome. */ }
         });
       }
-      heartbeatTimer = setInterval(persistComponents, 15_000);
+      // Probe serially; only owned viewer children may be recovered. Never Chrome/Xvfb.
+      async function monitorViewer() {
+        if (healthBusy || stopping) return;
+        healthBusy = true;
+        try {
+          transportHealth = await viewerHealth(fetch, plan.viewerPort);
+          if (stopping) return;
+          healthFailures = transportHealth.ok ? 0 : healthFailures + 1;
+          if (healthFailures >= 3) {
+            const name = await vncBannerReady(plan.vncPort) ? 'Web viewer' : 'Desktop viewer';
+            const child = children.find(child => child.componentName === name);
+            if (child && componentState[name] === 'running') {
+              recordComponent(name, 'recovering');
+              // Existing exit handler applies the same five-attempt backoff/review policy.
+              try {
+                process.kill(-child.pid, 'SIGTERM');
+                const timer = setTimeout(() => {
+                  recoveryTimers.delete(timer);
+                  if (!stopping && children.includes(child)) {
+                    try { process.kill(-child.pid, 'SIGKILL'); } catch { /* Already gone. */ }
+                  }
+                }, 8000);
+                recoveryTimers.add(timer);
+              } catch { /* Retry health, never adopt another PID. */ }
+            }
+            healthFailures = 0;
+          }
+          persistComponents();
+        } finally { healthBusy = false; }
+      }
+      await monitorViewer();
+      heartbeatTimer = setInterval(monitorViewer, 15_000);
       heartbeatTimer.unref();
       console.log(`Bot desktop started. Open ${plan.viewer} and enter your local viewer password.`);
       console.log('Keep this WSL process running. You may close/minimize the viewer; do not minimize Chrome inside it. No automation settings were changed.');

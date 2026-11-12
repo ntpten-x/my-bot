@@ -155,7 +155,7 @@ try {
     & (Join-Path $AppRoot 'Control.ps1') -Action Start
     [Windows.Forms.MessageBox]::Show($Texts.done, $Texts.title) | Out-Null
     # Browser launch is best-effort: a blocked Start-Process must not rewrite a successful install as failed.
-    $ViewerUrl = 'http://localhost:' + [string]$Ports.viewerPort + '/vnc.html?host=localhost&port=' + [string]$Ports.viewerPort + '&resize=scale'
+    $ViewerUrl = 'http://localhost:' + [string]$Ports.viewerPort + '/vnc.html?host=localhost&port=' + [string]$Ports.viewerPort + '&resize=scale&reconnect=1&reconnect_delay=3000&quality=6&compression=2'
     try {
         & (Join-Path $AppRoot 'Control.ps1') -Action Open
     } catch {

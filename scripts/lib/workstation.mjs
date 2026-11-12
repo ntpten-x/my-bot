@@ -1,4 +1,5 @@
 import net from 'node:net';
+import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -73,10 +74,83 @@ export async function webReady(fetcher = fetch, serverOrigin = 'http://127.0.0.1
   } catch { return false; }
 }
 
-export async function viewerReady(fetcher = fetch, port = 6085) {
+// Read only the server banner. Never negotiate authentication or send desktop input.
+export function viewerTransport(port, timeoutMs = 2000) {
+  return new Promise(resolve => {
+    const key = randomBytes(16).toString('base64');
+    const expected = createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
+    const socket = net.connect({ host: '127.0.0.1', port });
+    let buffer = Buffer.alloc(0), banner = Buffer.alloc(0), upgraded = false, settled = false;
+    const finish = phase => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      resolve({ ok: phase === 'rfb-ready', phase });
+    };
+    const timer = setTimeout(() => finish(upgraded ? 'rfb-timeout' : 'websocket-timeout'), Math.max(1, timeoutMs));
+    socket.once('connect', () => socket.write(`GET /websockify HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: binary\r\n\r\n`));
+    socket.once('error', () => finish('unreachable'));
+    socket.once('end', () => finish('closed'));
+    socket.once('close', () => finish('closed'));
+    socket.on('data', chunk => {
+      if (settled) return;
+      buffer = Buffer.concat([buffer, chunk]);
+      if (!upgraded) {
+        const end = buffer.indexOf('\r\n\r\n');
+        if (end < 0) { if (buffer.length > 8192) finish('invalid-upgrade'); return; }
+        if (end > 8192) return finish('invalid-upgrade');
+        const lines = buffer.subarray(0, end).toString('ascii').split('\r\n');
+        const headers = Object.fromEntries(lines.slice(1).map(line => {
+          const colon = line.indexOf(':'); return [line.slice(0, colon).toLowerCase(), line.slice(colon + 1).trim()];
+        }));
+        if (!/^HTTP\/1\.1 101(?: |$)/.test(lines[0]) || headers.upgrade?.toLowerCase() !== 'websocket' ||
+          !headers.connection?.toLowerCase().split(/\s*,\s*/).includes('upgrade') || headers['sec-websocket-accept'] !== expected) return finish('invalid-upgrade');
+        upgraded = true;
+        buffer = buffer.subarray(end + 4);
+      }
+      while (buffer.length >= 2) {
+        const opcode = buffer[0] & 15;
+        let size = buffer[1] & 127, offset = 2;
+        if ((buffer[0] & 0x70) || (buffer[1] & 0x80) || ![0, 2].includes(opcode) || size === 127) return finish('invalid-rfb');
+        if (size === 126) { if (buffer.length < 4) return; size = buffer.readUInt16BE(2); offset = 4; }
+        if (size > 1024 || buffer.length > 4096) return finish('invalid-rfb');
+        if (buffer.length < offset + size) return;
+        banner = Buffer.concat([banner, buffer.subarray(offset, offset + size)]);
+        buffer = buffer.subarray(offset + size);
+        if (banner.length >= 12) return finish(/^RFB 003\.(003|007|008)\n$/.test(banner.subarray(0, 12).toString('ascii')) ? 'rfb-ready' : 'invalid-rfb');
+      }
+    });
+  });
+}
+
+export function vncBannerReady(port, timeoutMs = 1000) {
+  return new Promise(resolve => {
+    const socket = net.connect({ host: '127.0.0.1', port });
+    let buffer = Buffer.alloc(0);
+    const finish = ok => { clearTimeout(timer); socket.destroy(); resolve(ok); };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    socket.once('error', () => finish(false));
+    socket.once('end', () => finish(false));
+    socket.on('data', chunk => {
+      buffer = Buffer.concat([buffer, chunk]);
+      if (buffer.length >= 12) finish(/^RFB 003\.(003|007|008)\n$/.test(buffer.subarray(0, 12).toString('ascii')));
+    });
+  });
+}
+
+export async function viewerHealth(fetcher = fetch, port = 6085) {
+  const started = Date.now();
+  let result = { ok: false, phase: 'http-unavailable' };
   try {
-    return (await fetcher(`http://127.0.0.1:${port}/vnc.html`, { method: 'HEAD', signal: AbortSignal.timeout(2000), redirect: 'error' })).ok;
-  } catch { return false; }
+    const response = await fetcher(`http://127.0.0.1:${port}/vnc.html`, { method: 'HEAD', signal: AbortSignal.timeout(2000), redirect: 'error' });
+    if (response.ok) result = await viewerTransport(port, Math.max(1, 2000 - (Date.now() - started)));
+  } catch { /* Availability probes never interrupt the supervisor. */ }
+  return { ...result, checkedAt: new Date().toISOString(), elapsedMs: Date.now() - started };
+}
+
+export async function viewerReady(fetcher = fetch, port = 6085) {
+  return (await viewerHealth(fetcher, port)).ok;
 }
 
 // No PID adoption: an existing listener may be someone else's service. Only children

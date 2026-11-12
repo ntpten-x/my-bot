@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import { CommentEvidence } from "@/components/comment-evidence";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/components/api";
 import { Button, Input, Label, Select } from "@/components/ui";
@@ -48,6 +50,7 @@ function dashboardQuery(jobPage: number, jobFilter: string, logsOffset = 0) {
   return `/api/auto-comment?${params}`;
 }
 export default function AutoCommentPage() {
+  const [evidenceJobId, setEvidenceJobId] = useState<string | null>(null);
   const [data, setData] = useState<Dashboard | null>(null);
   const [browser, setBrowser] = useState<CommentReadiness | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
@@ -240,7 +243,8 @@ export default function AutoCommentPage() {
             <p className="mt-1 text-xs text-muted">{statuses[job.status] ?? job.status}</p>
             <p className="mt-2 whitespace-pre-wrap break-words text-sm">{job.message}</p>
             {job.remoteCommentId ? <p className="mt-1 text-xs text-muted">Comment ID: {job.remoteCommentId}</p> : null}
-            <div className="mt-3 flex gap-3">
+            <div className="mt-3 flex flex-wrap gap-3">
+              <Button size="sm" variant="outline" onClick={() => setEvidenceJobId(job.id)}>ตรวจเส้นทางและหลักฐาน</Button>
               <Button size="sm" variant="outline" onClick={() => void navigator.clipboard.writeText(job.message).then(() => setNotice("คัดลอกข้อความแล้ว")).catch(() => setError("เบราว์เซอร์ไม่อนุญาต Clipboard ให้เลือกข้อความแล้วคัดลอกเอง"))}>คัดลอกข้อความ</Button>
               {facebookLink(job.externalUrl) ? <a className="self-center text-sm underline" href={facebookLink(job.externalUrl)!} target="_blank" rel="noreferrer">เปิดโพสต์</a> : null}
             </div>
@@ -262,6 +266,8 @@ export default function AutoCommentPage() {
       </div>
     </section>
     <section aria-label="ผลประเมินโพสต์"><h2 className="text-lg font-semibold">ผลประเมินโพสต์รอบปัจจุบัน</h2><p className="mt-1 text-xs text-muted">50 รายการล่าสุด แยกโพสต์ที่ข้ามออกจากงานส่ง เปลี่ยนข้อความ ข้อมูลโพสต์ หรือกฎแล้วระบบจะตรวจใหม่ โดยไม่ส่งซ้ำโพสต์ที่เคยเริ่มส่ง</p><div className="mt-3 space-y-2">{data?.evaluations?.map(item => <article key={item.id} className="rounded-lg border border-line p-3"><strong className="text-sm">{({ skipped: "ไม่ผ่านเงื่อนไข", waiting_full_text: "รออ่านข้อความฉบับเต็ม", waiting_ai: "รอประเมินกฎใหม่", waiting_window: "รอเวลาทำงาน", matched: "สร้างงานแล้ว", deduplicated: "มีประวัติงานอยู่แล้ว" } as Record<string, string>)[item.state] ?? item.state}</strong><p className="mt-1 line-clamp-2 text-sm">{item.post.text}</p><details className="mt-2 text-xs text-muted"><summary>เหตุผลและเวลาประเมิน</summary><p>{new Date(item.evaluatedAt).toLocaleString("th-TH")}</p><div className="space-y-1">{evaluationReasons(item.reasonsJson, data.rules).map((reason, index) => <p key={index}>{reason}</p>)}</div></details></article>)}{!data?.evaluations?.length ? <p className="text-sm text-muted">ยังไม่มีผลประเมินในรอบนี้</p> : null}</div></section>
+    <Link className="inline-block text-sm underline" href="/automation-quality">ตรวจคุณภาพฟีด ความหน่วง และแหล่งข้อมูล</Link>
+    {evidenceJobId ? <CommentEvidence jobId={evidenceJobId} onClose={() => setEvidenceJobId(null)} /> : null}
     <details><summary className="cursor-pointer font-medium">Audit Log ล่าสุด ({data?.logsPage?.total ?? data?.logs.length ?? 0})</summary><ul className="mt-3 space-y-2 text-sm">{data?.logs.map(log => <li key={log.id} className="border-b border-line pb-2"><span className="text-xs text-muted">{new Date(log.createdAt).toLocaleString("th-TH")}</span> · {statuses[log.event] ?? log.event} {log.message}</li>)}</ul>{data?.logsPage?.hasMore ? <Button className="mt-3" variant="outline" disabled={historyBusy} onClick={() => void loadMoreLogs()}>{historyBusy ? "กำลังโหลด..." : "โหลด audit เพิ่ม"}</Button> : null}</details>
   </div>;
 }

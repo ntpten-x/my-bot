@@ -10,7 +10,7 @@ if ($State.distribution -ne $Distro -or $State.product -ne 'MY-BOT Desktop') { t
 $Ports = Get-DesktopPortSettings $State
 $ViewerPort = $Ports.viewerPort
 $Texts = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'strings.th.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-$ViewerUrl = "http://localhost:$ViewerPort/vnc.html?host=localhost&port=$ViewerPort&resize=scale"
+$ViewerUrl = "http://localhost:$ViewerPort/vnc.html?host=localhost&port=$ViewerPort&resize=scale&reconnect=1&reconnect_delay=3000&quality=6&compression=2"
 function Test-DesktopRuntimeReady($Data) {
     return [bool]($Data.supervisor.phase -eq 'running' -and $Data.supervisor.desktop -eq 'running' -and $Data.webReady -and $Data.viewerReady -and $Data.vncListening -and $Data.viewerPort -eq $Ports.viewerPort -and $Data.vncPort -eq $Ports.vncPort)
 }

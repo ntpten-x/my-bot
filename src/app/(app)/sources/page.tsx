@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { Badge, Button, Card, Input, Select, Textarea } from "@/components/ui";
 import { ApiError, api } from "@/components/api";
@@ -137,6 +138,7 @@ export default function SourcesPage() {
   return (
     <div>
       <h1 className="text-2xl font-semibold">แหล่งข้อมูล</h1>
+        <Link href="/automation-quality" className="text-sm underline">ตรวจคุณภาพฟีดและข้อเสนอตารางอ่าน</Link>
       <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
         วางลิงก์กลุ่ม Facebook ที่คุณเป็นสมาชิกอยู่แล้ว หรือหน้าค้นหา/หมวดของ Facebook Marketplace (เช่น facebook.com/marketplace/bangkok/search?query=แอร์) ได้ทีละหลายบรรทัด กลุ่มและ Marketplace ให้ส่วนขยายอ่านจากเบราว์เซอร์ที่ล็อกอิน (อ่านอย่างเดียว ไม่กดอะไรบน Facebook) ส่วน RSS และเว็บบอร์ดให้โปรแกรมหลังบ้านดึงเอง ประกาศจาก Marketplace จะถูกจัดเป็น “ขาย” เสมอ
       </p>

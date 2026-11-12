@@ -1,2 +1,2 @@
 // Shared public release metadata, without importing the ZIP/runtime packager.
-export const DESKTOP_VERSION = "0.1.6-preview";
+export const DESKTOP_VERSION = "0.1.7-preview";

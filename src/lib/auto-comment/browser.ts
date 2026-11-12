@@ -399,12 +399,15 @@ export async function reportBrowserComment(
     const detail = String(reason || "").trim().slice(0, 80);
     if (["failed", "not_sent"].includes(outcome) && mayRetryPrepareFailure(detail || null) && await retryBeforeGrant(tx, job, control)) return true;
     let observed = false;
+    let observedCommentId: string | null = null;
     try {
       const url = new URL(commentUrl || "");
       const source = job.sourceId ? await tx.source.findUnique({ where: { id: job.sourceId }, select: { url: true, type: true, fbGroupId: true } }) : null;
+      const fragment = new URLSearchParams(url.hash.slice(1).replace(/^\?/, ""));
       const commentId = url.searchParams.get("comment_id") || url.searchParams.get("reply_comment_id")
-        || ((url.hash || "").match(/(?:comment_id|reply_comment_id)=(\d+)/) || [])[1] || "";
-      observed = Boolean(source && browserTarget(url.origin + url.pathname, source.url, source.type, [source.fbGroupId || ""].filter(Boolean))?.key === job.postKey && /^\d+$/.test(commentId));
+        || fragment.get("comment_id") || fragment.get("reply_comment_id") || "";
+      observed = Boolean(source && url.protocol === "https:" && !url.username && !url.password && !url.port && browserTarget(url.origin + url.pathname, source.url, source.type, [source.fbGroupId || ""].filter(Boolean))?.key === job.postKey && /^\d{1,40}$/.test(commentId));
+      if (observed) observedCommentId = commentId;
     } catch { /* no identifiable comment */ }
     const status = outcome === "not_sent" ? "not_sent"
       : outcome === "blocked" || outcome === "failed" ? "cancelled"
@@ -414,6 +417,7 @@ export async function reportBrowserComment(
       where: { id },
       data: {
         status,
+        ...(status === "browser_observed" ? { remoteCommentId: observedCommentId } : {}),
         claimToken: null,
         claimUntil: null,
         lastError: status === "not_sent"

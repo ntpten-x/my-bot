@@ -8,7 +8,7 @@ it('uses the Desktop installation ports everywhere rather than the running legac
   `], { encoding: 'utf8' }));
   expect(plan.proxy.slice(-2)).toEqual(['127.0.0.1:6095', '127.0.0.1:5915']);
   expect(plan.vnc[plan.vnc.indexOf('-rfbport') + 1]).toBe('5915');
-  expect(plan.viewer).toBe('http://localhost:6095/vnc.html?host=localhost&port=6095&resize=scale');
+  expect(plan.viewer).toBe('http://localhost:6095/vnc.html?host=localhost&port=6095&resize=scale&reconnect=1&reconnect_delay=3000&quality=6&compression=2');
   expect(plan.display).toBe(':6095');
 });
 
@@ -24,4 +24,12 @@ it('rejects invalid/equal ports and retains configured ports in the production s
   expect(result.config).toMatchObject({vncPort:5915,viewerPort:6095});
   expect(result.target).toBe('http://127.0.0.1:6095/vnc.html');
   expect(result.action).toBe('conflict');
+});
+
+it('opens Windows shortcuts with explicit reconnect and image defaults', async () => {
+  const { readFileSync } = await import('node:fs');
+  for (const name of ['desktop/Control.ps1', 'desktop/Install.ps1']) {
+    const script = readFileSync(name, 'utf8');
+    expect(script).toContain('&resize=scale&reconnect=1&reconnect_delay=3000&quality=6&compression=2');
+  }
 });

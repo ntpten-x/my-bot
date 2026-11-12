@@ -77,3 +77,7 @@ next-env.d.ts
 /data/audit-test-postgres/
 /data/automation-observation*.jsonl
 /data/automation-observation*.summary.json
+
+/data/automation-quality-soak.json
+
+/.env.bak-*
