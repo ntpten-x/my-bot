@@ -58,7 +58,8 @@ export async function POST(request: Request) {
       return response;
     }
     // Claim/authorize prefer the exact expected build; reports and journal clear accept the compatible range.
-    if (data.action !== "report" && !isCurrentExtensionVersion(extensionVersionFromRequest(request))) {
+    if (data.action !== "report" && (!isCurrentExtensionVersion(extensionVersionFromRequest(request))
+      || request.headers.get("x-extension-runtime") !== EXPECTED_EXTENSION_VERSION)) {
       return json({ ...(data.action === "claim" ? { job: null } : { grant: null }), upgradeRequired: true, expectedVersion: EXPECTED_EXTENSION_VERSION });
     }
     if (data.action !== "report" && !(await facebookWorkAllowed(request, data.fbUserId))) {

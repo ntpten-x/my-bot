@@ -12,17 +12,26 @@ function queueHarness() {
     return { found: [], failed: ["target"], failures: { target: "budget" } };
   });
   const send = vi.fn(async () => { throw new Error("synthetic storage full"); });
+  const store = vi.fn(async () => undefined);
   const context = vm.createContext({ Date: Clock, Math, Map, activeReaderTabs: new Set(), fullTextBudget: 10,
-    chrome: { storage: { local: { get: async () => ({}), set: async () => {} } } },
+    chrome: { storage: { local: { get: async () => ({}), set: store } } },
     loadFullTextBacklog: async () => structuredClone(backlog),
     updateFullTextBacklog: async fn => fn(backlog), loadConfig: async () => ({ token: "same" }), base: () => "server",
     openReader: async () => ({ tabId: 1 }), closeReader: async () => {}, sourceKind: () => "group",
     readFullTexts: read, sendPosts: send, cleanPost: p => p,
   });
   vm.runInContext(source.slice(source.indexOf("async function processFullTextQueue("), source.indexOf("let cycling = false;")), context);
-  return { context, read, send, backlog, now: () => now,
+  return { context, read, send, store, backlog, now: () => now,
     run: options => context.processFullTextQueue({ token: "same" }, [{ id: "g" }], options) };
 }
+
+it("separates expired review history from active remaining work and age", async () => {
+  const h = queueHarness(); Object.assign(h.backlog.target, { problem: "expired", addedAt: -10000000 });
+  await h.run({ budgetMs: 15000 });
+  expect(h.read).not.toHaveBeenCalled();
+  expect(h.store).toHaveBeenCalledWith(expect.objectContaining({ fullTextMetrics: expect.objectContaining({ remaining: 0, review: 1, oldestAgeMs: 0 }) }));
+  expect(h.backlog.target).toBeDefined();
+});
 
 it("passes the queue's remaining deadline to full-text reads", async () => {
   const h = queueHarness();

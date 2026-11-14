@@ -7,9 +7,9 @@ import {
 } from "../../src/lib/extension-heartbeat";
 
 it("accepts the expected extension build and recent patches on the same minor line", () => {
-  expect(EXPECTED_EXTENSION_VERSION).toBe("1.11.32");
+  expect(EXPECTED_EXTENSION_VERSION).toBe("1.11.35");
   expect(MINIMUM_EXTENSION_VERSION).toBe("1.11.19");
-  expect(isCurrentExtensionVersion("1.11.32")).toBe(true);
+  expect(isCurrentExtensionVersion("1.11.35")).toBe(true);
   expect(isCurrentExtensionVersion("1.11.31")).toBe(false);
   expect(isCompatibleExtensionVersion("1.11.29")).toBe(true);
   expect(isCompatibleExtensionVersion("1.11.28")).toBe(true);

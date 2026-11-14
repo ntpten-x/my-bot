@@ -98,8 +98,9 @@
       if (ms <= 0) throw new Error("comment work budget exhausted");
       return ms;
     };
-    let tabId, owned, job, cfg, authorizationRequested = false, sendInvoked = false, reportAttempted = false;
+    let tabId, owned, job, cfg, phase = "preflight", authorizationRequested = false, sendInvoked = false, reportAttempted = false;
     const request = async body => {
+      if (body.action !== "report") phase = body.action;
       const timeoutMs = body.action === "report" ? 15000 : Math.min(15000, remaining());
       return bounded(async () => {
         const response = await deps.postJson(cfg, "/api/v1/extension/comments", body, { retries: 0, timeoutMs });
@@ -140,6 +141,7 @@
       const tab = await chrome.tabs.create({ url: job.externalUrl, active: true }); tabId = tab.id;
       owned = { jobId: job.id, tabId, windowId: tab.windowId, url: job.externalUrl };
       await chrome.storage.session.set({ commentTab: owned });
+      phase = "navigation";
       await deps.waitComplete(tabId, Math.min(25000, remaining()));
       if (tab.windowId !== undefined) await chrome.windows.update(tab.windowId, { focused: true });
       let imagePayload = {};
@@ -158,7 +160,7 @@
           return;
         }
       }
-      const execute = (kind, payload = {}) => pageAction(tabId, kind, { ...job, ...imagePayload, ...payload }, Math.min(5000, remaining()));
+      const execute = (kind, payload = {}) => { phase = kind; return pageAction(tabId, kind, { ...job, ...imagePayload, ...payload }, Math.min(5000, remaining())); };
       let prepared;
       for (let attempt = 0; attempt < 8; attempt++) {
         prepared = await execute("prepare");
@@ -191,17 +193,17 @@
       await chrome.storage.local.set({ commentJournal: { id: job.id, claimToken: job.claimToken, apiBase: deps.base(cfg), state: "sending", at: started, job: { ...job, sentAt: started } } });
       sendInvoked = true;
       const sent = await execute("send", { permitUntil: started + Math.min(3000, grant.ttlMs) });
-      if (!sent.ok) { await report(sent.outcome === "blocked" ? "blocked" : "uncertain"); return; }
+      if (!sent.ok) { await report(sent.outcome === "blocked" ? "blocked" : sent.outcome === "not_sent" ? "not_sent" : "uncertain", undefined, sent.reason || "send_result_unknown"); return; }
       let observed;
       for (let attempt = 0; attempt < 30 && Date.now() < workDeadline; attempt++) {
         await deps.sleep(Math.min(1000, remaining())); observed = await execute("observe");
         if (observed.ok || observed.outcome === "blocked") break;
       }
       if (!observed?.ok && observed?.outcome !== "blocked" && Date.now() < workDeadline) observed = await execute("reconcile", { baseline: job.baseline, profiles: job.profiles, sentAt: started });
-      await report(observed?.outcome || "uncertain", observed?.commentUrl);
+      await report(observed?.outcome || "uncertain", observed?.commentUrl, observed?.reason || (observed?.ok ? undefined : "observation_budget_exhausted"));
       return observed?.ok === true && observed?.outcome === "observed" && Boolean(observed?.commentUrl);
     } catch {
-      if (job && !reportAttempted) await report(sendInvoked ? "uncertain" : authorizationRequested ? "not_sent" : "failed").catch(() => undefined);
+      if (job && !reportAttempted) await report(sendInvoked ? "uncertain" : authorizationRequested ? "not_sent" : "failed", undefined, `${phase}_error`).catch(() => undefined);
       await deps.rememberError("งานคอมเมนต์หยุดหรือรอรายงานผล ตรวจประวัติก่อนเริ่มใหม่").catch(() => undefined);
     } finally {
       // A failed report stays durable; the next recovery retries that report, never the send.
@@ -228,7 +230,7 @@
             observed = await pageAction(result.tab.id, "reconcile", journal.job);
           }
         }
-        pendingReport = { outcome: observed?.ok ? "observed" : journal.state === "sending" ? "uncertain" : journal.state === "authorizing" ? "not_sent" : "failed", ...(observed?.commentUrl ? { commentUrl: observed.commentUrl } : {}) };
+        pendingReport = { outcome: observed?.ok ? "observed" : journal.state === "sending" ? "uncertain" : journal.state === "authorizing" ? "not_sent" : "failed", ...(observed?.commentUrl ? { commentUrl: observed.commentUrl } : {}), ...(!observed?.ok ? { reason: observed?.reason || `recovery_${journal.state}_unconfirmed` } : {}) };
         await chrome.storage.local.set({ commentJournal: { ...journal, pendingReport } });
       }
       const acknowledged = await bounded(async () => {
@@ -260,5 +262,5 @@
       if (completed) await scheduleRetry(1000);
     } finally { draining = false; }
   }
-  root.MyBotCommentWorker = { run, recover, drain, isBusy: () => busy };
+  root.MyBotCommentWorker = { run, recover, drain, isBusy: () => busy, build: "1.11.35" };
 })(typeof globalThis !== "undefined" ? globalThis : this);

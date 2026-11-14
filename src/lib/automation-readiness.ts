@@ -3,6 +3,7 @@ import { hasKeySecret } from "./ai/secret-box";
 import { legacySecret } from "./setting-secrets";
 import { readCommentControl } from "./auto-comment/control";
 import { coverageBySource } from "./coverage-data";
+import { EXPECTED_EXTENSION_VERSION } from "./extension-heartbeat";
 
 export async function automationReadiness() {
   const [worker, settings, devices, accounts, sources, control, counts] = await Promise.all([
@@ -17,6 +18,8 @@ export async function automationReadiness() {
   const coverage = await coverageBySource(sources);
   const extensions = devices.map(device => {
     let state: {
+      build?: string;
+      capture?: { fullTextActive?: number; fullTextReview?: number; fullTextBlocked?: boolean };
       quietReason?: string;
       commentsEnabled?: boolean;
       commentPending?: boolean;
@@ -30,7 +33,10 @@ export async function automationReadiness() {
     const reading = online && state.reading?.groupName && readingAge !== null && readingAge < 300000
       ? { groupName: state.reading.groupName, phase: state.reading.phase || "feed" }
       : null;
-    return { ...device, online, fbUserId: state.fbUserId || "", quietReason: state.quietReason || "", commentsEnabled: online && state.commentsEnabled === true, commentPending: Boolean(state.commentPending), reading };
+    const runtimeCurrent = state.build === EXPECTED_EXTENSION_VERSION;
+    return { ...device, online, runtimeBuild: state.build ?? null, runtimeCurrent,
+      fullText: { active: state.capture?.fullTextActive ?? null, review: state.capture?.fullTextReview ?? null, blocked: state.capture?.fullTextBlocked ?? null },
+      fbUserId: state.fbUserId || "", quietReason: state.quietReason || "", commentsEnabled: online && runtimeCurrent && state.commentsEnabled === true, commentPending: Boolean(state.commentPending), reading };
   });
   const legacySecrets = settings.filter(row => !["gemini_api_key", "groq_api_key"].includes(row.key) && legacySecret(row.key, row.value)).length;
   const steps = [

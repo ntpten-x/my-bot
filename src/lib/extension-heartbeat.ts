@@ -4,7 +4,7 @@ import { upsertSettings } from "./settings";
 import { touchExtension } from "./extension-status";
 
 // Version this MY-BOT build expects from extension/manifest.json (tests keep the two in sync).
-export const EXPECTED_EXTENSION_VERSION = "1.11.32";
+export const EXPECTED_EXTENSION_VERSION = "1.11.35";
 /** Oldest patch still allowed for scrape/read work within the current minor line. */
 export const MINIMUM_EXTENSION_VERSION = "1.11.19";
 
@@ -87,6 +87,7 @@ export const heartbeatSchema = z.object({
   outboxSize: z.number().int().nonnegative().max(100000).default(0),
   runtime: z
     .object({
+      build: z.string().max(30).optional(),
       quietReason: z.string().max(160).default(""),
       commentsEnabled: z.boolean().default(false),
       commentPending: z.boolean().default(false),
@@ -106,9 +107,11 @@ export const heartbeatSchema = z.object({
         journalPending: z.number().int().min(0).max(100000).default(0).optional(),
         outboxRejectedItems: z.number().int().min(0).max(1000000).default(0).optional(),
         journalRejectedItems: z.number().int().min(0).max(1000000).default(0).optional(),
-        fullTextOverflow: z.number().int().min(0).max(1000000).default(0).optional(),
-        fullTextActive: z.number().int().min(0).max(100000).default(0).optional(),
-        fullTextReview: z.number().int().min(0).max(100000).default(0).optional(),
+        fullTextOverflow: z.number().int().min(0).max(1000000).optional(),
+        fullTextActive: z.number().int().min(0).max(100000).optional(),
+        fullTextReview: z.number().int().min(0).max(100000).optional(),
+        fullTextBlocked: z.boolean().optional(),
+        fullTextOldestPendingAt: z.number().nonnegative().optional(),
         problemOutbox: z.number().int().min(0).max(100000).default(0).optional(),
       }).optional(),
       reading: z

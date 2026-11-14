@@ -1,6 +1,12 @@
 importScripts("assist.js", "identity.js", "scrape.js", "quiet.js");
 importScripts("focus.js", "tab-lifecycle.js", "browser-comment.js", "comment-worker.js");
 importScripts("server-route.js", "connect.js");
+// This literal belongs to executing code, unlike getManifest() which can update
+// while Chrome still runs cached service-worker/importScripts bytecode.
+const RUNTIME_BUILD = "1.11.35";
+function runtimeBuild() {
+  return [globalThis.MyBotCommentWorker?.build, globalThis.MyBotBrowserComment?.build].every(build => build === RUNTIME_BUILD) ? RUNTIME_BUILD : "mismatch";
+}
 
 const DEFAULTS = {
   apiBase: "https://my-bot-e6bt.onrender.com",
@@ -103,6 +109,7 @@ function headers(token) {
     authorization: `Bearer ${token}`,
     "content-type": "application/json",
     "x-extension-version": chrome.runtime.getManifest().version,
+    "x-extension-runtime": runtimeBuild(),
   };
 }
 
@@ -728,6 +735,7 @@ async function heartbeatOnce() {
       errors: await errorSummary(),
       outboxSize: outbox.length,
       runtime: {
+        build: runtimeBuild(),
         tabs: tabStatus,
         quietReason: stored.quiet?.reason || "",
         commentsEnabled: String(cfg.token).startsWith("mbd_") && !cfg.accountPaused,
@@ -743,6 +751,8 @@ async function heartbeatOnce() {
           fullTextOverflow: Number(stored.fullTextOverflow) || 0,
           fullTextActive,
           fullTextReview,
+          fullTextBlocked: fullTextActive >= 200 || Object.keys(backlog).length >= 400,
+          fullTextOldestPendingAt: fullTextActive ? Math.min(...Object.values(backlog).filter(item => !item.problem).map(item => Number(item.addedAt) || Date.now())) : 0,
           problemOutbox,
         },
       },
@@ -1904,10 +1914,11 @@ async function processFullTextQueue(cfg, groups, options = {}) {
     } finally { if (reader) activeReaderTabs.delete(reader.tabId); await closeReader(reader); }
   }
   backlogSnapshot = await loadFullTextBacklog();
-  metrics.remaining = Object.keys(backlogSnapshot).length; metrics.durationMs = Date.now() - metrics.at;
-  metrics.reasons = Object.values(backlogSnapshot).reduce((counts, item) => { if (item.lastReason) counts[item.lastReason] = (counts[item.lastReason] || 0) + 1; return counts; }, {});
+  const activeBacklog = Object.values(backlogSnapshot).filter(item => !item.problem);
+  metrics.remaining = activeBacklog.length; metrics.durationMs = Date.now() - metrics.at;
+  metrics.reasons = activeBacklog.reduce((counts, item) => { if (item.lastReason) counts[item.lastReason] = (counts[item.lastReason] || 0) + 1; return counts; }, {});
   metrics.review = Object.values(backlogSnapshot).filter(item => item.problem).length;
-  metrics.oldestAgeMs = Object.values(backlogSnapshot).reduce((age, item) => Math.max(age, Date.now() - (item.addedAt || Date.now())), 0);
+  metrics.oldestAgeMs = activeBacklog.reduce((age, item) => Math.max(age, Date.now() - (item.addedAt || Date.now())), 0);
   const { fullTextTotals: previous = {} } = await chrome.storage.local.get({ fullTextTotals: {} });
   await chrome.storage.local.set({ fullTextMetrics: metrics, fullTextTotals: { tried: (previous.tried || 0) + metrics.tried, succeeded: (previous.succeeded || 0) + metrics.succeeded, failed: (previous.failed || 0) + metrics.failed } });
 }
@@ -2027,9 +2038,12 @@ async function cycle() {
       batch,
       defaultParallel: PARALLEL_SCRAPE,
     });
-    // Full-text must not steal tabs before discovery when many groups are due or Chrome is throttling.
-    if (throttle === "none" && batch.length <= 2 && Object.keys(await loadFullTextBacklog()).length >= 10) {
-      await processFullTextQueue(cfg, remote.groups || [], { budgetMs: 15000, maxItems: 2, deadlineMs: cycleDeadline });
+    // Reserve a bounded detail slice even with many due groups. Otherwise a
+    // productive 3-minute discovery cycle can starve required full text forever.
+    const groupIds = new Set((remote.groups || []).map(group => group.id));
+    const detailDue = Object.values(await loadFullTextBacklog()).some(item => !item.problem && (item.after || 0) <= Date.now() && groupIds.has(item.groupId));
+    if (detailDue) {
+      await processFullTextQueue(cfg, remote.groups || [], { budgetMs: throttle === "hard" ? 10000 : 15000, maxItems: throttle === "hard" ? 1 : 2, deadlineMs: cycleDeadline });
     }
     for (const group of batch) schedules[group.id] = started + INFLIGHT_MS;
     await chrome.storage.local.set({ schedules });

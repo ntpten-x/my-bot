@@ -20,6 +20,8 @@ export const TRANSIENT_PREPARE_REASONS = new Set([
   "selection_unavailable",
   "submit_not_ready",
   "submit_not_unique_or_ready",
+  "navigation_error",
+  "prepare_error",
 ]);
 export function mayRetryPrepareFailure(reason?: string | null) {
   if (!reason) return true;
@@ -33,7 +35,7 @@ const ruleQuery = {
 // Only fields used by matching/delivery invalidate a checkpoint, never read/fetch timestamps.
 const inputKeySql = Prisma.sql`md5(jsonb_build_array(p."textRevision",p."truncated",p."text",p."intent",p."isAd",p."forbiddenHit",p."duplicateOfId",p."dismissed",p."aiProvider",p."suggestedReply",p."postedAt",p."externalUrl",s."enabled",s."url",s."type",s."fbGroupId",s."boundCategorySlug",s."defaultProductId")::text)`;
 const fingerprint = (rules: { id: string; revision: number }[]) => createHash("sha256")
-  .update(JSON.stringify(rules.map(rule => [rule.id, rule.revision]))).digest("hex");
+  .update(JSON.stringify(["capture-age-window-v2", rules.map(rule => [rule.id, rule.revision])])).digest("hex");
 export function browserTarget(url: string, sourceUrl: string, sourceType: string, aliases: string[] = []) {
   try {
     const post = new URL(url), source = new URL(sourceUrl);
@@ -167,13 +169,14 @@ export async function scanBrowserComments(assertActive: () => Promise<void>, opt
             if (!post.source.enabled) codes.push("source_disabled");
             if (!codes.includes("source") && !await commentTypeAllowed(tx, rule.id, post.source)) codes.push("type_scope");
             if (!rule.templates.length) codes.push("no_template");
-            if (post.postedAt && post.postedAt < new Date(control.startedAt)) codes.push("before_start");
+            // Admission above limits captures to this running generation. The
+            // rule's maxAgeHours controls publication age, including before Start.
             const target = browserTarget(post.externalUrl, post.source.url, post.source.type, [post.source.fbGroupId || ""].filter(Boolean));
             if (!target) codes.push("unsupported_target");
             const deadline = (post.postedAt ?? post.createdAt).getTime() + rule.maxAgeHours * 3600_000;
             if (codes.includes("type_scope") && deadline > now.getTime()) nextEvaluateAt = new Date(Math.min(deadline + 1, now.getTime() + 60_000));
             // Truncated cards wait for full text so exclusions/ads hidden behind "see more" are known.
-            const fatalTruncation = ["source", "source_disabled", "type_scope", "before_start", "age", "unsupported_target", "enabled", "not_paused", "not_ad", "not_forbidden", "not_duplicate", "not_dismissed", "excluded", "no_template"];
+            const fatalTruncation = ["source", "source_disabled", "type_scope", "age", "unsupported_target", "enabled", "not_paused", "not_ad", "not_forbidden", "not_duplicate", "not_dismissed", "excluded", "no_template"];
             if (post.truncated && deadline > now.getTime() && !codes.some(code => fatalTruncation.includes(code))) {
               evaluationState = "waiting_full_text";
               nextEvaluateAt = new Date(Math.min(deadline + 1, now.getTime() + 60_000));
@@ -436,7 +439,7 @@ export async function reportBrowserComment(
         claimToken: null,
         claimUntil: null,
         lastError: status === "not_sent"
-          ? "ส่วนขยายยืนยันว่าไม่ได้เรียกปุ่มส่ง เก็บประวัติไว้และไม่ส่งซ้ำอัตโนมัติ"
+          ? `ส่วนขยายยืนยันว่าไม่ได้เรียกปุ่มส่ง เก็บประวัติไว้และไม่ส่งซ้ำอัตโนมัติ${reasonNote}`
           : status === "browser_observed"
             ? "พบคอมเมนต์ในหน้าจอ ไม่ใช่การยืนยันจาก API"
             : outcome === "blocked"
@@ -449,7 +452,7 @@ export async function reportBrowserComment(
       job,
       status === "uncertain" ? "uncertain" : outcome === "blocked" ? "blocked" : status,
       status === "not_sent"
-        ? "สิ้นสุดก่อนเรียกปุ่มส่ง ไม่พักระบบส่วนกลาง"
+        ? `สิ้นสุดก่อนเรียกปุ่มส่ง ไม่พักระบบส่วนกลาง${reasonNote}`
         : status === "browser_observed"
           ? "Extension พบคอมเมนต์และลิงก์ใหม่ในหน้าจอ"
           : outcome === "blocked"

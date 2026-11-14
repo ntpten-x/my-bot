@@ -8,6 +8,7 @@ vi.mock("../../src/lib/prisma", () => ({ prisma: {
 vi.mock("../../src/lib/guard", () => ({ authed: mocks.authed }));
 vi.mock("../../src/lib/auto-comment/control", () => ({ readCommentControl: async () => ({ state: "stopped", dryRun: true }) }));
 vi.mock("../../src/lib/coverage-data", () => ({ coverageBySource: async () => new Map() }));
+import { EXPECTED_EXTENSION_VERSION } from "../../src/lib/extension-heartbeat";
 import { GET } from "../../src/app/api/automation-readiness/route";
 beforeEach(() => {
   vi.clearAllMocks(); vi.stubEnv("AI_KEY_SECRET", "synthetic-readiness-secret"); vi.stubEnv("GEMINI_API_KEY", ""); vi.stubEnv("GROQ_API_KEY", "");
@@ -30,12 +31,19 @@ it("never returns stored secrets and explains missing infrastructure", async () 
 });
 it("uses fresh per-device runtime for account and local comment opt-in", async () => {
   mocks.devices.mockResolvedValue([{ id: "device", name: "Chrome", lastSeenAt: new Date() }]);
-  mocks.settings.mockResolvedValue([{ key: "extension_runtime_device", value: JSON.stringify({ at: new Date().toISOString(), fbUserId: "99887766", commentsEnabled: true, quietReason: "หน้าจอล็อกอยู่" }) }]);
+  mocks.settings.mockResolvedValue([{ key: "extension_runtime_device", value: JSON.stringify({ at: new Date().toISOString(), fbUserId: "99887766", commentsEnabled: true, build: EXPECTED_EXTENSION_VERSION, quietReason: "หน้าจอล็อกอยู่" }) }]);
   const result = await (await GET()).json(); expect(result.extensions[0]).toMatchObject({ online: true, commentsEnabled: true, fbUserId: "99887766", quietReason: "หน้าจอล็อกอยู่" });
   expect(result.steps.find((step: { key: string }) => step.key === "comments").ready).toBe(true);
 });
 it("redacts infrastructure errors", async () => {
   mocks.settings.mockRejectedValue(new Error("synthetic-secret-url")); const response = await GET(); expect(response.status).toBe(503); expect(await response.text()).not.toContain("synthetic-secret-url");
+});
+it("reports unknown runtime and queue counters instead of certifying cached code", async () => {
+  mocks.devices.mockResolvedValue([{ id: "device", name: "Chrome", lastSeenAt: new Date() }]);
+  mocks.settings.mockResolvedValue([{ key: "extension_runtime_device", value: JSON.stringify({ at: new Date().toISOString(), fbUserId: "99887766", commentsEnabled: true }) }]);
+  const result = await (await GET()).json();
+  expect(result.extensions[0]).toMatchObject({ online: true, runtimeCurrent: false, commentsEnabled: false, fullText: { active: null, review: null, blocked: null } });
+  expect(result.steps.find((step: { key: string }) => step.key === "comments").ready).toBe(false);
 });
 it("reports missing migrations before querying incomplete application tables", async () => {
   mocks.schema.mockResolvedValue({ ready: false, missing: ["Post.textRevision"] });

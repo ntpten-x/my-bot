@@ -5,7 +5,7 @@ vi.mock("../../src/lib/extension-devices", () => ({ verifyDeviceToken: mocks.ver
 vi.mock("../../src/lib/auto-comment/browser", () => ({ browserCommentRetryAfterMs: mocks.retry, claimBrowserComment: mocks.claim, authorizeBrowserComment: mocks.authorize, reportBrowserComment: mocks.report }));
 import { EXPECTED_EXTENSION_VERSION } from "../../src/lib/extension-heartbeat";
 import { POST } from "../../src/app/api/v1/extension/comments/route";
-const request = (body: unknown, url = "https://owner.example/api/v1/extension/comments") => new Request(url, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer mbd_synthetic", "x-extension-version": EXPECTED_EXTENSION_VERSION }, body: JSON.stringify(body) });
+const request = (body: unknown, url = "https://owner.example/api/v1/extension/comments") => new Request(url, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer mbd_synthetic", "x-extension-version": EXPECTED_EXTENSION_VERSION, "x-extension-runtime": EXPECTED_EXTENSION_VERSION }, body: JSON.stringify(body) });
 beforeEach(() => { vi.clearAllMocks(); mocks.verify.mockResolvedValue("paired-device"); mocks.allowed.mockResolvedValue(true); mocks.retry.mockResolvedValue(17000); });
 it("requires secure transport and a device token, not an owner cookie", async () => {
   expect((await POST(request({ action: "claim", fbUserId: "99887766" }, "http://owner.example/api/v1/extension/comments"))).status).toBe(403);
@@ -19,6 +19,16 @@ it("validates actions and binds the claimed device server-side", async () => {
 it("redacts exceptions without exposing tokens or bodies", async () => {
   mocks.claim.mockRejectedValue(new Error("synthetic-secret")); const response = await POST(request({ action: "claim", fbUserId: "99887766" }));
   expect(response.status).toBe(503); expect(await response.text()).not.toContain("synthetic-secret");
+});
+it("rejects cached runtime code even when the manifest reports the current version", async () => {
+  const stale = request({ action: "claim", fbUserId: "99887766" });
+  stale.headers.set("x-extension-runtime", "1.11.17");
+  expect(await (await POST(stale)).json()).toMatchObject({ job: null, upgradeRequired: true });
+  expect(mocks.claim).not.toHaveBeenCalled();
+  const missing = request({ action: "authorize", id: "job", claimToken: "12345678-1234-4234-8234-123456789012", fbUserId: "99887766" });
+  missing.headers.delete("x-extension-runtime");
+  expect(await (await POST(missing)).json()).toMatchObject({ grant: null, upgradeRequired: true });
+  expect(mocks.authorize).not.toHaveBeenCalled();
 });
 
 it("blocks new claims and grants for paused accounts while allowing reports", async () => {

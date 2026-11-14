@@ -78,10 +78,10 @@ it.each([3, 4])("gives %i due groups and tail detail work one shared cycle budge
  loadConfig:async()=>({token:"synthetic",paused:false,schedules:{}}),takeRunLock:async()=>true,releaseRunLock:async()=>{},closeOrphanReaders:async()=>{},
  probeFacebookIdentity:async()=>null,currentFbUserId:async()=>"",base:()=>"server",pruneContinuations:async()=>{},recoveryKey:()=>"key",
  getJson:async()=>({ok:true,json:async()=>({groups:["a","b","c","d"].slice(0,count).map(id=>({id})),maxGroupsPerCycle:20})}),
- quietReason:async()=>"",setQuiet:async()=>{},loadFullTextBacklog:async()=>({}),sleep:async(ms:number)=>{now+=ms;},rememberError:async()=>{},
+ quietReason:async()=>"",setQuiet:async()=>{},loadFullTextBacklog:async()=>({target:{groupId:"a",addedAt:started-1000}}),sleep:async(ms:number)=>{now+=ms;},rememberError:async()=>{},
  setReadingStatus:async()=>{},heartbeat:async()=>{},
  mapPool:async(items:any[],_parallel:number,worker:any)=>{const out=[];for(let i=0;i<items.length;i++)out.push(await worker(items[i],i));return out;},
- scrapeGroup:async(_cfg:unknown,g:{id:string},_remote:unknown,options:{deadlineMs:number})=>{calls.push({id:g.id,deadlineMs:options.deadlineMs});expect(options.deadlineMs-now).toBeLessThanOrEqual(45_000);now=options.deadlineMs;return {ok:true,nextRunAt:now+30_000};},
+ scrapeGroup:async(_cfg:unknown,g:{id:string},_remote:unknown,options:{deadlineMs:number})=>{expect(details[0]?.budgetMs).toBe(15000);calls.push({id:g.id,deadlineMs:options.deadlineMs});expect(options.deadlineMs-now).toBeLessThanOrEqual(45_000);now=options.deadlineMs;return {ok:true,nextRunAt:now+30_000};},
  processFullTextQueue:async(_cfg:unknown,_groups:unknown,options:{deadlineMs:number;budgetMs:number})=>{details.push(options);now+=Math.min(options.budgetMs,options.deadlineMs-now);},scheduleDueWake:async()=>{},
  MyBotScrape:{orderDueGroups:(g:any[])=>g,throttleLevel:()=>"none",cycleBatchLimit:()=>20,cycleParallel:()=>1},
  });

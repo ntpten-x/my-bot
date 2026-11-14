@@ -33,28 +33,64 @@
       try {
         const u = new URL(href, loc.href);
         const fromQuery = u.searchParams.get("comment_id") || u.searchParams.get("reply_comment_id");
-        if (fromQuery && /^\d+$/.test(fromQuery)) return fromQuery;
-        const fromHash = (u.hash || "").match(/(?:comment_id|reply_comment_id)=(\d+)/);
-        return fromHash ? fromHash[1] : "";
+        if (fromQuery && /^\d{1,40}$/.test(fromQuery)) return fromQuery;
+        const hash = new URLSearchParams(u.hash.slice(1).replace(/^\?/, ""));
+        const fromHash = hash.get("comment_id") || hash.get("reply_comment_id") || "";
+        return /^\d{1,40}$/.test(fromHash) ? fromHash : "";
       } catch { return ""; }
     };
     const fbHosts = new Set(["www.facebook.com", "facebook.com", "web.facebook.com", "m.facebook.com"]);
     const reservedProfile = new Set(["home", "watch", "marketplace", "groups", "gaming", "friends", "messages", "notifications", "settings", "privacy", "help", "reels", "stories", "events", "pages", "ads", "login", "checkpoint", "share", "photo", "video"]);
-    const links = container => Array.from(container.querySelectorAll("a[href]")).map(a => {
+    const ownProfileLocator = u => {
+      if (u.protocol !== "https:" || !fbHosts.has(u.hostname) || u.username || u.password || u.port) return false;
+      const path = u.pathname.replace(/\/$/, "");
+      if (path === "/profile.php") return u.searchParams.get("id") === payload.fbUserId;
+      if (path === "/" + payload.fbUserId || path === "/user/" + payload.fbUserId) return true;
+      const member = path.match(/^\/groups\/([^/]+)\/user\/(\d+)$/);
+      const groups = [postParts(payload.externalUrl)?.group, ...(payload.groupAliases || [])].map(x => String(x || "").toLowerCase());
+      return Boolean(member && member[2] === payload.fbUserId && groups.includes(member[1].toLowerCase()));
+    };
+    const receiptUrl = href => {
       try {
-        const href = a.getAttribute("href") || "";
-        if (!/comment_id=|reply_comment_id=/.test(href)) return "";
-        const u = new URL(href, loc.href);
-        if (!commentIdOf(u.href) || !samePost(u.href, payload.externalUrl)) return "";
-        return u.href;
+        const u = new URL(href, loc.href), id = commentIdOf(u.href);
+        if (!id || u.protocol !== "https:" || !fbHosts.has(u.hostname) || u.username || u.password || u.port) return "";
+        // Facebook also puts comment_id on the own-author profile link. This
+        // locator is used only inside the already verified post/comment surface.
+        if (!samePost(u.href, payload.externalUrl) && !ownProfileLocator(u)) return "";
+        const target = new URL(payload.externalUrl); target.search = ""; target.hash = "";
+        target.searchParams.set("comment_id", id); return target.href;
       } catch { return ""; }
-    }).filter(Boolean);
+    };
+    const links = container => {
+      const urls = Array.from(container.querySelectorAll("a[href]")).map(a => receiptUrl(a.getAttribute("href") || "")).filter(Boolean);
+      for (const node of container.querySelectorAll("[data-commentid]")) {
+        const id = node.getAttribute("data-commentid") || "";
+        if (!/^\d{1,40}$/.test(id)) continue;
+        const u = new URL(payload.externalUrl); u.searchParams.set("comment_id", id); urls.push(u.href);
+      }
+      return [...new Set(urls)];
+    };
+    const wasPresent = (before, url) => (before || []).some(old => commentIdOf(old) === commentIdOf(url));
+    const findPostSurface = () => {
+      const candidates = new Set();
+      for (const anchor of doc.querySelectorAll('a[href]')) {
+        let url; try { url = new URL(anchor.getAttribute("href"), loc.href).href; } catch { continue; }
+        if (commentIdOf(url) || !samePost(url, payload.externalUrl)) continue;
+        let surface = anchor.closest('[role="dialog"]') || anchor.closest('[role="article"]');
+        if (surface?.getAttribute("role") !== "dialog") {
+          while (surface?.parentElement?.closest('[role="article"]')) surface = surface.parentElement.closest('[role="article"]');
+        }
+        if (surface && visible(surface)) candidates.add(surface);
+      }
+      return candidates.size === 1 ? [...candidates][0] : null;
+    };
     const profilePath = href => {
       try {
         const u = new URL(href, loc.href);
         if (!fbHosts.has(u.hostname)) return "";
         const path = u.pathname.replace(/\/$/, "") || "/";
-        if (path === "/profile.php") return u.searchParams.get("id") === payload.fbUserId ? path : "";
+        if (ownProfileLocator(u)) return path;
+        if (path === "/profile.php") return "";
         if (path === "/" + payload.fbUserId || path === "/user/" + payload.fbUserId || path.startsWith("/user/" + payload.fbUserId + "/")) return path;
         if (/^\/[A-Za-z0-9.]{3,50}$/.test(path) && !reservedProfile.has(path.slice(1).toLowerCase())) return path;
         return "";
@@ -81,11 +117,13 @@
     };
     const authorMatches = (node, profiles) => Array.from(node.querySelectorAll("a[href]")).some(author => {
       try {
+        const boundary = author.closest('[data-commentid],[role="article"],li,[role="listitem"]');
+        if (boundary && boundary !== node && node.contains(boundary)) return false;
         const u = new URL(author.getAttribute("href"), loc.href);
-        if (!fbHosts.has(u.hostname)) return false;
+        if (u.protocol !== "https:" || !fbHosts.has(u.hostname) || u.username || u.password || u.port) return false;
         const path = u.pathname.replace(/\/$/, "") || "/";
         const allowed = (profiles || []).map(profile => String(profile || "").replace(/\/$/, "")).filter(Boolean);
-        if (path === "/" + payload.fbUserId) return true;
+        if (ownProfileLocator(u)) return true;
         if (path === "/profile.php") return u.searchParams.get("id") === payload.fbUserId;
         if (path === "/user/" + payload.fbUserId || path.startsWith("/user/" + payload.fbUserId + "/")) return true;
         return path !== "/profile.php" && allowed.includes(path);
@@ -93,27 +131,22 @@
     });
     const messageInComment = (node, needle) => {
       if (!needle || !node) return false;
-      const leaves = Array.from(node.querySelectorAll("div[dir='auto'], span[dir='auto'], span")).filter(el =>
-        !el.querySelector("div[dir='auto'], span[dir='auto'], span") && normalize(el.textContent) === needle);
-      if (leaves.length) return true;
-      return normalize(node.textContent).includes(needle);
+      return Array.from(node.querySelectorAll("[dir='auto'], span")).some(el => {
+        if (el.closest('a,button,[role="button"],[role="textbox"],textarea,script,style')) return false;
+        const boundary = el.closest('[data-commentid],[role="article"],li,[role="listitem"]');
+        if (boundary && boundary !== node && node.contains(boundary)) return false;
+        return normalize(el.textContent) === needle;
+      })
+        || normalize(node.textContent) === needle;
     };
     const commentSurface = (from, root) => {
       if (!from) return null;
-      const byId = from.closest("[data-commentid]");
-      if (byId && byId !== root) return byId;
-      let article = from.closest('[role="article"]');
-      while (article && article !== root) {
-        const parent = article.parentElement?.closest('[role="article"]');
-        if (!parent || parent === root) return article;
-        article = parent;
-      }
-      const item = from.closest("li");
-      return item && item !== root ? item : null;
+      const surface = from.closest('[data-commentid],[role="article"],li,[role="listitem"]');
+      return surface && surface !== root ? surface : null;
     };
-    if (blocked()) return { ok: false, outcome: "blocked" };
+    if (blocked()) return { ok: false, outcome: "blocked", reason: "facebook_constraint" };
     if (!matchesPage() || !payload.id || !payload.message || payload.message.length > 2000) {
-      return { ok: false, outcome: "failed", reason: !matchesPage() ? "target_mismatch" : "invalid_payload" };
+      return { ok: false, outcome: kind === "send" ? "not_sent" : ["observe", "reconcile"].includes(kind) ? "uncertain" : "failed", reason: !matchesPage() ? "target_mismatch" : "invalid_payload" };
     }
 
     if (kind === "prepare") {
@@ -231,41 +264,59 @@
     }
     if (kind === "reconcile") {
       // Read only: no composer, focus, input or submit operations on this path.
-      if (!Array.isArray(payload.baseline) || payload.baseline.length > 500 || !payload.sentAt || now() - payload.sentAt > 10 * 60_000) return { ok: false, outcome: "uncertain" };
+      if (!Array.isArray(payload.baseline) || payload.baseline.length > 500 || !payload.sentAt || now() - payload.sentAt > 10 * 60_000) return { ok: false, outcome: "uncertain", reason: "reconcile_baseline_unavailable" };
       const surfaces = Array.from(doc.querySelectorAll('[role="main"],main,[role="dialog"]')).filter(el => Array.from(el.querySelectorAll("a[href]")).some(a => {
         try { return samePost(new URL(a.getAttribute("href"), loc.href).href, payload.externalUrl); } catch { return false; }
       }));
-      const article = surfaces[0]; if (!article) return { ok: false, outcome: "uncertain" };
-      memory.__mybotCommentSession = { id: payload.id, message: payload.message, article, before: payload.baseline, profiles: [...new Set([...(payload.profiles || []), ...collectOwnProfiles()])], clicked: true };
+      const prior = memory.__mybotCommentSession;
+      if (!prior || prior.id !== payload.id || prior.message !== payload.message || !prior.clicked || !prior.article?.isConnected) {
+        const article = findPostSurface() || (surfaces.length === 1 ? surfaces[0] : null); if (!article) return { ok: false, outcome: "uncertain", reason: "comment_surface_unavailable" };
+        memory.__mybotCommentSession = { id: payload.id, message: payload.message, article, before: payload.baseline, profiles: [...new Set([...(payload.profiles || []), ...collectOwnProfiles()])], clicked: true };
+      }
       kind = "observe";
     }
     const session = memory.__mybotCommentSession;
-    if (!session || session.id !== payload.id || session.message !== payload.message || !session.article.isConnected) return { ok: false, outcome: "uncertain" };
+    if (!session || session.id !== payload.id || session.message !== payload.message) return { ok: false, outcome: kind === "send" ? "not_sent" : "uncertain", reason: "comment_session_missing" };
+    if (!session.article.isConnected && kind === "observe") session.article = findPostSurface() || session.article;
+    if (!session.article.isConnected) return { ok: false, outcome: kind === "send" ? "not_sent" : "uncertain", reason: "comment_surface_unavailable" };
     if (kind === "send") {
-      if (session.clicked || now() - session.at > 120000 || !payload.permitUntil || now() >= payload.permitUntil || payload.permitUntil - now() > 3000
+      if (session.clicked) return { ok: false, outcome: "uncertain", reason: "send_already_invoked" };
+      if (now() - session.at > 120000 || !payload.permitUntil || now() >= payload.permitUntil || payload.permitUntil - now() > 3000
         || !session.box.isConnected || !visible(session.button) || session.button.disabled || session.button.getAttribute("aria-disabled") === "true"
-        || normalize(session.box.value ?? session.box.textContent) !== normalize(payload.message)) return { ok: false, outcome: "uncertain" };
+        || normalize(session.box.value ?? session.box.textContent) !== normalize(payload.message)) return { ok: false, outcome: "not_sent", reason: "send_precondition_changed" };
       session.clicked = true; // Set BEFORE click; never retry the button even if click throws.
-      try { session.button.click(); return { ok: true }; } catch { return { ok: false, outcome: "uncertain" }; }
+      try { session.button.click(); return { ok: true }; } catch { return { ok: false, outcome: "uncertain", reason: "send_click_result_unknown" }; }
     }
     if (kind === "observe") {
-      if (!session.clicked) return { ok: false, outcome: "uncertain" };
+      if (!session.clicked) return { ok: false, outcome: "uncertain", reason: "send_not_recorded" };
       const profiles = [...new Set([...(session.profiles || []), ...(payload.profiles || []), ...collectOwnProfiles()])];
       const needle = normalize(payload.message);
+      let messageFound = false, authorFound = false, temporaryReceipt = false;
       for (const url of links(session.article)) {
-        if ((session.before || []).includes(url)) continue;
+        if (wasPresent(session.before, url)) continue;
         const anchor = Array.from(session.article.querySelectorAll("a[href]")).find(a => {
-          try { return new URL(a.getAttribute("href"), loc.href).href === url; } catch { return false; }
+          return receiptUrl(a.getAttribute("href") || "") === url;
         });
         const comment = commentSurface(anchor, session.article);
+        if (comment && messageInComment(comment, needle)) messageFound = true;
         if (comment && messageInComment(comment, needle) && authorMatches(comment, profiles)) {
           return { ok: true, outcome: "observed", commentUrl: url };
         }
       }
       // Facebook sometimes renders a fresh comment node with data-commentid before the permalink appears.
-      for (const node of Array.from(session.article.querySelectorAll("[data-commentid], [aria-label*='Comment'], [aria-label*='ความคิดเห็น']"))) {
-        if (node === session.article || !messageInComment(node, needle) || !authorMatches(node, profiles)) continue;
-        const nested = links(node).find(url => !(session.before || []).includes(url));
+      for (const node of Array.from(session.article.querySelectorAll("[data-commentid], [role='article'], [role='listitem'], [aria-label*='Comment'], [aria-label*='ความคิดเห็น']"))) {
+        if (node === session.article || !messageInComment(node, needle)) continue;
+        messageFound = true;
+        if (!authorMatches(node, profiles)) continue;
+        authorFound = true;
+        for (const anchor of node.querySelectorAll('a[href]')) {
+          try {
+            const u = new URL(anchor.getAttribute("href"), loc.href);
+            const id = u.searchParams.get("comment_id") || u.searchParams.get("reply_comment_id") || "";
+            if ((samePost(u.href, payload.externalUrl) || ownProfileLocator(u)) && id.startsWith("client:")) temporaryReceipt = true;
+          } catch { /* not a usable receipt */ }
+        }
+        const nested = links(node).find(url => !wasPresent(session.before, url));
         if (nested) return { ok: true, outcome: "observed", commentUrl: nested };
         const id = node.getAttribute("data-commentid") || "";
         if (!/^\d+$/.test(id)) continue;
@@ -273,14 +324,14 @@
           const base = new URL(payload.externalUrl);
           base.searchParams.set("comment_id", id);
           const commentUrl = base.href;
-          if ((session.before || []).includes(commentUrl)) continue;
+          if (wasPresent(session.before, commentUrl)) continue;
           return { ok: true, outcome: "observed", commentUrl };
         } catch { /* keep scanning */ }
       }
-      return { ok: false, outcome: "uncertain" };
+      return { ok: false, outcome: "uncertain", reason: !messageFound ? "observation_message_not_found" : !authorFound ? "observation_author_unverified" : temporaryReceipt ? "observation_temporary_receipt" : "observation_receipt_missing_or_old" };
     }
     return { ok: false, outcome: "failed" };
   }
-  root.MyBotBrowserComment = { action };
+  root.MyBotBrowserComment = { action, build: "1.11.35" };
   if (typeof module !== "undefined") module.exports = { action };
 })(typeof globalThis !== "undefined" ? globalThis : this);

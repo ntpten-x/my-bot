@@ -67,6 +67,15 @@ async function setup(options: {
     return { device, source, ruleId, input, post, job: await prisma.autoCommentJob.findFirstOrThrow() };
 }
 const claim = (deviceId: string) => claimBrowserComment(deviceId, "99887766");
+it.skipIf(!fixture.enabled)("uses the configured post age for newly captured posts published before Start", async () => {
+    const s = await setup();
+    const post = await prisma.post.create({ data: { sourceId: s.source.id, externalUrl: "https://www.facebook.com/groups/12345/posts/9991/", text: "หาช่างแอร์", normalizedText: "หาช่างแอร์", contentHash: `age-${++serial}`, postedAt: new Date(Date.now() - 3600000) } });
+    await scanBrowserComments(active);
+    expect(await prisma.autoCommentJob.findFirst({ where: { postId: post.id } })).toMatchObject({ status: "browser_ready", attempts: 0 });
+    const olderCapture = await prisma.post.create({ data: { sourceId: s.source.id, externalUrl: "https://www.facebook.com/groups/12345/posts/9992/", text: "หาช่างแอร์", normalizedText: "หาช่างแอร์", contentHash: `age-${++serial}`, postedAt: new Date(Date.now() - 3600000), createdAt: new Date(Date.now() - 7200000) } });
+    await scanBrowserComments(active);
+    expect(await prisma.autoCommentJob.count({ where: { postId: olderCapture.id } })).toBe(0);
+});
 const permit = (deviceId: string, job: {
     id: string;
     claimToken: string;

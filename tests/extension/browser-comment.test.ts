@@ -12,6 +12,79 @@ function fixture(html?: string) {
   return { dom, env, click, doc: dom.window.document };
 }
 describe("browser DOM delivery using SYNTHETIC pages only", () => {
+  it("observes a new own profile locator receipt inside the verified post surface", async () => {
+    const f = fixture(); await action("prepare", payload, f.env); await action("send", { ...payload, permitUntil: 2000 }, f.env);
+    f.doc.querySelector("article")!.insertAdjacentHTML("beforeend", '<div role="article" aria-label="ความคิดเห็น"><a role="link" href="/profile.php?id=99887766&comment_id=777">Owner</a><div dir="auto">ข้อความทดสอบ</div></div>');
+    expect(await action("observe", payload, f.env)).toMatchObject({ ok: true, outcome: "observed", commentUrl: url + "?comment_id=777" });
+    f.dom.window.close();
+  });
+  it("preserves the prepared dialog during reconciliation when the post permalink is outside it", async () => {
+    const f = fixture('<main role="main"><article role="article"><a href="/groups/12345/posts/8888/">post</a></article></main><div role="dialog"><form><textarea aria-label="Write a comment"></textarea><button type="button" aria-label="Comment">Comment</button></form></div>');
+    const prepared = await action("prepare", payload, f.env) as { baseline: string[]; profiles: string[] };
+    await action("send", { ...payload, permitUntil: 2000 }, f.env);
+    f.doc.querySelector('[role="dialog"]')!.insertAdjacentHTML("beforeend", '<div role="article"><a href="/profile.php?id=99887766&comment_id=778">Owner</a><div dir="auto">ข้อความทดสอบ</div></div>');
+    expect(await action("reconcile", { ...payload, baseline: prepared.baseline, profiles: prepared.profiles, sentAt: 999 }, f.env)).toMatchObject({ ok: true, outcome: "observed", commentUrl: url + "?comment_id=778" });
+    f.dom.window.close();
+  });
+  it("rejects old, foreign and other-account profile locator receipts", async () => {
+    for (const href of ["/profile.php?id=99887766&comment_id=777", "/profile.php?id=11223344&comment_id=777", "https://evil.example/profile.php?id=99887766&comment_id=777"]) {
+      const f = fixture();
+      const comment = `<div role="article"><a href="${href}">profile</a><div dir="auto">ข้อความทดสอบ</div></div>`;
+      if (href.startsWith("/profile.php?id=99887766")) f.doc.querySelector("article")!.insertAdjacentHTML("beforeend", comment);
+      await action("prepare", payload, f.env); await action("send", { ...payload, permitUntil: 2000 }, f.env);
+      if (!href.startsWith("/profile.php?id=99887766")) f.doc.querySelector("article")!.insertAdjacentHTML("beforeend", comment);
+      expect(await action("observe", payload, f.env)).toMatchObject({ ok: false, outcome: "uncertain" });
+      f.dom.window.close();
+    }
+  });
+  it("identifies an optimistic client receipt without treating it as persisted success", async () => {
+    const f = fixture(); await action("prepare", payload, f.env); await action("send", { ...payload, permitUntil: 2000 }, f.env);
+    f.doc.querySelector("article")!.insertAdjacentHTML("beforeend", '<div role="article"><a href="/profile.php?id=99887766&comment_id=client:synthetic-pending">Owner</a><div dir="auto">ข้อความทดสอบ</div></div>');
+    expect(await action("observe", payload, f.env)).toMatchObject({ ok: false, outcome: "uncertain", reason: "observation_temporary_receipt" });
+    f.dom.window.close();
+  });
+  it("rebinds observation after the post surface is replaced without clicking again", async () => {
+    const f = fixture();
+    await action("prepare", payload, f.env);
+    await action("send", { ...payload, permitUntil: 2000 }, f.env);
+    const old = f.doc.querySelector("article")!;
+    const replacement = old.cloneNode(true) as HTMLElement;
+    replacement.insertAdjacentHTML("beforeend", '<div role="article"><a href="/99887766">Owner</a><span>ข้อความทดสอบ</span><a href="/groups/12345/posts/8888/?comment_id=999">time</a></div>');
+    old.replaceWith(replacement);
+    expect(await action("observe", payload, f.env)).toMatchObject({ ok: true, outcome: "observed" });
+    expect(f.click).toHaveBeenCalledTimes(1);
+    f.dom.window.close();
+  });
+  it("does not mistake a pre-existing data-commentid receipt for a new send", async () => {
+    const f = fixture();
+    f.doc.querySelector("article")!.insertAdjacentHTML("beforeend", '<div data-commentid="999"><a href="/99887766">Owner</a><span>ข้อความทดสอบ</span></div>');
+    await action("prepare", payload, f.env);
+    await action("send", { ...payload, permitUntil: 2000 }, f.env);
+    expect(await action("observe", payload, f.env)).toMatchObject({ ok: false, outcome: "uncertain" });
+    f.dom.window.close();
+  });
+  it("keeps the baseline keyed by comment id when Facebook changes link tracking", async () => {
+    const f = fixture();
+    f.doc.querySelector("article")!.insertAdjacentHTML("beforeend", '<div role="article"><a href="/99887766">Owner</a><span>ข้อความทดสอบ</span><a id="old-receipt" href="/groups/12345/posts/8888/?comment_id=999&tracking=before">time</a></div>');
+    await action("prepare", payload, f.env); await action("send", { ...payload, permitUntil: 2000 }, f.env);
+    f.doc.querySelector("#old-receipt")!.setAttribute("href", "/groups/12345/posts/8888/?comment_id=999&tracking=after");
+    expect(await action("observe", payload, f.env)).toMatchObject({ ok: false, outcome: "uncertain" });
+    f.dom.window.close();
+  });
+  it("does not accept another message that only contains the requested short text", async () => {
+    const f = fixture(); const short = { ...payload, message: "สนใจ" };
+    await action("prepare", short, f.env); await action("send", { ...short, permitUntil: 2000 }, f.env);
+    f.doc.querySelector("article")!.insertAdjacentHTML("beforeend", '<div role="article"><a href="/99887766">Owner</a><span>ไม่สนใจแล้ว</span><a href="/groups/12345/posts/8888/?comment_id=999">time</a></div>');
+    expect(await action("observe", short, f.env)).toMatchObject({ ok: false, outcome: "uncertain" });
+    f.dom.window.close();
+  });
+  it("does not combine an own parent comment with another member's matching nested reply", async () => {
+    const f = fixture();
+    await action("prepare", payload, f.env); await action("send", { ...payload, permitUntil: 2000 }, f.env);
+    f.doc.querySelector("article")!.insertAdjacentHTML("beforeend", '<div role="article"><a href="/99887766">Owner</a><span>ข้อความอื่น</span><div role="article"><a href="/11223344">Other member</a><span>ข้อความทดสอบ</span><a href="/groups/12345/posts/8888/?reply_comment_id=999">time</a></div></div>');
+    expect(await action("observe", payload, f.env)).toMatchObject({ ok: false, outcome: "uncertain" });
+    f.dom.window.close();
+  });
   it("prepares without clicking and clicks once only with a fresh permit", async () => {
     const f = fixture(); expect(await action("prepare", payload, f.env)).toMatchObject({ ok: true }); expect(f.click).not.toHaveBeenCalled();
     expect(await action("send", { ...payload, permitUntil: 2000 }, f.env)).toMatchObject({ ok: true });

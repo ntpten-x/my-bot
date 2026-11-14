@@ -110,7 +110,7 @@ it("shows live-only mode and the bound device opt-in as blockers even when a dif
   ], accounts: [], steps: [{ key: "worker", ready: true }, { key: "ai", ready: false }] };
   await act(async () => root.render(React.createElement(CommentReadinessPanel, { control: dashboard.control, rules: [rule], readiness })));
   expect(container.textContent).toContain("ส่งคอมเมนต์จริงตามกฎที่เปิดไว้"); expect(container.textContent).not.toContain("Dry Run");
-  expect(container.textContent).toContain("Extension ปิดรับงานคอมเมนต์");
+  expect(container.textContent).toContain("Extension ยังไม่พร้อมรับงาน");
   expect(container.textContent).toContain("กฎนี้ไม่รอ AI แม้ผู้ให้บริการ AI ไม่พร้อม");
   readiness.extensions[0].commentsEnabled = true;
   await act(async () => root.render(React.createElement(CommentReadinessPanel, { control: dashboard.control, rules: [rule], readiness })));

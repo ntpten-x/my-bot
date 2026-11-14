@@ -74,6 +74,24 @@ it("reports success once, without a second uncertain report", async () => {
   const h = harness(); await h.worker.run(h.deps);
   expect(h.postJson.mock.calls.filter(([, , body]) => body.action === "report")).toHaveLength(1);
 });
+it("persists a reason when observation cannot prove the comment author", async () => {
+  const h = harness(); const original = h.execute.getMockImplementation()!;
+  h.execute.mockImplementation(async options => ["observe", "reconcile"].includes(options.args[0])
+    ? [{ result: { ok: false, outcome: "uncertain", reason: "observation_author_unverified" } }]
+    : original(options));
+  await h.worker.run(h.deps);
+  expect(h.postJson.mock.calls.find(([, , body]) => body.action === "report")?.[2]).toMatchObject({ outcome: "uncertain", reason: "observation_author_unverified" });
+  expect(h.execute.mock.calls.filter(([call]) => call.args[0] === "send")).toHaveLength(1);
+});
+it("reports a definite no-click decision after a grant without retrying the send", async () => {
+  const h = harness(); const original = h.execute.getMockImplementation()!;
+  h.execute.mockImplementation(async options => options.args[0] === "send"
+    ? [{ result: { ok: false, outcome: "not_sent", reason: "send_precondition_changed" } }]
+    : original(options));
+  await h.worker.drain(h.deps);
+  expect(h.postJson.mock.calls.find(([, , body]) => body.action === "report")?.[2]).toMatchObject({ outcome: "not_sent", reason: "send_precondition_changed" });
+  expect(h.execute.mock.calls.filter(([call]) => call.args[0] === "send")).toHaveLength(1);
+});
 it("reports a known unclicked expired permit as not_sent", async () => {
   const h = harness(true, false, 4000); await h.worker.run(h.deps);
   expect(h.execute.mock.calls.some(([call]) => call.args[0] === "send")).toBe(false);
