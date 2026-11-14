@@ -14,7 +14,7 @@ export async function api<T>(url: string, init?: RequestInit): Promise<T> {
     throw new ApiError("กรุณาเข้าสู่ระบบ");
   }
   if (response.status === 403 && data.code === "REAUTH_REQUIRED" && typeof window !== "undefined") window.dispatchEvent(new Event("mybot:reauth-required"));
-  if (response.status === 403 && data.code === "MFA_SETUP_REQUIRED" && typeof window !== "undefined") window.location.href = "/settings/security";
+  if (response.status === 403 && data.code === "MFA_SETUP_REQUIRED" && typeof window !== "undefined" && window.location.pathname !== "/settings/security") window.location.href = "/settings/security";
   if (!response.ok) {
     throw new ApiError(typeof data.error === "string" ? data.error : "คำขอไม่สำเร็จ");
   }
