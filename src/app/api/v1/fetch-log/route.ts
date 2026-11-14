@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/request-body";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { requireExtensionToken } from "@/lib/auth";
@@ -21,7 +22,7 @@ export async function POST(request: Request) {
       message: z.string().max(500).optional(),
       postsFound: z.number().int().optional(),
     })
-    .safeParse(await request.json().catch(() => null));
+    .safeParse(await readJson(request, 1_500_000).catch(() => null));
   if (!parsed.success) return withCors(json({ error: "ข้อมูลไม่ถูกต้อง" }, 400));
   const source = await findSourceByUrl(parsed.data.sourceUrl);
   if (!source) return withCors(json({ error: "ไม่พบแหล่งข้อมูล" }, 404));

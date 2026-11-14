@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/request-body";
 import { z } from "zod";
 import { authed } from "@/lib/guard";
 import { json } from "@/lib/http";
@@ -28,7 +29,7 @@ const putSchema = z.object({
 export async function PUT(request: Request) {
   const { error } = await authed();
   if (error) return error;
-  const parsed = putSchema.safeParse(await request.json().catch(() => null));
+  const parsed = putSchema.safeParse(await readJson(request, 1_500_000).catch(() => null));
   if (!parsed.success) return json({ error: "ข้อมูลไม่ถูกต้อง" }, 400);
   const entries: Record<string, string> = {};
   if (parsed.data.provinces) entries.service_provinces = parseProvinceList(parsed.data.provinces.join(",")).join(",");

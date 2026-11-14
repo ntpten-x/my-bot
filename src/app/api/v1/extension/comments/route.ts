@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/request-body";
 import { EXPECTED_EXTENSION_VERSION, extensionVersionFromRequest, isCompatibleExtensionVersion, isCurrentExtensionVersion } from "@/lib/extension-heartbeat";
 import { facebookWorkAllowed } from "@/lib/facebook-accounts";
 import { z } from "zod";
@@ -31,7 +32,7 @@ export async function POST(request: Request) {
   if (!transportAllowed(request.headers, request.url)) return json({ error: "ต้องใช้ HTTPS หรือ localhost" }, 403);
   const token = (request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
   const deviceId = await verifyDeviceToken(token); if (!deviceId) return json({ error: "ต้องจับคู่ Extension ก่อน" }, 401);
-  const parsed = input.safeParse(await request.json().catch(() => null)); if (!parsed.success) return json({ error: "คำสั่งไม่ถูกต้อง" }, 400);
+  const parsed = input.safeParse(await readJson(request, 1_500_000).catch(() => null)); if (!parsed.success) return json({ error: "คำสั่งไม่ถูกต้อง" }, 400);
   try {
     const data = parsed.data;
     if (data.action === "clear_journal") {

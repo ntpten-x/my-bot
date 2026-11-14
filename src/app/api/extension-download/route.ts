@@ -18,7 +18,7 @@ export async function GET(request: Request) {
         "cache-control": "no-store",
       },
     });
-  } catch (err) {
-    return json({ error: err instanceof Error ? err.message : "สร้างไฟล์ส่วนขยายไม่สำเร็จ" }, 400);
+  } catch {
+    return json({ error: "สร้างไฟล์ส่วนขยายไม่สำเร็จ ตรวจ origin และไฟล์ติดตั้ง" }, 400);
   }
 }

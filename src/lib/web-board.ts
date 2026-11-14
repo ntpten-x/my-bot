@@ -1,3 +1,4 @@
+import { fetchPublicText } from "./public-http";
 import * as cheerio from "cheerio";
 import type { IncomingPost } from "./ingest";
 
@@ -16,7 +17,7 @@ export function extractWebBoardPosts(html: string, pageUrl: string): IncomingPos
     }
     const clean = text.replace(/\s+/g, " ").trim();
     if (clean.length < 20 || seen.has(url)) return;
-    if (/^javascript:/i.test(url) || url.startsWith("mailto:")) return;
+    if (!["http:", "https:"].includes(new URL(url).protocol)) return;
     seen.add(url);
     posts.push({ url, text: clean.slice(0, 1500), authorName: author, images: [] });
   };
@@ -39,16 +40,9 @@ export function extractWebBoardPosts(html: string, pageUrl: string): IncomingPos
 
 export async function fetchWebBoardPosts(url: string): Promise<IncomingPost[]> {
   try {
-    const response = await fetch(url, {
-      headers: { "user-agent": "MY-BOT/1.0 (+local lead radar)" },
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText} จาก ${url}`);
-    const html = await response.text();
+    const html = await fetchPublicText(url);
     return extractWebBoardPosts(html, url);
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith("HTTP ")) throw error;
-    const reason = error instanceof Error ? error.message : "เชื่อมต่อไม่ได้";
-    throw new Error(`${reason} (${url})`);
+  } catch {
+    throw new Error("อ่านเว็บบอร์ดไม่สำเร็จ: ตรวจ URL สาธารณะ ขนาดข้อมูล และการเชื่อมต่อ");
   }
 }

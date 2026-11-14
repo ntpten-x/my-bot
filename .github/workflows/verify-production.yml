@@ -20,7 +20,7 @@ jobs:
           node-version-file: .nvmrc
       - name: Poll production health headers
         env:
-          PRODUCTION_ORIGIN: https://my-bot-e6bt.onrender.com
+          PRODUCTION_ORIGIN: ${{ vars.PRODUCTION_ORIGIN || 'https://mb-agcf.onrender.com' }}
           EXPECTED_COMMIT: ${{ github.event.workflow_run.head_sha }}
           VERIFY_TIMEOUT_MS: "600000"
         run: node scripts/verify-production-release.mjs

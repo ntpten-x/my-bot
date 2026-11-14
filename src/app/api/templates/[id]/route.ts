@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/request-body";
 import { templateScopeError } from "@/lib/template-scope";
 import { prisma } from "@/lib/prisma";
 import { authed } from "@/lib/guard";
@@ -16,7 +17,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   const { error } = await authed();
   if (error) return error;
   const { id } = await context.params;
-  const raw = await request.json().catch(() => null);
+  const raw = await readJson(request, 1_500_000).catch(() => null);
   if (raw && typeof raw === "object" && (raw as { used?: unknown }).used === true) {
     const template = await prisma.replyTemplate.update({ where: { id }, data: { useCount: { increment: 1 } } }).catch(() => null);
     return template ? json({ template }) : json({ error: "ไม่พบข้อความ" }, 404);

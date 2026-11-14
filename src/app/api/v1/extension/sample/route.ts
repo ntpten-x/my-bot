@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/request-body";
 import { facebookWorkAllowed } from "@/lib/facebook-accounts";
 import { z } from "zod";
 import { requireExtensionToken } from "@/lib/auth";
@@ -20,7 +21,7 @@ export async function POST(request: Request) {
   if (!(await requireExtensionToken(request.headers.get("authorization"), request))) {
     return withCors(json({ error: "โทเคนไม่ถูกต้อง" }, 401));
   }
-  const parsed = bodySchema.safeParse(await request.json().catch(() => null));
+  const parsed = bodySchema.safeParse(await readJson(request, 1_500_000).catch(() => null));
   if (!parsed.success) return withCors(json({ error: "ข้อมูลไม่ถูกต้อง" }, 400));
   if (!(await facebookWorkAllowed(request))) return withCors(json({ error: "บัญชีถูกหยุดงาน", code: "ACCOUNT_PAUSED" }, 423));
   await saveParseSample(parsed.data.sourceUrl, parsed.data.posts);

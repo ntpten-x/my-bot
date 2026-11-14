@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/request-body";
 import { resolveSourceScope } from "@/lib/source-scope";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -11,7 +12,7 @@ import { PRIORITY_INTERVAL, isMarketplaceUrl, maxIntervalFor, normalizePriority 
 export const dynamic = "force-dynamic";
 
 const createSchema = z.object({
-  urls: z.string().min(1),
+  urls: z.string().min(1).max(200_000),
   name: z.string().trim().max(120).optional(),
   boundCategorySlug: z.string().max(60).optional(),
   defaultProductId: z.string().min(1).nullable().optional(),
@@ -68,7 +69,7 @@ export async function GET() {
 export async function POST(request: Request) {
   const { error } = await authed();
   if (error) return error;
-  const parsed = createSchema.safeParse(await request.json().catch(() => null));
+  const parsed = createSchema.safeParse(await readJson(request, 1_500_000).catch(() => null));
   if (!parsed.success) return json({ error: "วางลิงก์แหล่งข้อมูลก่อน" }, 400);
   const resolved = await resolveSourceScope(parsed.data);
   if (resolved.error) return json({ error: resolved.error }, 400);
@@ -78,6 +79,7 @@ export async function POST(request: Request) {
     .map((line) => line.trim())
     .filter((line) => line && !line.startsWith("#"));
   if (!lines.length) return json({ error: "ไม่พบลิงก์" }, 400);
+  if (lines.length > 100) return json({ error: "เพิ่มแหล่งข้อมูลได้ครั้งละไม่เกิน 100 ลิงก์" }, 400);
   const priority = normalizePriority(parsed.data.priority);
   const interval = priority === "normal" ? settings.fetchIntervalMinutes : PRIORITY_INTERVAL[priority];
   const created = [];

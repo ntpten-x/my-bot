@@ -1,14 +1,8 @@
 import { lookup } from "node:dns/promises";
 import { request } from "node:https";
-import { isIP } from "node:net";
+import { publicAddress } from "./public-address.cjs";
+export { publicAddress };
 
-export function publicAddress(address: string) {
-  if (isIP(address) === 4) {
-    const [a, b] = address.split(".").map(Number);
-    return !(a === 0 || a === 10 || a === 127 || a >= 224 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || (a === 198 && [18, 19].includes(b)));
-  }
-  return isIP(address) === 6 && /^[23][0-9a-f]{3}:/i.test(address) && !/^2001:(?:db8|0):/i.test(address);
-}
 export function allowedImageUrl(value: string) {
   try {
     const u = new URL(value);

@@ -1,3 +1,4 @@
+import { appendSecurityAudit } from "../security-audit";
 import { randomUUID } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
@@ -93,6 +94,7 @@ export async function updateCommentControl(input: {
       await tx.autoCommentJob.updateMany({ where: { deliveryMode: "extension", status: "browser_ready", generation: next.generation }, data: { nextAttemptAt: new Date(), lastError: "" } });
     }
     await tx.autoCommentLog.create({ data: { event: input.action || "settings", message: next.dryRun ? "Dry Run" : "ส่งจริงตามกฎ" } });
+    await appendSecurityAudit("comment.control", null, input.action || "settings", tx);
     return next;
   }, { timeout: 20_000, maxWait: 20_000 });
 }

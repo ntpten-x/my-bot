@@ -85,3 +85,11 @@ it.each(["", "&q=ช่าง"])("preserves serialized post fields while omittin
   expect(query.select.ocrText).toBe(true); // Contact extraction still needs OCR text.
   expect(query.select.notes).toBeDefined();
 });
+
+it("rejects excessive offsets, malformed dates and expensive input before querying posts", async () => {
+  for (const query of ["page=9007199254740991", "from=not-a-date", "minScore=NaN", "minScore=101", `q=${"x".repeat(201)}`]) {
+    const response = await posts(new Request(`http://localhost:8001/api/posts?${query}`));
+    expect(response.status).toBe(400);
+  }
+  expect(mocks.posts).not.toHaveBeenCalled(); expect(mocks.count).not.toHaveBeenCalled();
+});

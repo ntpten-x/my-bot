@@ -1,3 +1,4 @@
+import { fetchPublicText } from "./public-http";
 import Parser from "rss-parser";
 import type { IncomingPost } from "./ingest";
 
@@ -40,10 +41,9 @@ export function mapRssItems(
 
 export async function fetchRssPosts(url: string): Promise<IncomingPost[]> {
   try {
-    const feed = await parser.parseURL(url);
+    const feed = await parser.parseString(await fetchPublicText(url));
     return mapRssItems(feed.items ?? []);
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : "อ่านฟีดไม่สำเร็จ";
-    throw new Error(`${reason} (${url})`);
+  } catch {
+    throw new Error("อ่านฟีดไม่สำเร็จ: ตรวจ URL สาธารณะ ขนาดข้อมูล และการเชื่อมต่อ");
   }
 }

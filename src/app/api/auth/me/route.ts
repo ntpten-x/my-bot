@@ -5,6 +5,6 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   const session = await getSession();
-  if (!session) return json({ authenticated: false }, 401);
-  return json({ authenticated: true });
+  const response = json({ authenticated: Boolean(session) }, session ? 200 : 401);
+  response.headers.set("Cache-Control", "no-store"); return response;
 }

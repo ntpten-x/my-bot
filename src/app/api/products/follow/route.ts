@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/request-body";
 import { z } from "zod";
 import { authed } from "@/lib/guard";
 import { json } from "@/lib/http";
@@ -17,7 +18,7 @@ const schema = z.object({ ids: z.array(z.string().min(1)).max(50) });
 export async function PUT(request: Request) {
   const { error } = await authed();
   if (error) return error;
-  const parsed = schema.safeParse(await request.json().catch(() => null));
+  const parsed = schema.safeParse(await readJson(request, 1_500_000).catch(() => null));
   if (!parsed.success) return json({ error: "ข้อมูลไม่ถูกต้อง" }, 400);
   return json({ ids: await writeFollowedProducts(parsed.data.ids) });
 }

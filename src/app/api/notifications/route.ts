@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/request-body";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { authed } from "@/lib/guard";
@@ -33,12 +34,12 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const { error } = await authed();
   if (error) return error;
-  const parsed = z.object({ ids: z.array(z.string()).optional(), all: z.boolean().optional() }).safeParse(
-    await request.json().catch(() => ({})),
+  const parsed = z.object({ ids: z.array(z.string().min(1).max(200)).min(1).max(1000).optional(), all: z.boolean().optional() }).refine(data => data.all === true || Boolean(data.ids?.length)).safeParse(
+    await readJson(request, 1_500_000).catch(() => null),
   );
   if (!parsed.success) return json({ error: "ข้อมูลไม่ถูกต้อง" }, 400);
   await prisma.notification.updateMany({
-    where: parsed.data.all || !parsed.data.ids?.length ? { read: false } : { id: { in: parsed.data.ids } },
+    where: parsed.data.all === true ? { read: false } : { id: { in: parsed.data.ids } },
     data: { read: true },
   });
   return json({ ok: true });

@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/request-body";
 import { authed } from "@/lib/guard";
 import { json } from "@/lib/http";
 import { getSettings, upsertSettings } from "@/lib/settings";
@@ -34,7 +35,7 @@ export async function GET() {
 export async function PUT(request: Request) {
   const { error } = await authed();
   if (error) return error;
-  const parsed = replyQueueSettingsSchema.safeParse(await request.json().catch(() => null));
+  const parsed = replyQueueSettingsSchema.safeParse(await readJson(request, 1_500_000).catch(() => null));
   if (!parsed.success) return json({ error: "ข้อมูลไม่ถูกต้อง" }, 400);
   const data = parsed.data;
   const times = parseTimes(data.times);

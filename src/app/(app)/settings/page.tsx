@@ -53,7 +53,6 @@ export default function SettingsPage() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [confirmToken, setConfirmToken] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [retention, setRetention] = useState<RetentionInfo | null>(null);
 
   async function loadRetention() {
@@ -153,12 +152,8 @@ export default function SettingsPage() {
         </Card>
         <Card className="space-y-3">
           <h2 className="font-semibold">โทเคนส่วนขยาย (แบบเดิม · ใช้ได้เฉพาะ localhost)</h2>
-          <p className="break-all rounded-xl bg-paper px-3 py-2 font-mono text-sm">{settings.extensionToken || "ยังไม่มีโทเคน รัน seed หรือสร้างใหม่"}</p>
+          <p className="text-sm text-muted">ไม่แสดงโทเคนร่วมบนหน้าเว็บ ใช้การจับคู่อุปกรณ์ที่หน้า <a href="/settings/extension" className="underline">ส่วนขยาย Chrome</a> แทน ปุ่มด้านล่างใช้ยกเลิกโทเคนร่วมเดิม</p>
           <div className="flex gap-2">
-            <Button type="button" variant="outline" onClick={async () => {
-              await navigator.clipboard.writeText(settings.extensionToken);
-              setCopied(true);
-            }}>{copied ? "คัดลอกแล้ว" : "คัดลอกโทเคน"}</Button>
             <Button type="button" variant="danger" onClick={() => setConfirmToken(true)}>สร้างโทเคนใหม่</Button>
           </div>
         </Card>

@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/request-body";
 import { resolveSourceScope } from "@/lib/source-scope";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -21,7 +22,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   const { error } = await authed();
   if (error) return error;
   const { id } = await context.params;
-  const parsed = patchSchema.safeParse(await request.json().catch(() => null));
+  const parsed = patchSchema.safeParse(await readJson(request, 1_500_000).catch(() => null));
   if (!parsed.success) return json({ error: "ข้อมูลไม่ถูกต้อง" }, 400);
   const { priority, intervalMinutes, boundCategorySlug, defaultProductId, ...rest } = parsed.data;
   let scope: { boundCategorySlug: string; defaultProductId: string | null } | undefined;

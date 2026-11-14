@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/request-body";
 import { z } from "zod";
 import { authed } from "@/lib/guard";
 import { json } from "@/lib/http";
@@ -19,7 +20,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   const { error } = await authed();
   if (error) return error;
   const { id } = await context.params;
-  const parsed = schema.safeParse(await request.json().catch(() => null));
+  const parsed = schema.safeParse(await readJson(request, 1_500_000).catch(() => null));
   if (!parsed.success) return json({ error: "ข้อมูลไม่ถูกต้อง" }, 400);
   const post = await prisma.post.findUnique({ where: { id }, include: { category: true, subcategory: true, product: true } });
   if (!post) return json({ error: "ไม่พบประกาศ" }, 404);

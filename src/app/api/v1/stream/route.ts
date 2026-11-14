@@ -1,3 +1,4 @@
+import { sessionIsActive } from "@/lib/session-policy";
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { postSelect, serializePost } from "@/lib/serialize";
@@ -9,6 +10,7 @@ export async function GET(request: Request) {
   const session = await getSession();
   if (!session) return new Response("unauthorized", { status: 401 });
 
+  const startedAt = Date.now();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let closed = false;
   const stop = () => { closed = true; if (timer) clearTimeout(timer); request.signal.removeEventListener("abort", onAbort); };
@@ -32,6 +34,9 @@ export async function GET(request: Request) {
         if (closed) return;
         let full = false;
         try {
+          // React's request cache is not a revocation check for a long-lived stream.
+          const active = await prisma.session.findFirst({ where: { id: session.id, ownerId: session.ownerId }, include: { owner: { select: { authVersion: true, mfaSecret: true } } } });
+          if (!active || !sessionIsActive(active, active.owner) || Date.now() - startedAt >= 5 * 60_000) { onAbort(); return; }
           const posts = await prisma.post.findMany({
             where: postStreamWhere(cursor),
             orderBy: [{ createdAt: "asc" }, { id: "asc" }],
@@ -69,7 +74,7 @@ export async function GET(request: Request) {
   return new Response(stream, {
     headers: {
       "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache, no-transform",
+      "Cache-Control": "private, no-store, no-transform",
       Connection: "keep-alive",
     },
   });

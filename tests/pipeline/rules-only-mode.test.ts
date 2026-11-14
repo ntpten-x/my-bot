@@ -42,3 +42,9 @@ it("rejects new model-dependent comment rules and accepts owner-authored templat
   expect(autoCommentRuleSchema.safeParse({ ...input, requireAi: true }).success).toBe(false);
   expect(autoCommentRuleSchema.safeParse({ ...input, messageMode: "ai_draft" }).success).toBe(false);
 });
+
+it("never exposes a legacy bearer token or notification passwords in general settings", async () => {
+  const settings = { ...await getSettings(), extensionToken: "synthetic-shared-bearer-canary", smtpPass: "synthetic-smtp-canary", lineToken: "synthetic-line-canary", discordWebhook: "https://discord.com/api/webhooks/synthetic-secret-canary" };
+  const output = JSON.stringify(publicSettings(settings));
+  for (const secret of [settings.extensionToken, settings.smtpPass, settings.lineToken, settings.discordWebhook]) expect(output).not.toContain(secret);
+});

@@ -1,3 +1,4 @@
+import { appendSecurityAudit } from "./security-audit";
 import { prisma } from "./prisma";
 import { parseProvinceList } from "./service-area";
 import { parseTimes } from "./reply-queue-core";
@@ -151,7 +152,17 @@ export async function getSettings(): Promise<AppSettings> {
   };
 }
 
-export async function upsertSettings(entries: Record<string, string>) {
+export async function upsertSettings(entries: Record<string, string>, auditActorId?: string) {
+  if (auditActorId) {
+    await prisma.$transaction(async tx => {
+      for (const [key, plain] of Object.entries(entries)) {
+        const value = encodeSetting(key, plain);
+        await tx.setting.upsert({ where: { key }, update: { value }, create: { key, value } });
+      }
+      await appendSecurityAudit("config.changed", auditActorId, "success", tx);
+    });
+    return;
+  }
   await prisma.$transaction(
     Object.entries(entries).map(([key, plain]) => {
       const value = encodeSetting(key, plain);
@@ -173,7 +184,7 @@ export function publicSettings(settings: AppSettings) {
     scrollScreens: settings.scrollScreens,
     maxPostAgeHours: settings.maxPostAgeHours,
     maxPostsPerRun: settings.maxPostsPerRun,
-    extensionToken: settings.extensionToken,
+    extensionToken: "", // Legacy bearer credentials must never appear in general settings responses.
     lineUserId: settings.lineUserId,
     lineTokenSet: Boolean(settings.lineToken),
     discordWebhook: "",

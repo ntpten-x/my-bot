@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/request-body";
 import { facebookWorkAllowed } from "@/lib/facebook-accounts";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -63,7 +64,7 @@ export async function POST(request: Request) {
   if (!(await requireExtensionToken(request.headers.get("authorization"), request))) {
     return withCors(json({ error: "โทเคนไม่ถูกต้อง" }, 401));
   }
-  const parsed = doneSchema.safeParse(await request.json().catch(() => null));
+  const parsed = doneSchema.safeParse(await readJson(request, 1_500_000).catch(() => null));
   if (!parsed.success) return withCors(json({ error: "ข้อมูลไม่ถูกต้อง" }, 400));
   const task = await prisma.fetchTask.findUnique({ where: { id: parsed.data.id }, include: { source: true } });
   if (!task) return withCors(json({ error: "ไม่พบงาน" }, 404));

@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { initialPostStreamCursor, POST_STREAM_OVERLAP_MS, postStreamWhere } from "@/lib/post-stream";
 
-const mocks = vi.hoisted(() => ({ session: vi.fn(), find: vi.fn() }));
+const mocks = vi.hoisted(() => ({ session: vi.fn(), find: vi.fn(), active: vi.fn() }));
 vi.mock("../../src/lib/auth", () => ({ getSession: mocks.session }));
-vi.mock("../../src/lib/prisma", () => ({ prisma: { post: { findMany: mocks.find } } }));
+vi.mock("../../src/lib/prisma", () => ({ prisma: { post: { findMany: mocks.find }, session: { findFirst: mocks.active } } }));
 vi.mock("../../src/lib/serialize", () => ({ postSelect: {}, serializePost: (post: { id: string }) => ({ id: post.id }) }));
 import { GET } from "../../src/app/api/v1/stream/route";
 
-beforeEach(() => { vi.useFakeTimers(); vi.clearAllMocks(); mocks.session.mockResolvedValue({ userId: "synthetic" }); });
+beforeEach(() => { vi.useFakeTimers(); vi.clearAllMocks(); mocks.session.mockResolvedValue({ id: "session-synthetic", ownerId: "owner-synthetic" }); mocks.active.mockResolvedValue({ id: "session-synthetic", authVersion: 1, mfaVerifiedAt: null, expiresAt: new Date(Date.now() + 3600000), createdAt: new Date(), lastSeenAt: new Date(), owner: { authVersion: 1, mfaSecret: null } }); });
 afterEach(() => vi.useRealTimers());
 
 it("starts the SSE cursor with a short overlap window", () => {
@@ -80,4 +80,25 @@ it("dedupes posts replayed by the overlap window", async () => {
   const second = JSON.parse((await secondPromise).slice(6));
   expect(second.type).toBe("ping");
   abort.abort();
+});
+
+it("closes a stream after session revocation without reading any more posts", async () => {
+  mocks.find.mockResolvedValue([]);
+  const response = await GET(new Request("http://localhost/api/v1/stream"));
+  const reader = response.body!.getReader();
+  await reader.read(); await reader.read();
+  mocks.active.mockResolvedValue(null);
+  const calls = mocks.find.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(2501);
+  expect((await reader.read()).done).toBe(true);
+  expect(mocks.find).toHaveBeenCalledTimes(calls);
+});
+it("bounds the lifetime of a valid stream so reconnect must authenticate again", async () => {
+  mocks.find.mockResolvedValue([]);
+  const response = await GET(new Request("http://localhost/api/v1/stream"));
+  const reader = response.body!.getReader();
+  await reader.read(); await reader.read();
+  vi.setSystemTime(Date.now() + 5 * 60_000);
+  await vi.advanceTimersByTimeAsync(2501);
+  expect((await reader.read()).done).toBe(true);
 });

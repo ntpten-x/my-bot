@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/request-body";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { authed } from "@/lib/guard";
@@ -9,7 +10,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   const { error } = await authed();
   if (error) return error;
   const { id } = await context.params;
-  const parsed = z.object({ body: z.string().min(1).max(2000) }).safeParse(await request.json().catch(() => null));
+  const parsed = z.object({ body: z.string().min(1).max(2000) }).safeParse(await readJson(request, 1_500_000).catch(() => null));
   if (!parsed.success) return json({ error: "พิมพ์โน้ตก่อนบันทึก" }, 400);
   const post = await prisma.post.findUnique({ where: { id } });
   if (!post) return json({ error: "ไม่พบประกาศ" }, 404);

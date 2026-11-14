@@ -8,6 +8,7 @@ import { Button, Card, Input, Label } from "@/components/ui";
 export default function ResetPasswordPage() {
   const router = useRouter();
   const [bootstrapToken, setBootstrapToken] = useState("");
+  const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState("");
@@ -33,7 +34,7 @@ export default function ResetPasswordPage() {
       const response = await fetch("/api/auth/reset-password", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ bootstrapToken, password, confirm }),
+        body: JSON.stringify({ code, bootstrapToken, password, confirm }),
       });
       const data = await response.json().catch(() => ({}));
       if (data.needsSetup) {
@@ -93,6 +94,7 @@ export default function ResetPasswordPage() {
               />
             </div>
             {error ? <p className="text-sm text-red-700">{error}</p> : null}
+            <div><Label>Authenticator หรือ recovery code (เมื่อเปิด MFA)</Label><Input autoComplete="one-time-code" maxLength={64} value={code} onChange={event => setCode(event.target.value)} /></div>
             <Button type="submit" disabled={busy} className="w-full">
               {busy ? "กำลังบันทึก..." : "ตั้งรหัสผ่านใหม่"}
             </Button>

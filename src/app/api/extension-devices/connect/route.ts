@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/request-body";
 import { z } from "zod";
 import { authed } from "@/lib/guard";
 import { json } from "@/lib/http";
@@ -14,7 +15,7 @@ export async function POST(request: Request) {
   const { error } = await authed();
   if (error) return error;
   if (Number(request.headers.get("content-length")) > 2048) return json({ error: "คำขอใหญ่เกินกำหนด" }, 413);
-  const parsed = input.safeParse(await request.json().catch(() => null));
+  const parsed = input.safeParse(await readJson(request, 1_500_000).catch(() => null));
   if (!parsed.success) return json({ error: "ข้อมูลอุปกรณ์ไม่ถูกต้อง" }, 400);
   try {
     const result = await registerExtensionHash(parsed.data.tokenHash, parsed.data.tokenHint, parsed.data.name, clientIp(request.headers.get("x-forwarded-for")));

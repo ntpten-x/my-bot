@@ -43,6 +43,7 @@ export type ChannelResult = { ok: boolean; skipped?: boolean; message: string };
 async function pushLine(settings: AppSettings, text: string): Promise<ChannelResult> {
   if (!settings.lineToken || !settings.lineUserId) return { ok: false, skipped: true, message: "ยังไม่ตั้ง LINE token หรือ user id" };
   const response = await fetch("https://api.line.me/v2/bot/message/push", {
+    redirect: "error",
     method: "POST",
     headers: {
       "content-type": "application/json",

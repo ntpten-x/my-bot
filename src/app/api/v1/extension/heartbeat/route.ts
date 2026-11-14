@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/request-body";
 import { pausedFacebookIds } from "@/lib/facebook-accounts";
 import { requireExtensionToken } from "@/lib/auth";
 import { corsPreflight, json, withCors } from "@/lib/http";
@@ -16,7 +17,7 @@ export async function POST(request: Request) {
     await noteBadExtensionToken();
     return withCors(json({ error: "โทเคนไม่ถูกต้อง" }, 401));
   }
-  const parsed = heartbeatSchema.safeParse(await request.json().catch(() => null));
+  const parsed = heartbeatSchema.safeParse(await readJson(request, 1_500_000).catch(() => null));
   if (!parsed.success) return withCors(json({ error: "รูปแบบข้อมูลไม่ถูกต้อง" }, 400));
   const deviceId = await verifyDeviceToken((request.headers.get("authorization") || "").replace(/^Bearer\s+/i, ""));
   await recordHeartbeat(parsed.data, deviceId || undefined);

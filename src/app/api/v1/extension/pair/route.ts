@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/request-body";
 import { z } from "zod";
 import { clientIp } from "@/lib/auth";
 import { json } from "@/lib/http";
@@ -15,7 +16,7 @@ export async function POST(request: Request) {
   if (!transportAllowed(request.headers, request.url)) return json({ error: "ต้องเชื่อมต่อผ่าน HTTPS" }, 403);
   const ip = clientIp(request.headers.get("x-forwarded-for"));
   if ((await checkLogin(dbGuardStore, `pair:${ip}`)) > 0) return json({ error: "ลองบ่อยเกินไป รอสักครู่แล้วลองใหม่" }, 429);
-  const parsed = bodySchema.safeParse(await request.json().catch(() => null));
+  const parsed = bodySchema.safeParse(await readJson(request, 1_500_000).catch(() => null));
   if (!parsed.success) return json({ error: "ใส่รหัสจับคู่ 8 ตัว" }, 400);
   const result = await redeemPairingCode(parsed.data.code, parsed.data.name ?? "Chrome", ip);
   await recordLogin(dbGuardStore, `pair:${ip}`, Boolean(result));

@@ -96,3 +96,7 @@ describe("zip", () => {
     expect((method === 8 ? inflateRawSync(body) : body).toString()).toBe('{"version":"1.5.0"}');
   });
 });
+it("rejects new passwords beyond bcrypt's 72-byte boundary, including Thai text", () => {
+  expect(passwordProblems("Aa1-" + "x".repeat(69)).join(" ")).toContain("72");
+  expect(passwordProblems("Aa1-" + "ก".repeat(24)).join(" ")).toContain("72");
+});

@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/request-body";
 import { commentMutationGuard } from "@/lib/auto-comment/api-guard";
 import { authed } from "@/lib/guard";
 import { json } from "@/lib/http";
@@ -28,9 +29,11 @@ export async function GET(request: Request) {
   } catch { return json({ error: "โหลดระบบคอมเมนต์ไม่สำเร็จ กรุณาตรวจฐานข้อมูล" }, 503); }
 }
 export async function PUT(request: Request) {
-  const error = await commentMutationGuard(request); if (error) return error;
-  const parsed = commentControlSchema.safeParse(await request.json().catch(() => null));
+  const error = await commentMutationGuard(request, { recent: false, allowMfaSetup: true }); if (error) return error;
+  const parsed = commentControlSchema.safeParse(await readJson(request, 1_500_000).catch(() => null));
   if (!parsed.success) return json({ error: "การตั้งค่าหรือคำสั่งไม่ถูกต้อง" }, 400);
+  const safeStop = ["stop", "pause", "emergency"].includes(parsed.data.action || "") && Object.keys(parsed.data).every(key => key === "action");
+  if (!safeStop) { const { error: freshError } = await authed({ recent: true }); if (freshError) return freshError; }
   try { return json({ control: await updateCommentControl({ ...parsed.data, dryRun: false, liveAcknowledged: true, liveOnly: true }) }); }
   catch { return json({ error: "เปลี่ยนสถานะไม่สำเร็จ: ปลด Emergency Stop ขณะหยุดก่อน Start" }, 400); }
 }

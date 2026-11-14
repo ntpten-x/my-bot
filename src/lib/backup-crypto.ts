@@ -1,3 +1,4 @@
+import { serverSecret } from "./server-secret";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 export const BACKUP_MAGIC = Buffer.from("MYBOTB1");
@@ -7,7 +8,7 @@ export function backupCipher(secret: string) {
   const iv = randomBytes(12);
   return { cipher: createCipheriv("aes-256-gcm", key(secret), iv), header: Buffer.concat([BACKUP_MAGIC, iv]) };
 }
-export function decodeBackup(raw: Buffer, secret = process.env.BACKUP_ENCRYPTION_KEY || process.env.AI_KEY_SECRET || "") {
+export function decodeBackup(raw: Buffer, secret = serverSecret("BACKUP_ENCRYPTION_KEY") || serverSecret("AI_KEY_SECRET")) {
   let body = raw;
   if (raw.subarray(0, BACKUP_MAGIC.length).equals(BACKUP_MAGIC)) {
     if (secret.length < 16) throw new Error("Backup encryption key is required");

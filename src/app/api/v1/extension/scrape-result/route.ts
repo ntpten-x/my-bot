@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/request-body";
 import { z } from "zod";
 import { requireExtensionToken } from "@/lib/auth";
 import { corsPreflight, json, withCors } from "@/lib/http";
@@ -46,7 +47,7 @@ export async function POST(request: Request) {
   if (!(await requireExtensionToken(request.headers.get("authorization"), request))) {
     return withCors(json({ error: "โทเคนไม่ถูกต้อง" }, 401));
   }
-  const parsed = schema.safeParse(await request.json().catch(() => null));
+  const parsed = schema.safeParse(await readJson(request, 1_500_000).catch(() => null));
   if (!parsed.success) return withCors(json({ error: "ข้อมูลไม่ถูกต้อง" }, 400));
   const result = await recordScrapeRun(parsed.data);
   if (!result) return withCors(json({ error: "ไม่พบแหล่งข้อมูล" }, 404));

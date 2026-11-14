@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/request-body";
 import { commentTypeAllowed, TYPE_SETUP_PREFIX } from "@/lib/auto-comment/type-setup";
 import { z } from "zod";
 import { commentMutationGuard } from "@/lib/auto-comment/api-guard";
@@ -17,7 +18,7 @@ const inputSchema = z.object({
 /** Synthetic input + saved rule. No posts/jobs/logs written; no provider calls. */
 export async function POST(request: Request) {
   const error = await commentMutationGuard(request); if (error) return error;
-  const input = inputSchema.safeParse(await request.json().catch(() => null));
+  const input = inputSchema.safeParse(await readJson(request, 1_500_000).catch(() => null));
   if (!input.success) return json({ error: "ข้อมูลทดลองไม่ถูกต้อง เลือกกฎ แหล่งข้อมูล และข้อความไม่เกิน 20,000 ตัวอักษร" }, 400);
   try {
     const rule = await prisma.autoCommentRule.findUnique({ where: { id: input.data.ruleId }, select: {

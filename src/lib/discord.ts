@@ -1,3 +1,12 @@
+/** A notification destination is a Discord webhook, never an arbitrary server URL. */
+export function allowedDiscordWebhook(value: string) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && ["discord.com", "discordapp.com"].includes(url.hostname) && !url.port && !url.username && !url.password && !url.hash
+      && /^\/api(?:\/v\d+)?\/webhooks\/\d+\/[A-Za-z0-9._-]+\/?$/.test(url.pathname);
+  } catch { return false; }
+}
+
 export type DiscordEmbed = {
   title: string;
   url?: string;
@@ -69,7 +78,9 @@ const queues = new Map<string, Queued[]>();
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
 
 async function postDiscord(webhook: string, body: unknown, attempt = 0): Promise<{ ok: boolean; message: string }> {
+  if (!allowedDiscordWebhook(webhook)) return { ok: false, message: "ต้องใช้ URL Discord webhook แบบ HTTPS ที่ถูกต้อง" };
   const response = await fetch(webhook, {
+    redirect: "error",
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -81,8 +92,7 @@ async function postDiscord(webhook: string, body: unknown, attempt = 0): Promise
     return postDiscord(webhook, body, attempt + 1);
   }
   if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    return { ok: false, message: `Discord ${response.status} ${text.replace(/\s+/g, " ").slice(0, 180)}` };
+    return { ok: false, message: `Discord ตอบ HTTP ${response.status}` };
   }
   return { ok: true, message: "ส่ง Discord แล้ว" };
 }
@@ -116,6 +126,7 @@ function scheduleDiscord(webhook: string) {
 }
 
 export function sendDiscordEmbed(webhook: string, embed: DiscordEmbed) {
+  if (!allowedDiscordWebhook(webhook)) return Promise.resolve({ ok: false, message: "ต้องใช้ URL Discord webhook แบบ HTTPS ที่ถูกต้อง" });
   return new Promise<{ ok: boolean; skipped?: boolean; message: string }>((resolve) => {
     const list = queues.get(webhook) ?? [];
     list.push({ embed, resolve });

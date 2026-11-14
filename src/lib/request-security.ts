@@ -31,10 +31,11 @@ export function isLocalNetworkHost(host: string | null | undefined) {
 /** Local = the Host header is localhost/127.0.0.1 (a public proxy such as Render never forwards that). */
 export function isLocalRequest(headers: HeaderLike, url?: string) {
   const host = headers.get("host") ?? (url ? new URL(url).host : "");
-  return isLocalHost(host);
+  return isLocalHost(host) && (!url || isLocalHost(new URL(url).host));
 }
 
 export function isHttpsRequest(headers: HeaderLike, url?: string) {
+  if (url?.startsWith("https://")) return true;
   const forwarded = headers.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase();
   if (forwarded) return forwarded === "https";
   return Boolean(url && url.startsWith("https://"));
@@ -55,6 +56,7 @@ export function allowedCorsOrigin(origin: string | null, selfOrigin: string): st
 }
 
 export function selfOriginOf(headers: HeaderLike, url: string) {
-  const host = headers.get("x-forwarded-host") ?? headers.get("host") ?? new URL(url).host;
+  if (process.env.AUTH_URL) return new URL(process.env.AUTH_URL).origin;
+  const host = headers.get("host") ?? new URL(url).host;
   return `${isHttpsRequest(headers, url) ? "https" : "http"}://${host}`;
 }

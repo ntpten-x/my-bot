@@ -1,3 +1,4 @@
+import { safeHttpUrl } from "./safe-url";
 import { prisma } from "./prisma";
 import type { Prisma } from "@prisma/client";
 import { extractContacts } from "./pipeline/contacts";
@@ -54,10 +55,10 @@ export function serializePost(post: PostRecord) {
     id: post.id,
     text: post.text,
     authorName: post.authorName,
-    externalUrl: post.externalUrl,
+    externalUrl: safeHttpUrl(post.externalUrl),
     postedAt: post.postedAt?.toISOString() ?? null,
     createdAt: post.createdAt.toISOString(),
-    images: parseJsonArray(post.imagesJson),
+    images: parseJsonArray(post.imagesJson).map(safeHttpUrl).filter(Boolean),
     intent: post.intent,
     province: post.province,
     isAd: post.isAd,
@@ -72,7 +73,7 @@ export function serializePost(post: PostRecord) {
     scoreReason: post.scoreReason ?? "",
     duplicateOfId: post.duplicateOfId ?? null,
     dismissed: post.dismissed ?? false,
-    extraUrls: parseJsonArray(post.extraUrlsJson ?? "[]"),
+    extraUrls: parseJsonArray(post.extraUrlsJson ?? "[]").map(safeHttpUrl).filter(Boolean),
     contacts: extractContacts(`${post.text}\n${post.ocrText ?? ""}`),
     followUpAt: post.followUpAt?.toISOString() ?? null,
     statusChangedAt: post.statusChangedAt?.toISOString() ?? null,
@@ -82,7 +83,7 @@ export function serializePost(post: PostRecord) {
     subcategory: post.subcategory,
     product: post.product ?? null,
     productBy: post.productBy ?? "",
-    source: post.source,
+    source: post.source ? { ...post.source, url: safeHttpUrl(post.source.url) } : null,
     notes: (post.notes ?? []).map((note) => ({
       id: note.id,
       body: note.body,
@@ -147,7 +148,7 @@ export async function withAlsoIn<T extends { id: string; alsoIn: AlsoIn[] }>(pos
   for (const copy of copies) {
     if (!copy.duplicateOfId) continue;
     const list = byLead.get(copy.duplicateOfId) ?? [];
-    if (list.length < 10) list.push({ id: copy.id, url: copy.externalUrl, source: copy.source?.name ?? "" });
+    if (list.length < 10) list.push({ id: copy.id, url: safeHttpUrl(copy.externalUrl), source: copy.source?.name ?? "" });
     byLead.set(copy.duplicateOfId, list);
   }
   return posts.map((post) => (byLead.has(post.id) ? { ...post, alsoIn: byLead.get(post.id)! } : post));

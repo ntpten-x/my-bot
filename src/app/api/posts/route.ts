@@ -20,6 +20,7 @@ export async function GET(request: Request) {
   const page = Number.isSafeInteger(rawPage) && rawPage > 0 ? rawPage : 1;
   const rawSize = Number(params.get("pageSize") || 30);
   const pageSize = Number.isSafeInteger(rawSize) && rawSize > 0 ? Math.min(rawSize, 100) : 30;
+  if ((page - 1) * pageSize > 100_000) return json({ error: "หน้าที่ขอไกลเกินกำหนด กรุณากรองช่วงเวลาหรือแหล่งข้อมูล" }, 400);
   const where: Prisma.PostWhereInput = {};
   const and: Prisma.PostWhereInput[] = [];
 
@@ -42,6 +43,7 @@ export async function GET(request: Request) {
     if (followed.length) and.push({ productId: { in: followed } });
   }
   const minScore = params.get("minScore");
+  if (minScore && (!Number.isFinite(Number(minScore)) || Number(minScore) < 0 || Number(minScore) > 100)) return json({ error: "คะแนนต้องอยู่ระหว่าง 0–100" }, 400);
   if (minScore) and.push({ score: { gte: Number(minScore) } });
   if (params.get("unread") === "1") and.push({ isRead: false });
   if (params.get("saved") === "1") and.push({ isSaved: true });
@@ -58,9 +60,11 @@ export async function GET(request: Request) {
   if (intent) and.push({ intent });
   if (params.get("pipeline") === "1") and.push({ pipelineStatus: { not: "none" } });
   if (status) and.push({ pipelineStatus: status });
+  if ((from && !Number.isFinite(Date.parse(from))) || (to && !Number.isFinite(Date.parse(to))) || (from && to && Date.parse(from) > Date.parse(to))) return json({ error: "ช่วงเวลาไม่ถูกต้อง" }, 400);
   if (from) and.push({ createdAt: { gte: new Date(from) } });
   if (to) and.push({ createdAt: { lte: new Date(to) } });
   const q = params.get("q")?.trim() ?? "";
+  if (q.length > 200) return json({ error: "คำค้นต้องไม่เกิน 200 ตัวอักษร" }, 400);
   if (and.length) where.AND = and;
 
   if (q) {

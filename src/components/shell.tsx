@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Activity, Bell, BookOpen, Bookmark, Bug, LayoutDashboard, Lightbulb, LogOut, MessageSquareText, Radar, Rss, Settings, Sun, Tags, Users, Workflow } from "lucide-react";
+import { StepUpPrompt } from "./security-controls";
 import { api } from "./api";
 import { cn } from "@/lib/utils";
 import { startVisibleRefresh } from "@/lib/visible-refresh";
@@ -58,6 +59,21 @@ export function Shell({ children }: { children: React.ReactNode }) {
     };
   }, [pathname]);
 
+  useEffect(() => {
+    let sent = 0;
+    const activity = () => {
+      if (document.hidden || Date.now() - sent < 60_000) return;
+      sent = Date.now();
+      void api("/api/auth/activity", { method: "POST" }).catch(() => undefined);
+    };
+    window.addEventListener("pointerdown", activity, { passive: true });
+    window.addEventListener("pointermove", activity, { passive: true });
+    window.addEventListener("wheel", activity, { passive: true });
+    window.addEventListener("keydown", activity);
+    window.addEventListener("focus", activity);
+    return () => { window.removeEventListener("pointermove", activity); window.removeEventListener("wheel", activity); window.removeEventListener("pointerdown", activity); window.removeEventListener("keydown", activity); window.removeEventListener("focus", activity); };
+  }, []);
+
   async function logout() {
     await api("/api/auth/logout", { method: "POST" });
     router.push("/login");
@@ -66,6 +82,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen md:grid md:grid-cols-[240px_1fr]">
+      <StepUpPrompt />
       <aside className="hidden bg-sidebar text-paper md:flex md:flex-col">
         <div className="px-5 py-6">
           <div className="text-xs tracking-[0.18em] text-amber">LEAD RADAR</div>

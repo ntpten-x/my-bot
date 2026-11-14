@@ -1,0 +1,27 @@
+ALTER TABLE "Owner" ADD COLUMN "authVersion" INTEGER NOT NULL DEFAULT 1,
+ ADD COLUMN "mfaSecret" TEXT, ADD COLUMN "mfaPendingSecret" TEXT,
+ ADD COLUMN "mfaPendingExpiresAt" TIMESTAMP(3), ADD COLUMN "mfaLastStep" INTEGER NOT NULL DEFAULT -1;
+ALTER TABLE "Session" ADD COLUMN "lastSeenAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ ADD COLUMN "authenticatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ ADD COLUMN "mfaVerifiedAt" TIMESTAMP(3), ADD COLUMN "authVersion" INTEGER NOT NULL DEFAULT 1;
+CREATE TABLE "RecoveryCode" (
+ "id" TEXT PRIMARY KEY, "ownerId" TEXT NOT NULL REFERENCES "Owner"("id") ON DELETE CASCADE,
+ "codeHash" TEXT NOT NULL UNIQUE, "consumedAt" TIMESTAMP(3), "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX "RecoveryCode_ownerId_idx" ON "RecoveryCode"("ownerId");
+CREATE TABLE "SecurityAudit" (
+ "id" TEXT PRIMARY KEY, "sequence" BIGINT NOT NULL UNIQUE, "at" TIMESTAMP(3) NOT NULL,
+ "event" TEXT NOT NULL, "actorId" TEXT, "outcome" TEXT NOT NULL,
+ "previousHash" TEXT NOT NULL, "hash" TEXT NOT NULL UNIQUE
+);
+CREATE TABLE "SecurityAuditHead" ("id" TEXT PRIMARY KEY, "sequence" BIGINT NOT NULL DEFAULT 0, "hash" TEXT NOT NULL);
+ALTER TABLE "RecoveryCode" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "SecurityAudit" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "SecurityAuditHead" ENABLE ROW LEVEL SECURITY;
+CREATE FUNCTION "mybot_audit_append_only"() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN RAISE EXCEPTION 'Security audit is append-only'; END;
+$$;
+CREATE TRIGGER "security_audit_no_update_delete" BEFORE UPDATE OR DELETE ON "SecurityAudit"
+ FOR EACH ROW EXECUTE FUNCTION "mybot_audit_append_only"();
+CREATE TRIGGER "security_audit_no_truncate" BEFORE TRUNCATE ON "SecurityAudit"
+ FOR EACH STATEMENT EXECUTE FUNCTION "mybot_audit_append_only"();

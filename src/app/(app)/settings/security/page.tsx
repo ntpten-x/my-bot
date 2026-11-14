@@ -4,12 +4,15 @@ import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { Button, Card, Input, Label } from "@/components/ui";
 import { api } from "@/components/api";
+import { SecurityControls } from "@/components/security-controls";
+import { AuthSessions } from "@/components/auth-sessions";
 
 export default function SecurityPage() {
   const [weak, setWeak] = useState(false);
   const [form, setForm] = useState({ current: "", next: "", confirm: "" });
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [sessionRefresh, setSessionRefresh] = useState(0);
 
   useEffect(() => {
     api<{ weak: boolean }>("/api/auth/change-password").then((d) => setWeak(d.weak)).catch(() => undefined);
@@ -23,6 +26,7 @@ export default function SecurityPage() {
       await api("/api/auth/change-password", { method: "POST", body: JSON.stringify(form) });
       setForm({ current: "", next: "", confirm: "" });
       setWeak(false);
+      setSessionRefresh(value => value + 1);
       setMessage("เปลี่ยนรหัสผ่านแล้ว อุปกรณ์อื่นที่ล็อกอินอยู่ถูกออกจากระบบ");
     } catch (e) {
       setMessage((e as Error).message);
@@ -55,6 +59,8 @@ export default function SecurityPage() {
         </form>
         <p className="mt-4 text-xs text-muted">ล็อกอินผิด 5 ครั้งใน 15 นาที จะถูกล็อก 15 นาที</p>
       </Card>
+      <SecurityControls />
+      <AuthSessions refreshKey={sessionRefresh} />
     </div>
   );
 }

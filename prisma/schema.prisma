@@ -10,10 +10,17 @@ datasource db {
 }
 
 model Owner {
+  username     String    @unique @default("admin")
   id           String    @id @default(cuid())
   passwordHash String
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
+  authVersion  Int       @default(1)
+  mfaSecret    String?
+  mfaPendingSecret String?
+  mfaPendingExpiresAt DateTime?
+  mfaLastStep  Int       @default(-1)
+  recoveryCodes RecoveryCode[]
   sessions     Session[]
 }
 
@@ -23,7 +30,104 @@ model Session {
   owner     Owner    @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   token     String   @unique
   expiresAt DateTime
+  lastSeenAt DateTime @default(now())
+  authenticatedAt DateTime @default(now())
+  mfaVerifiedAt DateTime?
+  authVersion Int @default(1)
   createdAt DateTime @default(now())
+  @@index([ownerId])
+  @@index([expiresAt])
+}
+
+model RecoveryCode {
+  id String @id @default(cuid())
+  ownerId String
+  owner Owner @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  codeHash String @unique
+  consumedAt DateTime?
+  createdAt DateTime @default(now())
+  @@index([ownerId])
+}
+
+model SecurityAudit {
+  id String @id @default(cuid())
+  sequence BigInt @unique
+  at DateTime
+  event String
+  actorId String?
+  outcome String
+  previousHash String
+  hash String @unique
+}
+
+model SecurityAuditHead {
+  id String @id
+  sequence BigInt @default(0)
+  hash String
+}
+
+// Retired authentication tables retained only for migration/backup compatibility.
+// Passport uses Owner and Session exclusively.
+model AuthUser {
+  id            String @id
+  name          String
+  email         String @unique
+  emailVerified Boolean @default(false)
+  image         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  authsessions  AuthSession[]
+  authaccounts  AuthAccount[]
+}
+
+model AuthSession {
+  id        String @id
+  token     String @unique
+  userId    String
+  authuser  AuthUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model AuthAccount {
+  id                    String @id
+  accountId             String
+  providerId            String
+  userId                String
+  authuser              AuthUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  password              String?
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  @@unique([providerId, accountId])
+  @@index([userId])
+}
+
+model AuthVerification {
+  id         String @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  @@index([identifier])
+}
+
+model AuthRateLimit {
+  id          String @id
+  key         String @unique
+  count       Int
+  lastRequest BigInt
 }
 
 model Source {

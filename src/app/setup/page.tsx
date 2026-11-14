@@ -7,6 +7,7 @@ import { ApiError, api } from "@/components/api";
 
 export default function SetupPage() {
   const router = useRouter();
+  const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
   const [bootstrapToken, setBootstrapToken] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -30,7 +31,7 @@ export default function SetupPage() {
     setBusy(true);
     setError("");
     try {
-      await api("/api/auth/setup", { method: "POST", body: JSON.stringify({ password, confirm, bootstrapToken }) });
+      await api("/api/auth/setup", { method: "POST", body: JSON.stringify({ username, password, confirm, bootstrapToken }) });
       router.replace("/dashboard");
       router.refresh();
     } catch (err) {
@@ -51,6 +52,10 @@ export default function SetupPage() {
         {ready ? (
           <form onSubmit={submit} className="space-y-4">
             <div>
+              <Label htmlFor="username">ชื่อผู้ใช้</Label>
+              <Input id="username" autoComplete="username" required minLength={3} maxLength={64} pattern="[A-Za-z0-9_.-]+" value={username} onChange={event => setUsername(event.target.value)} autoFocus />
+            </div>
+            <div>
               <Label htmlFor="password">รหัสผ่าน</Label>
               <Input id="password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
             </div>
@@ -58,7 +63,7 @@ export default function SetupPage() {
               <Label htmlFor="confirm">ยืนยันรหัสผ่าน</Label>
               <Input id="confirm" type="password" value={confirm} onChange={(event) => setConfirm(event.target.value)} />
             </div>
-            <div><Label htmlFor="bootstrap-token">รหัสตั้งระบบครั้งแรก (BOOTSTRAP_TOKEN บนเซิร์ฟเวอร์; localhost เว้นว่างได้)</Label><Input id="bootstrap-token" type="password" autoComplete="off" value={bootstrapToken} onChange={event => setBootstrapToken(event.target.value)} /></div>
+            <div><Label htmlFor="bootstrap-token">รหัสตั้งระบบครั้งแรก (BOOTSTRAP_TOKEN บนเซิร์ฟเวอร์; ต้องใช้ใน production รวมถึง local production)</Label><Input id="bootstrap-token" type="password" autoComplete="off" value={bootstrapToken} onChange={event => setBootstrapToken(event.target.value)} /></div>
             {error ? <p className="text-sm text-red-700">{error}</p> : null}
             <Button type="submit" disabled={busy} className="w-full">
               {busy ? "กำลังบันทึก..." : "เริ่มใช้ MY-BOT"}

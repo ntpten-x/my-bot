@@ -3,6 +3,9 @@ import { IBM_Plex_Sans_Thai } from "next/font/google";
 import { ServiceWorkerRegister } from "@/components/sw-register";
 import "./globals.css";
 
+// A fresh CSP nonce must reach every document, including login/setup.
+export const dynamic = "force-dynamic";
+
 const sans = IBM_Plex_Sans_Thai({
   subsets: ["thai", "latin"],
   weight: ["400", "500", "600", "700"],

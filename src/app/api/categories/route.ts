@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/request-body";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { authed } from "@/lib/guard";
@@ -40,7 +41,7 @@ const createSchema = z.object({
 export async function POST(request: Request) {
   const { error } = await authed();
   if (error) return error;
-  const parsed = createSchema.safeParse(await request.json().catch(() => null));
+  const parsed = createSchema.safeParse(await readJson(request, 1_500_000).catch(() => null));
   if (!parsed.success) return json({ error: "ตั้งชื่อหมวดก่อน" }, 400);
   let slug = slugify(parsed.data.name);
   const exists = await prisma.category.findUnique({ where: { slug } });

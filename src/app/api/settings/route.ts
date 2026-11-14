@@ -1,3 +1,6 @@
+import { getSession } from "@/lib/auth";
+import { allowedDiscordWebhook } from "@/lib/discord";
+import { readJson } from "@/lib/request-body";
 import { z } from "zod";
 import { authed } from "@/lib/guard";
 import { json } from "@/lib/http";
@@ -22,7 +25,7 @@ const putSchema = z.object({
   lineUserId: z.string().optional(),
   updateLineToken: z.boolean().optional(),
   lineToken: z.string().optional(),
-  discordWebhook: z.string().optional(),
+  discordWebhook: z.string().max(2048).refine(value => !value.trim() || allowedDiscordWebhook(value.trim())).optional(),
   updateDiscordWebhook: z.boolean().optional(),
   notifyEmailTo: z.string().optional(),
   smtpHost: z.string().optional(),
@@ -48,7 +51,7 @@ const putSchema = z.object({
 export async function PUT(request: Request) {
   const error = await commentMutationGuard(request);
   if (error) return error;
-  const parsed = putSchema.safeParse(await request.json().catch(() => null));
+  const parsed = putSchema.safeParse(await readJson(request, 1_500_000).catch(() => null));
   if (!parsed.success) return json({ error: "ค่าที่ส่งมาไม่ถูกต้อง" }, 400);
   const body = parsed.data;
   const entries: Record<string, string> = {};
@@ -84,7 +87,7 @@ export async function PUT(request: Request) {
   set("quiet_pause_when_locked", body.quietPauseWhenLocked);
   set("summary_time", body.summaryTime);
   try {
-    await upsertSettings(entries);
+    await upsertSettings(entries, (await getSession())!.ownerId);
     return json({ settings: publicSettings(await getSettings()) });
   } catch { return json({ error: "บันทึกไม่สำเร็จ ตรวจ AI_KEY_SECRET และฐานข้อมูล" }, 400); }
 }

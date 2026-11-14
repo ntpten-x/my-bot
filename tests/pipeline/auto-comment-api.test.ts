@@ -53,3 +53,11 @@ it("presents legacy simulated runs as stopped without changing stored state or s
   expect(legacy.control).toEqual({ state: "running", dryRun: true });
   expect(mocks.update).not.toHaveBeenCalled();
 });
+
+it("allows authenticated emergency stop without step-up, while start requires recent authentication", async () => {
+  mocks.authed.mockImplementation(async (options?: { recent?: boolean }) => options?.recent ? { error: new Response("reauth", { status: 403 }) } : { error: null });
+  mocks.update.mockResolvedValue({ state: "stopped" });
+  expect((await PUT(request({ action: "emergency" }))).status).toBe(200);
+  expect((await PUT(request({ action: "start" }))).status).toBe(403);
+  expect((await PUT(request({ action: "stop", hourlyLimit: 10 }))).status).toBe(403);
+});

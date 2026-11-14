@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/request-body";
 import { facebookWorkAllowed } from "@/lib/facebook-accounts";
 import { requireExtensionToken } from "@/lib/auth";
 import { corsPreflight, json, withCors } from "@/lib/http";
@@ -17,7 +18,7 @@ export async function POST(request: Request) {
   if (!(await requireExtensionToken(request.headers.get("authorization"), request))) {
     return withCors(json({ error: "โทเคนไม่ถูกต้อง" }, 401));
   }
-  const parsed = extensionReplySchema.safeParse(await request.json().catch(() => null));
+  const parsed = extensionReplySchema.safeParse(await readJson(request, 1_500_000).catch(() => null));
   if (!parsed.success) return withCors(json({ error: "ข้อมูลไม่ถูกต้อง" }, 400));
   const body = parsed.data;
   try {

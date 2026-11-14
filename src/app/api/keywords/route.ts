@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/request-body";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { authed } from "@/lib/guard";
@@ -17,7 +18,7 @@ export async function POST(request: Request) {
   if (error) return error;
   const parsed = z
     .object({ word: z.string().min(1).max(80), type: z.enum(["watch", "forbidden"]) })
-    .safeParse(await request.json().catch(() => null));
+    .safeParse(await readJson(request, 1_500_000).catch(() => null));
   if (!parsed.success) return json({ error: "ระบุคำและประเภท" }, 400);
   try {
     const keyword = await prisma.keyword.create({

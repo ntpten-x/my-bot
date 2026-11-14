@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/request-body";
 import { z } from "zod";
 import { authed } from "@/lib/guard";
 import { json } from "@/lib/http";
@@ -15,13 +16,13 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   const { id } = await context.params;
   const parsed = z
     .object({ action: z.enum(["dismiss", "save", "contacted", "closed_won", "closed_lost"]) })
-    .safeParse(await request.json().catch(() => null));
+    .safeParse(await readJson(request, 1_500_000).catch(() => null));
   if (!parsed.success) return json({ error: "ไม่รู้จักการกระทำนี้" }, 400);
   const before = await prisma.post.findUnique({ where: { id }, select: { pipelineStatus: true } });
   try {
     await recordFeedback(id, parsed.data.action);
-  } catch (err) {
-    return json({ error: err instanceof Error ? err.message : "บันทึกไม่สำเร็จ" }, 400);
+  } catch {
+    return json({ error: "บันทึกไม่สำเร็จ ตรวจว่าประกาศยังอยู่แล้วลองใหม่" }, 400);
   }
   const after = await prisma.post.findUnique({ where: { id }, select: { pipelineStatus: true } });
   if (before && after && before.pipelineStatus !== after.pipelineStatus) {

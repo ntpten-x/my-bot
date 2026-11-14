@@ -26,6 +26,7 @@ export interface GuardStore {
   get(key: string): Promise<GuardState | null>;
   set(key: string, state: GuardState): Promise<void>;
   clear(key: string): Promise<void>;
+  atomic?(work: (store: GuardStore) => Promise<void>): Promise<void>;
 }
 
 export function ipKey(ip: string) {
@@ -39,7 +40,8 @@ export async function checkLogin(store: GuardStore, ip: string, now = new Date()
   return Math.max(lockedFor(ipState, now), lockedFor(global, now));
 }
 
-export async function recordLogin(store: GuardStore, ip: string, ok: boolean, now = new Date()) {
+export async function recordLogin(store: GuardStore, ip: string, ok: boolean, now = new Date()): Promise<void> {
+  if (store.atomic) return store.atomic(scoped => recordLogin(scoped, ip, ok, now));
   if (ok) {
     await store.clear(ipKey(ip));
     return;

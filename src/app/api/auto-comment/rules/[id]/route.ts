@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/request-body";
 import { z } from "zod";
 import { commentMutationGuard } from "@/lib/auto-comment/api-guard";
 import { json } from "@/lib/http";
@@ -7,7 +8,7 @@ import { saveCommentRule, RuleSetupError, setCommentRuleEnabled, RuleToggleError
 export const dynamic = "force-dynamic";
 export async function PUT(request: Request, context: { params: Promise<{ id: string }> }) {
   const error = await commentMutationGuard(request); if (error) return error;
-  const parsed = autoCommentRuleSchema.safeParse(await request.json().catch(() => null));
+  const parsed = autoCommentRuleSchema.safeParse(await readJson(request, 1_500_000).catch(() => null));
   if (!parsed.success) return json({ error: "ข้อมูลกฎไม่ถูกต้อง" }, 400);
   const { id } = await context.params;
   try { return json({ id: await saveCommentRule(parsed.data, id) }); }
@@ -16,9 +17,10 @@ export async function PUT(request: Request, context: { params: Promise<{ id: str
 
 const toggleSchema = z.object({ enabled: z.boolean(), revision: z.number().int().positive() }).strict();
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
-  const error = await commentMutationGuard(request); if (error) return error;
-  const parsed = toggleSchema.safeParse(await request.json().catch(() => null));
+  const error = await commentMutationGuard(request, { recent: false, allowMfaSetup: true }); if (error) return error;
+  const parsed = toggleSchema.safeParse(await readJson(request, 1_500_000).catch(() => null));
   if (!parsed.success) return json({ error: "ระบุสถานะและรุ่นของชุดตั้งค่าให้ถูกต้อง" }, 400);
+  if (parsed.data.enabled) { const freshError = await commentMutationGuard(request); if (freshError) return freshError; }
   const { id } = await context.params;
   try { return json(await setCommentRuleEnabled(id, parsed.data.enabled, parsed.data.revision)); }
   catch (error) { return error instanceof RuleToggleError ? json({ error: error.message }, error.status) : json({ error: "เปลี่ยนสถานะไม่สำเร็จ กรุณารีเฟรชแล้วลองใหม่" }, 503); }
@@ -27,7 +29,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
 const deleteSchema = z.object({ revision: z.number().int().positive() }).strict();
 export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
   const error = await commentMutationGuard(request); if (error) return error;
-  const parsed = deleteSchema.safeParse(await request.json().catch(() => null));
+  const parsed = deleteSchema.safeParse(await readJson(request, 1_500_000).catch(() => null));
   if (!parsed.success) return json({ error: "ระบุรุ่นของชุดตั้งค่าที่ต้องการลบ" }, 400);
   const { id } = await context.params;
   try { return json(await deleteCommentRule(id, parsed.data.revision)); }

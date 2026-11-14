@@ -52,10 +52,17 @@ export async function ensureMessageImageBucket() {
   if (created.error && !/already exists|duplicate/i.test(created.error.message)) throw new Error(created.error.message);
 }
 
-export function validateMessageImage(input: { mime: string; bytes: number }) {
+export function validateMessageImage(input: { mime: string; bytes: number; data?: Uint8Array }) {
   if (!MESSAGE_IMAGE_TYPES.has(input.mime)) return "รองรับเฉพาะ JPEG, PNG หรือ WebP";
   if (input.bytes <= 0 || input.bytes > MESSAGE_IMAGE_MAX_BYTES) {
     return `รูปต้องมีขนาดไม่เกิน ${MESSAGE_IMAGE_MAX_LABEL}`;
+  }
+  if (input.data) {
+    const b = input.data;
+    const png = b.length >= 8 && [137, 80, 78, 71, 13, 10, 26, 10].every((value, index) => b[index] === value);
+    const jpeg = b.length >= 3 && b[0] === 255 && b[1] === 216 && b[2] === 255;
+    const webp = b.length >= 12 && Buffer.from(b.subarray(0, 4)).toString() === "RIFF" && Buffer.from(b.subarray(8, 12)).toString() === "WEBP";
+    if (b.byteLength !== input.bytes || !(input.mime === "image/png" ? png : input.mime === "image/jpeg" ? jpeg : webp)) return "เนื้อหาไฟล์ไม่ตรงกับชนิดรูป";
   }
   return null;
 }

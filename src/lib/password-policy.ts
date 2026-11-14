@@ -9,6 +9,7 @@ export const MIN_PASSWORD_LENGTH = 12;
 export function passwordProblems(password: string): string[] {
   const value = String(password ?? "");
   const problems: string[] = [];
+  if (new TextEncoder().encode(value).byteLength > 72) problems.push("มีขนาด UTF-8 ไม่เกิน 72 bytes (ข้อจำกัด bcrypt)");
   if (value.length < MIN_PASSWORD_LENGTH) problems.push(`ยาวอย่างน้อย ${MIN_PASSWORD_LENGTH} ตัว`);
   if (!/[A-Za-z\u0E00-\u0E7F]/.test(value)) problems.push("มีตัวอักษร");
   if (!/\d/.test(value)) problems.push("มีตัวเลข");

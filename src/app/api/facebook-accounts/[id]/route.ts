@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/request-body";
 import { z } from "zod";
 import { authed } from "@/lib/guard";
 import { prisma } from "@/lib/prisma";
@@ -10,7 +11,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   const { error } = await authed(); if (error) return error;
   const { id } = await context.params;
   if (!validFacebookId(id)) return json({ error: "รหัสบัญชีไม่ถูกต้อง" }, 400);
-  const parsed = schema.safeParse(await request.json().catch(() => null));
+  const parsed = schema.safeParse(await readJson(request, 1_500_000).catch(() => null));
   if (!parsed.success) return json({ error: "เลือกเปิดหรือหยุดทำงาน" }, 400);
   if (!(await prisma.fbAccount.findUnique({ where: { id }, select: { id: true } }))) return json({ error: "ไม่พบบัญชีนี้" }, 404);
   const key = `${ACCOUNT_PAUSE_PREFIX}${id}`, value = parsed.data.enabled ? "0" : "1";

@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/request-body";
 import { facebookWorkAllowed } from "@/lib/facebook-accounts";
 import { createHash } from "node:crypto";
 import { prisma } from "@/lib/prisma";
@@ -41,7 +42,7 @@ export async function POST(request: Request) {
     return withCors(json({ error: "โทเคนไม่ถูกต้อง" }, 401));
   }
   if (Number(request.headers.get("content-length")) > 1_500_000) return withCors(json({ error: "ข้อมูลชุดใหญ่เกินกำหนด" }, 413));
-  const parsed = bodySchema.safeParse(await request.json().catch(() => null));
+  const parsed = bodySchema.safeParse(await readJson(request, 1_500_000).catch(() => null));
   if (!parsed.success) return withCors(json({ error: "รูปแบบข้อมูลไม่ถูกต้อง" }, 400));
   try {
     const { fbUserId, batchId, ...data } = parsed.data;

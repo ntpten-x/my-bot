@@ -11,8 +11,8 @@ describe("bootstrapTokenOk", () => {
     else process.env.BOOTSTRAP_TOKEN = prev;
   });
 
-  it("allows localhost without a token", () => {
-    process.env.BOOTSTRAP_TOKEN = "x".repeat(32);
+  it("allows unconfigured development setup on localhost", () => {
+    process.env.BOOTSTRAP_TOKEN = "";
     const request = new Request("http://localhost:8001/api/auth/setup", {
       headers: h({ host: "localhost:8001" }),
     });

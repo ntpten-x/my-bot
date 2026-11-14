@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/request-body";
 import { authed } from "@/lib/guard";
 import { json } from "@/lib/http";
 import { ReplyQueueError, editReplyItem, finishReplyItem, replyAdvanceInfo } from "@/lib/reply-queue";
@@ -9,7 +10,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   const { error } = await authed();
   if (error) return error;
   const { id } = await context.params;
-  const parsed = replyItemActionSchema.safeParse(await request.json().catch(() => null));
+  const parsed = replyItemActionSchema.safeParse(await readJson(request, 1_500_000).catch(() => null));
   if (!parsed.success) return json({ error: "ข้อมูลไม่ถูกต้อง" }, 400);
   try {
     const body = parsed.data;

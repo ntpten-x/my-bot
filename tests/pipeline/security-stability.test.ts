@@ -8,6 +8,7 @@ const gitBash = path.join(process.env.ProgramFiles || "C:/Program Files", "Git/b
 const bash = process.platform === "win32" && existsSync(gitBash) ? gitBash : "bash";
 import { describe, expect, it } from "vitest";
 import { BACKUP_TABLES } from "../../src/lib/backup";
+import { DERIVED_AUTH_TABLES } from "../../src/lib/backup-format";
 import { aiCacheKey } from "../../src/lib/pipeline/classify";
 
 const schema = readFileSync("prisma/schema.prisma", "utf8");
@@ -23,7 +24,8 @@ describe("security and recovery regression gates", () => {
   });
 
   it("accounts for every model in the backup format", () => {
-    expect(models.filter(model => !(BACKUP_TABLES as readonly string[]).includes(model))).toEqual([]);
+    expect(models.filter(model => ![...BACKUP_TABLES, ...DERIVED_AUTH_TABLES].includes(model as never))).toEqual([]);
+    expect(DERIVED_AUTH_TABLES).toEqual(["AuthUser", "AuthSession", "AuthAccount", "AuthVerification", "AuthRateLimit", "RecoveryCode", "SecurityAudit", "SecurityAuditHead"]);
   });
 
   it("captures only the secret, including an empty answer, without capturing the prompt", () => {

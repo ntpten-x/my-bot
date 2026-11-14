@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 export function json(data: unknown, status = 200) {
-  return NextResponse.json(data, { status });
+  return NextResponse.json(data, { status, headers: { "Cache-Control": "private, no-store" } });
 }
 
 /** CORS headers are added by src/middleware.ts for allowed origins only (the extension and this site). */

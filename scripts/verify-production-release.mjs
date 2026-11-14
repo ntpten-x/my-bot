@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Poll a deployed origin and confirm release headers match the expected git commit.
-import { createHash } from "node:crypto";
+import { scopedHealth } from "./scoped-health.mjs";
 import { execFileSync } from "node:child_process";
 
 const origin = (process.env.PRODUCTION_ORIGIN || process.argv[2] || "").replace(/\/$/, "");
@@ -15,19 +15,17 @@ const deadline = Date.now() + Number(process.env.VERIFY_TIMEOUT_MS || 180_000);
 let last = "";
 while (Date.now() < deadline) {
   try {
-    const response = await fetch(`${origin}/api/v1/health?verify=${createHash("sha1").update(String(Date.now())).digest("hex").slice(0, 8)}`, {
-      headers: { "cache-control": "no-cache" },
-      signal: AbortSignal.timeout(15_000),
-    });
-    const commit = (response.headers.get("x-mybot-commit") || "").toLowerCase();
-    const body = await response.json().catch(() => ({}));
-    last = `status=${response.status} commit=${commit || "-"} body=${JSON.stringify(body)}`;
-    if (response.ok && body?.ok === true && commit && (commit === short || want.startsWith(commit))) {
-      console.log(`PASS production release ${origin} commit=${commit} version=${body.version}`);
+    const response = await scopedHealth(origin, deadline - Date.now());
+    const commit = response.commit.toLowerCase();
+    last = `status=${response.status} commit=${commit || "-"}`;
+    if ([401, 403, 429].includes(response.status)) { console.error(`FAIL monitoring stopped: HTTP ${response.status}`); process.exit(1); }
+    if (response.ok && commit && (commit === short || want.startsWith(commit))) {
+      console.log(`PASS production release ${origin} commit=${commit} version=${response.version}`);
       process.exit(0);
     }
   } catch (error) {
     last = String(error?.message || error);
+    if (/scope|redirect|oversized/i.test(last)) { console.error(`FAIL monitoring stopped: ${last}`); process.exit(1); }
   }
   await new Promise(resolve => setTimeout(resolve, 5000));
 }

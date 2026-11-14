@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/request-body";
 import { prisma } from "@/lib/prisma";
 import { authed } from "@/lib/guard";
 import { json } from "@/lib/http";
@@ -9,7 +10,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   const { error } = await authed();
   if (error) return error;
   const { id } = await context.params;
-  const parsed = ruleSchema.partial().safeParse(await request.json().catch(() => null));
+  const parsed = ruleSchema.partial().safeParse(await readJson(request, 1_500_000).catch(() => null));
   if (!parsed.success) return json({ error: "ข้อมูลกฎไม่ถูกต้อง" }, 400);
   const data = ruleData(parsed.data);
   const rule = await prisma.automationRule.update({ where: { id }, data }).catch(() => null);

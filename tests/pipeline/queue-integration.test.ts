@@ -52,7 +52,7 @@ const network = vi.fn(async (input: string | URL | Request, init?: RequestInit):
             return Response.json({}, { status: 503 });
         return Response.json({ embeddings: [[0.3, 0.7, 0.2]] });
     }
-    if (url === "https://example.test/webhook")
+    if (url === "https://discord.com/api/webhooks/123456789/synthetic-fixture-token")
         return Response.json({});
     if (url === "https://api.line.me/v2/bot/message/push")
         return Response.json({}, { status: lineDown ? 503 : 200 });
@@ -230,7 +230,7 @@ describe.skipIf(!fixture.enabled)("real Postgres ingest → queue → provider �
         expect(data.posts[0]).not.toHaveProperty("embeddingJson");
     });
     it("queues outbound notifications during ingest and retries only channels not already delivered", async () => {
-        await prisma.setting.createMany({ data: [{ key: "discord_webhook", value: "https://example.test/webhook" }, { key: "line_token", value: "fixture-token" }, { key: "line_user_id", value: "fixture-user" }] });
+        await prisma.setting.createMany({ data: [{ key: "discord_webhook", value: "https://discord.com/api/webhooks/123456789/synthetic-fixture-token" }, { key: "line_token", value: "fixture-token" }, { key: "line_user_id", value: "fixture-user" }] });
         await ingest(1);
         expect(network).not.toHaveBeenCalled();
         expect(await prisma.notification.count({ where: { channel: "in_app" } })).toBe(1);
@@ -241,7 +241,7 @@ describe.skipIf(!fixture.enabled)("real Postgres ingest → queue → provider �
         lineDown = false;
         await prisma.notification.updateMany({ where: { channel: "external_pending" }, data: { createdAt: new Date() } });
         await processNotificationQueue();
-        expect(network.mock.calls.filter(([url]) => String(url) === "https://example.test/webhook")).toHaveLength(1);
+        expect(network.mock.calls.filter(([url]) => String(url) === "https://discord.com/api/webhooks/123456789/synthetic-fixture-token")).toHaveLength(1);
         expect(await prisma.notification.count({ where: { channel: "line" } })).toBe(1);
     });
     it("ignores legacy semantic requests and paginates every keyword result", async () => { await prisma.post.createMany({ data: Array.from({ length: 1010 }, (_, i) => ({ sourceId: "source", externalUrl: `https://example.test/${i}`, text: `ตามหา ipad ${i}`, normalizedText: `ตามหา ipad ${i}`, contentHash: `search-many-${i}`, embeddingJson: "[1,0]" })) }); const data = await (await search(new Request("http://localhost/api/posts?q=ipad&semantic=1"))).json(); expect(data.semantic).toBe(false); expect(data.total).toBe(1010); expect(data.posts).toHaveLength(30); expect(network).not.toHaveBeenCalled(); });

@@ -1,3 +1,5 @@
+import { exportSecurityAudit } from "./audit-export";
+import { serverSecret } from "./server-secret";
 import { mkdir, readdir, stat, unlink, appendFile, rename } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import { pipeline } from "node:stream/promises";
@@ -36,8 +38,8 @@ export async function backupDatabase(name?: string) {
   if (path.basename(file) !== file) throw new Error("Invalid backup filename");
   const target = path.join(directory, file);
   const temporary = `${target}.${randomUUID()}.tmp`;
-  const secret = process.env.BACKUP_ENCRYPTION_KEY || process.env.AI_KEY_SECRET || "";
-  if (process.env.BACKUP_UPLOAD_URL && secret.length < 16) throw new Error("Remote backups require encryption");
+  const secret = serverSecret("BACKUP_ENCRYPTION_KEY") || serverSecret("AI_KEY_SECRET");
+  if (secret.length < 16) throw new Error("All backups require an encryption key");
   const output = createWriteStream(temporary, { mode: 0o600, flags: "wx" });
   const gzip = createGzip();
   const encryption = secret.length >= 16 ? backupCipher(secret) : null;
@@ -52,6 +54,7 @@ export async function backupDatabase(name?: string) {
     await rename(temporary, target);
   } catch (error) { gzip.destroy(); output.destroy(); await writing.catch(() => undefined); await unlink(temporary).catch(() => undefined); throw error; }
   const remote = await uploadBackup(target, file);
+  await exportSecurityAudit(prisma, directory, file);
   const entries = await readdir(directory);
   const files = await Promise.all(
     entries.map(async (entry) => ({ name: entry, mtimeMs: (await stat(path.join(directory, entry))).mtimeMs })),

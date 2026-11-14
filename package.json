@@ -42,10 +42,16 @@
     "readiness": "tsx scripts/readiness.ts",
     "observe:automation": "node scripts/observe-automation.mjs",
     "test:production": "node scripts/smoke-production-local.mjs",
+    "test:auth-production": "node scripts/smoke-auth-local.mjs",
     "verify:collection-soak": "node scripts/verify-collection-soak.mjs",
     "verify:comment-acceptance": "node scripts/verify-comment-acceptance.mjs",
     "test:ci": "node scripts/test-ci.mjs",
-    "db:encrypt-settings": "tsx scripts/encrypt-settings.ts"
+    "db:encrypt-settings": "tsx scripts/encrypt-settings.ts",
+    "security:check": "tsx scripts/security-readiness.ts",
+    "security:cutover": "tsx scripts/security-cutover.ts",
+    "security:audit": "tsx scripts/verify-security-audit.ts",
+    "security:restore-drill": "tsx scripts/restore-drill.ts",
+    "profile:reads": "tsx scripts/profile-read-queries.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
@@ -63,6 +69,10 @@
     "next": "15.5.28",
     "node-cron": "^4.6.0",
     "nodemailer": "^10.3.1",
+    "otpauth": "^9.6.0",
+    "passport": "^0.7.0",
+    "passport-local": "^1.0.0",
+    "qrcode": "^1.5.4",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "rss-parser": "^3.13.0",
@@ -78,6 +88,9 @@
     "@types/jsdom": "^30.0.0",
     "@types/node": "^20",
     "@types/nodemailer": "^8.0.2",
+    "@types/passport": "^1.0.17",
+    "@types/passport-local": "^1.0.38",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "dotenv": "^18.0.9",
