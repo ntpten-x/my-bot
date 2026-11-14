@@ -9,13 +9,14 @@ function harness(enabled = true, failAuthorize = false, authorizeDelay = 0) {
   const stored: Record<string, unknown> = { browserCommentsEnabled: enabled };
   const session: Record<string, unknown> = {};
   const execute = vi.fn(async ({ args }: { args: [string, unknown] }) => [{ result: args[0] === "observe" ? { ok: true, outcome: "observed", commentUrl: "https://www.facebook.com/groups/12345/posts/8888/?comment_id=777" } : { ok: true } }]);
+  const alarms = { get: vi.fn(async () => undefined), create: vi.fn(async () => undefined) };
   const tabs = { create: vi.fn(async ({url}:{url:string}) => { openedUrl=url;return { id: 1 }; }), remove: vi.fn(async () => undefined), get: vi.fn(async (id: number) => ({ id, url: openedUrl })) };
   const postJson = vi.fn(async (_cfg, _path, body) => {
     if (body.action === "authorize") clock += authorizeDelay;
     if (body.action === "authorize" && failAuthorize) throw new Error("lost authorization response");
     return { ok: true, json: async () => body.action === "claim" ? { job: { id: "job", claimToken: "synthetic-claim", externalUrl: "https://www.facebook.com/groups/12345/posts/8888/", fbUserId: "99887766", message: "ข้อความทดสอบ" } } : body.action === "authorize" ? { grant: { ttlMs: 3000 } } : { ok: true } };
   });
-  const context = vm.createContext({ Date: Clock, URL, setTimeout, clearTimeout, AbortController, btoa, fetch: vi.fn(), chrome: { tabs, scripting: { executeScript: execute }, storage: { session: {get: async (defaults:object)=>({...defaults,...structuredClone(session)}),set: async (value:object)=>Object.assign(session,structuredClone(value))}, local: {
+  const context = vm.createContext({ Date: Clock, URL, setTimeout, clearTimeout, AbortController, btoa, fetch: vi.fn(), chrome: { alarms, tabs, scripting: { executeScript: execute }, storage: { session: {get: async (defaults:object)=>({...defaults,...structuredClone(session)}),set: async (value:object)=>Object.assign(session,structuredClone(value))}, local: {
     get: async (defaults: object) => ({ ...defaults, ...structuredClone(stored) }),
     set: async (value: object) => Object.assign(stored, structuredClone(value)),
     remove: async (key: string) => { delete stored[key]; },
@@ -26,7 +27,7 @@ function harness(enabled = true, failAuthorize = false, authorizeDelay = 0) {
   const worker = context.MyBotCommentWorker as { run(deps: object): Promise<boolean | undefined>; recover(deps: object): Promise<void>; drain(deps: object): Promise<void>; isBusy(): boolean };
   const deps = { loadConfig: async () => ({ apiBase: "https://owner.example", token: "mbd_synthetic", paused: false }), base: (cfg: { apiBase: string }) => cfg.apiBase,
     currentFbUserId: async () => "99887766", postJson, waitComplete: async () => undefined, sleep: async (ms: number) => { clock+=ms; }, rememberError: vi.fn(async () => undefined) };
-  return { worker, deps, stored, session, execute, tabs, postJson, context, advance: (ms: number) => { clock+=ms; }, now:()=>clock };
+  return { alarms, worker, deps, stored, session, execute, tabs, postJson, context, advance: (ms: number) => { clock+=ms; }, now:()=>clock };
 }
 it("receives only server-approved work after pairing even when the obsolete local toggle is off", async () => {
   const h = harness(false); await h.worker.run(h.deps);
@@ -249,6 +250,7 @@ it('yields the drain budget after a slow successful job instead of opening anoth
   await h.worker.drain(h.deps);
   expect(h.postJson.mock.calls.filter(([, , body])=>body.action==='claim')).toHaveLength(1);
   expect(h.execute.mock.calls.filter(([call])=>call.args[0]==='send')).toHaveLength(1);
+  expect(h.alarms.create).toHaveBeenCalledWith('mybot-comment-due', { when: h.now() + 1000 });
 });
 
 it('obeys a server stop or quota decision between jobs instead of preclaiming a batch',async()=>{
@@ -379,4 +381,43 @@ it('accepts an image at the server upload limit and sends it only once', async (
   expect(payload.imageBase64).toHaveLength(4 * Math.ceil(limitBytes / 3));
   expect(h.execute.mock.calls.filter(([call]) => call.args[0] === 'send')).toHaveLength(1);
   expect(h.stored.commentJournal).toBeUndefined();
+});
+
+ it("wakes at the remaining group cooldown instead of waiting for the next minute poll", async () => {
+  const h = harness();
+  h.postJson.mockResolvedValue({ ok: true, json: async () => ({ job: null, retryAfterMs: 17000 }) });
+  await h.worker.drain(h.deps);
+  expect(h.alarms.create).toHaveBeenCalledWith("mybot-comment-due", { when: h.now() + 17000 });
+  expect(h.tabs.create).not.toHaveBeenCalled();
+});
+ it("does not schedule invalid or immediate server retry loops", async () => {
+  for (const retryAfterMs of [null, -1, 0, "17000"]) {
+    const h = harness();
+    h.postJson.mockResolvedValue({ ok: true, json: async () => ({ job: null, retryAfterMs }) });
+    await h.worker.drain(h.deps);
+    expect(h.alarms.create).not.toHaveBeenCalled();
+  }
+});
+
+it("keeps successive one-minute dispatches flowing through server deferrals", async () => {
+  const h = harness(); const original = h.postJson.getMockImplementation()!;
+  const dispatched: number[] = [];
+  let nextAt = h.now();
+  h.postJson.mockImplementation(async (cfg, path, body) => {
+    if (body.action === "claim" && h.now() < nextAt) {
+      return { ok: true, json: async () => ({ job: null, retryAfterMs: nextAt - h.now() }) };
+    }
+    if (body.action === "authorize") {
+      dispatched.push(h.now()); nextAt = h.now() + 60000;
+    }
+    return original(cfg, path, body);
+  });
+  for (let i = 0; i < 5; i++) {
+    await h.worker.drain(h.deps);
+    expect(h.alarms.create).toHaveBeenLastCalledWith("mybot-comment-due", { when: nextAt });
+    h.advance(nextAt - h.now());
+  }
+  expect(dispatched).toHaveLength(5);
+  expect(dispatched.slice(1).map((at, i) => at - dispatched[i])).toEqual([60000, 60000, 60000, 60000]);
+  expect(h.execute.mock.calls.filter(([call]) => call.args[0] === "send")).toHaveLength(5);
 });

@@ -4,7 +4,7 @@ import { z } from "zod";
 import { verifyDeviceToken } from "@/lib/extension-devices";
 import { transportAllowed } from "@/lib/request-security";
 import { json, corsPreflight } from "@/lib/http";
-import { authorizeBrowserComment, claimBrowserComment, reportBrowserComment } from "@/lib/auto-comment/browser";
+import { authorizeBrowserComment, browserCommentRetryAfterMs, claimBrowserComment, reportBrowserComment } from "@/lib/auto-comment/browser";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -64,9 +64,15 @@ export async function POST(request: Request) {
     if (data.action !== "report" && !(await facebookWorkAllowed(request, data.fbUserId))) {
       return json({ ...(data.action === "claim" ? { job: null } : { grant: null }), accountPaused: true });
     }
-    const result = data.action === "claim" ? { job: await claimBrowserComment(deviceId, data.fbUserId) }
-      : data.action === "authorize" ? { grant: await authorizeBrowserComment(deviceId, data.id, data.claimToken, data.fbUserId) }
-      : { ok: await reportBrowserComment(deviceId, data.id, data.claimToken, data.outcome, data.commentUrl, data.reason) };
+    let result;
+    if (data.action === "claim") {
+      const job = await claimBrowserComment(deviceId, data.fbUserId);
+      result = { job, retryAfterMs: job ? null : await browserCommentRetryAfterMs(deviceId, data.fbUserId) };
+    } else if (data.action === "authorize") {
+      result = { grant: await authorizeBrowserComment(deviceId, data.id, data.claimToken, data.fbUserId) };
+    } else {
+      result = { ok: await reportBrowserComment(deviceId, data.id, data.claimToken, data.outcome, data.commentUrl, data.reason) };
+    }
     const response = json(result); response.headers.set("Cache-Control", "no-store"); return response;
   } catch { return json({ error: "ประมวลผลงานไม่สำเร็จ ห้ามส่งซ้ำถ้าไม่ทราบผล" }, 503); }
 }

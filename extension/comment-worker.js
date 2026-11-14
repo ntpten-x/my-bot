@@ -2,6 +2,12 @@
 (function (root) {
   let busy = false;
   let draining = false;
+  async function scheduleRetry(delayMs) {
+    if (!Number.isFinite(delayMs) || delayMs <= 0 || !chrome.alarms?.create) return;
+    const when = Date.now() + Math.max(1000, Math.min(60000, delayMs));
+    const pending = await chrome.alarms.get?.("mybot-comment-due");
+    if (!pending || pending.scheduledTime > when) await chrome.alarms.create("mybot-comment-due", { when });
+  }
   // Only these prepare failures may burn local retries or server prepare_retry slots.
   const TRANSIENT_PREPARE = new Set([
     "loading_retryable",
@@ -118,7 +124,14 @@
       if ((await chrome.storage.session.get({ commentTab: null })).commentTab) return;
       if (await root.MyBotFocus.blocked()) return;
       const fbUserId = await deps.currentFbUserId(); if (!fbUserId) return;
-      job = (await request({ action: "claim", fbUserId })).job; if (!job) return;
+      const claim = await request({ action: "claim", fbUserId });
+      job = claim.job;
+      if (!job) {
+        // A server delay is only a wake hint. The next claim and authorize still
+        // recheck stop, account, consent, quotas and the actual group cooldown.
+        await scheduleRetry(claim.retryAfterMs);
+        return;
+      }
       const leaseEnd = Date.parse(job.claimUntil || "");
       if (Number.isFinite(leaseEnd)) workDeadline = Math.min(workDeadline, leaseEnd - 15_000);
       await chrome.storage.local.set({ commentJournal: { id: job.id, claimToken: job.claimToken, apiBase: deps.base(cfg), state: "claimed", at: Date.now() } });
@@ -234,12 +247,17 @@
     if (draining) return;
     draining = true;
     const deadlineMs = Date.now() + 90_000;
+    let completed = false;
     try {
       await recover(deps);
       // One visible send at a time. Each claim/authorize still checks server quotas and consent.
       for (let count = 0; count < 3 && deadlineMs - Date.now() >= 45_000; count++) {
-        if (!await run(deps, { deadlineMs })) break;
+        completed = await run(deps, { deadlineMs }) === true;
+        if (!completed) break;
       }
+      // A successful slow job or full batch must not strand later ready work
+      // until the periodic poll. This only schedules a fresh server preflight.
+      if (completed) await scheduleRetry(1000);
     } finally { draining = false; }
   }
   root.MyBotCommentWorker = { run, recover, drain, isBusy: () => busy };

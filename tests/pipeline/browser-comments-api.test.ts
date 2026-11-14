@@ -1,12 +1,12 @@
 import { beforeEach, expect, it, vi } from "vitest";
-const mocks = vi.hoisted(() => ({ verify: vi.fn(), claim: vi.fn(), authorize: vi.fn(), report: vi.fn(), allowed: vi.fn() }));
+const mocks = vi.hoisted(() => ({ verify: vi.fn(), claim: vi.fn(), authorize: vi.fn(), report: vi.fn(), allowed: vi.fn(), retry: vi.fn() }));
 vi.mock("../../src/lib/facebook-accounts", () => ({ facebookWorkAllowed: mocks.allowed }));
 vi.mock("../../src/lib/extension-devices", () => ({ verifyDeviceToken: mocks.verify }));
-vi.mock("../../src/lib/auto-comment/browser", () => ({ claimBrowserComment: mocks.claim, authorizeBrowserComment: mocks.authorize, reportBrowserComment: mocks.report }));
+vi.mock("../../src/lib/auto-comment/browser", () => ({ browserCommentRetryAfterMs: mocks.retry, claimBrowserComment: mocks.claim, authorizeBrowserComment: mocks.authorize, reportBrowserComment: mocks.report }));
 import { EXPECTED_EXTENSION_VERSION } from "../../src/lib/extension-heartbeat";
 import { POST } from "../../src/app/api/v1/extension/comments/route";
 const request = (body: unknown, url = "https://owner.example/api/v1/extension/comments") => new Request(url, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer mbd_synthetic", "x-extension-version": EXPECTED_EXTENSION_VERSION }, body: JSON.stringify(body) });
-beforeEach(() => { vi.clearAllMocks(); mocks.verify.mockResolvedValue("paired-device"); mocks.allowed.mockResolvedValue(true); });
+beforeEach(() => { vi.clearAllMocks(); mocks.verify.mockResolvedValue("paired-device"); mocks.allowed.mockResolvedValue(true); mocks.retry.mockResolvedValue(17000); });
 it("requires secure transport and a device token, not an owner cookie", async () => {
   expect((await POST(request({ action: "claim", fbUserId: "99887766" }, "http://owner.example/api/v1/extension/comments"))).status).toBe(403);
   mocks.verify.mockResolvedValue(null); expect((await POST(request({ action: "claim", fbUserId: "99887766" }))).status).toBe(401); expect(mocks.claim).not.toHaveBeenCalled();
@@ -40,4 +40,13 @@ it("requires the current comment protocol for new work but accepts old reports",
   mocks.report.mockResolvedValue(true);
   expect((await POST(outdated({ action: "report", id: "old", claimToken: "12345678-1234-4234-8234-123456789012", outcome: "uncertain" }))).status).toBe(200);
   expect(mocks.report).toHaveBeenCalled();
+});
+
+it("returns a device-bound relative wake hint only after an empty claim", async () => {
+  mocks.claim.mockResolvedValue(null);
+  expect(await (await POST(request({ action: "claim", fbUserId: "99887766" }))).json()).toEqual({ job: null, retryAfterMs: 17000 });
+  expect(mocks.retry).toHaveBeenCalledWith("paired-device", "99887766");
+  mocks.retry.mockClear(); mocks.claim.mockResolvedValue({ id: "job" });
+  expect(await (await POST(request({ action: "claim", fbUserId: "99887766" }))).json()).toEqual({ job: { id: "job" }, retryAfterMs: null });
+  expect(mocks.retry).not.toHaveBeenCalled();
 });

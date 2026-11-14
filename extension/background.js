@@ -2238,7 +2238,7 @@ chrome.runtime.onStartup.addListener(() => {
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "mybot-tick" || alarm.name === DUE_ALARM) void cycle();
   if (alarm.name === "mybot-tasks") void pollTasks();
-  if (["mybot-tasks", "mybot-comment-nudge", "mybot-comment-ready", "mybot-comment-followup"].includes(alarm.name)) {
+  if (["mybot-tasks", "mybot-comment-nudge", "mybot-comment-ready", "mybot-comment-followup", "mybot-comment-due"].includes(alarm.name)) {
     void globalThis.MyBotCommentWorker.drain(commentWorkerDeps()).catch(() => undefined);
   }
   if (alarm.name === "mybot-heartbeat") {

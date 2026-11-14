@@ -764,7 +764,12 @@ describe.skipIf(!fixture.enabled)("read-only automation observation", () => {
         ];
         await prisma.scrapeRun.createMany({ data: fixtures.map(run => ({ ...run, sourceId: s.source.id, extVersion: EXPECTED_EXTENSION_VERSION, inserted: 2 })) });
         await prisma.scrapeRun.create({ data: { sourceId: s.source.id, extVersion: "old-version", inserted: 999 } });
-        await prisma.autoCommentLog.create({ data: { event: "browser_observed", jobId: s.job.id, createdAt: new Date(s.post.createdAt.getTime() + 1500) } });
+        // Keep the whole synthetic timeline in the past. A fast local database
+        // must not count a future receipt or depend on 1.5s of network latency.
+        const ingestedAt = Date.now() - 10000;
+        await prisma.post.update({ where: { id: s.post.id }, data: { createdAt: new Date(ingestedAt) } });
+        await prisma.autoCommentLog.updateMany({ where: { jobId: s.job.id, event: "browser_ready" }, data: { createdAt: new Date(ingestedAt + 500) } });
+        await prisma.autoCommentLog.create({ data: { event: "browser_observed", jobId: s.job.id, createdAt: new Date(ingestedAt + 1500) } });
         await prisma.extensionHeartbeat.create({ data: { id: "observation-device", version: EXPECTED_EXTENSION_VERSION, outboxSize: 2 } });
         await prisma.setting.create({ data: { key: "extension_capture", value: JSON.stringify({ at: new Date().toISOString(), pendingPosts: 5, parkedFeeds: 1, oldestPendingAt: Date.now() - 60000, token: "synthetic-private-value" }) } });
         const before = await readCommentControl();

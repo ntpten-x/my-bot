@@ -37,3 +37,8 @@ it("does not postpone pending wakes when captures arrive continuously", async ()
   for (let i = 0; i < 10; i++) { h.advance(100); await h.wake(); }
   expect(h.alarms.get("mybot-comment-nudge")!.when).toBe(first);
 });
+
+it("routes the cooldown deadline alarm through the same guarded drain", () => {
+  const h = harness(); h.fire("mybot-comment-due");
+  expect(h.drain).toHaveBeenCalledTimes(1);
+});

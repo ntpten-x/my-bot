@@ -9,6 +9,7 @@ import { evaluationReasons } from "@/lib/auto-comment/reasons";
 import { COMMENT_JOB_STATUSES, COMMENT_JOBS_PAGE_SIZE, commentJobHeadline, commentSuccessCount } from "@/lib/auto-comment/job-status";
 import { TypeCommentForm } from "@/components/type-comment-form";
 import { CommentReadinessPanel, type CommentReadiness } from "@/components/comment-readiness";
+import { COMMENT_DAILY_LIMIT, COMMENT_HOURLY_LIMIT } from "@/lib/auto-comment/limits";
 
 type BrowserFields = { businessFacts: string; draftInstruction: string; intentMode: string; priority: number; deliveryMode: string; browserDeviceId: string; browserFbUserId: string; browserConsent: boolean; requireAi: boolean; messageMode: string };
 type Rule = BrowserFields & {
@@ -63,8 +64,8 @@ export default function AutoCommentPage() {
   const [notice, setNotice] = useState("");
   const [jobFilter, setJobFilter] = useState("all");
   const [jobPage, setJobPage] = useState(1);
-  const [hourly, setHourly] = useState(50);
-  const [daily, setDaily] = useState(200);
+  const [hourly, setHourly] = useState(COMMENT_HOURLY_LIMIT);
+  const [daily, setDaily] = useState(COMMENT_DAILY_LIMIT);
   const [historyBusy, setHistoryBusy] = useState(false);
   const reloadSequence = useRef(0);
   const jobPageRef = useRef(1);
@@ -159,6 +160,7 @@ export default function AutoCommentPage() {
   }
   useEffect(() => { if (editorOpen) document.getElementById("comment-editor")?.scrollIntoView?.({ behavior: "smooth", block: "start" }); }, [editorOpen, editing, formEpoch]);
   const shownRules = data?.rules.filter(rule => `${rule.name} ${rule.typeInfo?.name ?? ""} ${rule.typeInfo?.categoryName ?? ""}`.toLocaleLowerCase().includes(ruleSearch.trim().toLocaleLowerCase())) ?? [];
+  const liveGroupIds = new Set(data?.sources.filter(source => source.enabled && source.type === "facebook_group").map(source => source.id) ?? []);
   const count = (key: string) => data?.counts[key] ?? 0;
   const visibleJobs = data?.jobs ?? [];
   const jobTotal = data?.jobsPage?.total ?? visibleJobs.length;
@@ -192,11 +194,13 @@ export default function AutoCommentPage() {
         const title = rule.typeInfo?.name ?? rule.name;
         const account = browser?.accounts.find(account => account.id === rule.browserFbUserId);
         const device = browser?.extensions.find(device => device.id === rule.browserDeviceId);
-        const waiting = unbound || !device?.online || device.fbUserId !== rule.browserFbUserId || account?.enabled === false || !device.commentsEnabled;
+        const hasLiveGroup = rule.sourceIds.some(id => liveGroupIds.has(id));
+        const waiting = !hasLiveGroup || unbound || !device?.online || device.fbUserId !== rule.browserFbUserId || account?.enabled === false || !device.commentsEnabled;
         const clock = (minute: number) => `${String(Math.floor((minute % 1440) / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
         return <article key={rule.id} className="space-y-3 rounded-xl border border-line bg-card p-4">
           <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs text-muted">{rule.typeInfo?.categoryName ?? "ชุดตั้งค่าเดิม"}</p><h3 className="mt-1 text-lg font-semibold">{title}</h3>{rule.name !== title ? <p className="mt-1 text-xs text-muted">{rule.name}</p> : null}</div><span className={`rounded-full px-2 py-1 text-xs ${rule.pausedReason ? "bg-red-50 text-red-800" : rule.enabled ? "bg-pine/10 text-pine" : "bg-black/5 text-muted"}`}>{rule.pausedReason ? "พักแล้ว · แก้ไขเพื่อเปิดใหม่" : rule.enabled ? waiting ? "เปิดไว้ · รอความพร้อม" : "เปิดใช้งาน" : unbound ? "ฉบับร่าง · รอเชื่อมต่อ" : "ปิดใช้งาน"}</span></div>
           <p className="text-sm">{rule.templates.length} ข้อความ · {rule.selectionMode === "random" ? "สุ่มข้อความ" : rule.templates.length === 1 ? "ข้อความเดียว" : "วนตามลำดับ"} · {rule.sourceIds.length} กลุ่ม</p>
+          {!hasLiveGroup ? <p role="status" className="text-sm text-red-800">ไม่มีกลุ่มที่เปิดใช้งานในกฎนี้ กลุ่มเดิมอาจถูกลบหรือปิดไว้ กรุณาแก้ไขเพื่อเลือกกลุ่มเป้าหมายก่อนส่ง</p> : null}
           <p className="text-sm text-muted">{rule.days.length === 7 ? "ทุกวัน" : rule.days.map(day => ["อา.", "จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส."][day]).join(" ")} · {rule.startMinute === 0 && rule.endMinute === 1440 ? "ตลอด 24 ชั่วโมง" : `${clock(rule.startMinute)}–${clock(rule.endMinute)}`}<br />โพสต์ไม่เกิน {rule.maxAgeHours} ชม. · พักกลุ่มละ {rule.areaCooldownSec} วินาที</p>
           <p className="text-xs text-muted">Facebook: {account?.name || rule.browserFbUserId || "ยังไม่เลือกบัญชี"}</p>
           {rule.pausedReason ? <p className="text-sm text-red-800">พักไว้: {rule.pausedReason}</p> : null}
@@ -213,8 +217,8 @@ export default function AutoCommentPage() {
     </dl>
     <section className="rounded-xl border border-line bg-card p-4" aria-label="ข้อจำกัดการส่ง">
       <div className="flex flex-wrap items-end gap-4">
-        <div><Label htmlFor="hour-limit">สูงสุดต่อชั่วโมง</Label><Input id="hour-limit" className="w-28" type="number" min={1} max={50} value={hourly} onChange={event => setHourly(Number(event.target.value))} /></div>
-        <div><Label htmlFor="day-limit">สูงสุดต่อวัน (เวลาไทย)</Label><Input id="day-limit" className="w-28" type="number" min={1} max={200} value={daily} onChange={event => setDaily(Number(event.target.value))} /></div>
+        <div><Label htmlFor="hour-limit">สูงสุดต่อชั่วโมง</Label><Input id="hour-limit" className="w-28" type="number" min={1} max={COMMENT_HOURLY_LIMIT} value={hourly} onChange={event => setHourly(Number(event.target.value))} /></div>
+        <div><Label htmlFor="day-limit">สูงสุดต่อวัน (เวลาไทย)</Label><Input id="day-limit" className="w-28" type="number" min={1} max={COMMENT_DAILY_LIMIT} value={daily} onChange={event => setDaily(Number(event.target.value))} /></div>
         <Button variant="outline" disabled={busy} onClick={() => void control({ hourlyLimit: hourly, dailyLimit: daily })}>บันทึกข้อจำกัด</Button>
       </div>
       <p className="mt-3 text-xs text-muted">โควตานับความพยายามส่งรวมกรณีไม่ทราบผล · ต่อโพสต์ส่งได้เพียงครั้งเดียวตลอดประวัติ</p>

@@ -17,6 +17,8 @@
     "bot:resume-desktop": "bash scripts/start-workstation.sh --resume-desktop",
     "bot:install-service": "node scripts/install-workstation-service.mjs --install",
     "bot:uninstall-service": "node scripts/install-workstation-service.mjs --remove",
+    "bot:install-worker": "node scripts/install-worker-service.mjs --install",
+    "bot:uninstall-worker": "node scripts/install-worker-service.mjs --remove",
     "db:renormalize": "tsx scripts/renormalize-posts.ts",
     "db:backfill-embeddings": "tsx scripts/backfill-embeddings.ts",
     "db:backfill-ai": "tsx scripts/backfill-ai.ts",

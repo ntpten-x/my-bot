@@ -165,6 +165,17 @@ function isDashboardUrl(url: unknown) {
   const value = String(url);
   return value === "/api/auto-comment" || value.startsWith("/api/auto-comment?");
 }
+it("explains a deleted group allowlist even when the device and account are online", async () => {
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (isDashboardUrl(url)) return new Response(JSON.stringify({ ...dashboard, rules: [savedRule()], sources: [{ id: "replacement", enabled: true, type: "facebook_group", name: "กลุ่มใหม่" }] }));
+    return original(url, init);
+  });
+  await act(async () => root.render(React.createElement(Page)));
+  expect(container.textContent).toContain("ไม่มีกลุ่มที่เปิดใช้งานในกฎนี้");
+  expect(container.textContent).toContain("เปิดไว้ · รอความพร้อม");
+  expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === "PUT")).toBe(false);
+});
 it("lists a type with its own switch and opens the same editor with saved values", async () => {
   const original = vi.mocked(fetch).getMockImplementation()!;
   const rule = savedRule();

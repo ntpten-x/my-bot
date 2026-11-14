@@ -281,6 +281,21 @@ export async function prepareBrowserComments(assertActive: () => Promise<void>, 
   }
 }
 
+/** Advisory wake only; claim/authorize remain the authority for permission to send. */
+export async function browserCommentRetryAfterMs(deviceId: string, fbUserId: string) {
+  const control = await readCommentControl();
+  if (!mayRun(control) || control.dryRun) return null;
+  const next = await prisma.autoCommentJob.findFirst({
+    where: {
+      deliveryMode: "extension", browserDeviceId: deviceId, browserFbUserId: fbUserId,
+      status: "browser_ready", generation: control.generation, dryRun: false,
+      rule: { enabled: true, pausedReason: "", browserConsent: true },
+    },
+    orderBy: { nextAttemptAt: "asc" }, select: { nextAttemptAt: true },
+  });
+  return next ? Math.max(1000, Math.min(60000, next.nextAttemptAt.getTime() - Date.now())) : null;
+}
+
 export async function claimBrowserComment(deviceId: string, fbUserId: string) {
   const claimed = await prisma.$transaction(async tx => {
     const control = await lockCommentControl(tx);

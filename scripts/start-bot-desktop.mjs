@@ -145,11 +145,15 @@ try {
   const plan = desktopPlan(root, url, { dataRoot, ...desktopPorts(config),
     extensionPath: process.env.MYBOT_DESKTOP_PACKAGE === '1' ? path.join(root, 'extension') : undefined });
   const missing = [];
-  for (const name of ['Xvfb', 'xauth', 'xdpyinfo', 'xset', 'openbox', 'tint2', 'x11vnc', 'websockify', 'flock']) {
+  const commandAvailable = async name => {
     const found = await Promise.all((process.env.PATH || '').split(path.delimiter).filter(Boolean)
       .map(dir => access(path.join(dir, name), constants.X_OK).then(() => true, () => false)));
-    if (!found.some(Boolean)) missing.push(name);
+    return found.some(Boolean);
+  };
+  for (const name of ['Xvfb', 'xauth', 'xdpyinfo', 'xset', 'openbox', 'x11vnc', 'websockify', 'flock']) {
+    if (!await commandAvailable(name)) missing.push(name);
   }
+  const panelAvailable = await commandAvailable('tint2');
   const browser = await findBrowser('linux', process.env, process.env.MYBOT_CHROME_PATH);
   if (!browser) missing.push('Chrome/Chromium');
   try { await access('/usr/share/novnc/vnc.html'); } catch { missing.push('noVNC web files'); }
@@ -218,6 +222,7 @@ try {
       const archiverShim = path.join(root, 'desktop', 'archiver-shim.sh');
       const libfmTemplate = path.join(root, 'desktop', 'libfm.conf');
       try {
+        if (!panelAvailable) throw new Error('optional tint2 panel is not installed');
         await access(panelTemplate, constants.R_OK);
         await access(focusScript, constants.R_OK);
         await access(filesScript, constants.R_OK);

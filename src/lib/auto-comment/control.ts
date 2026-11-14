@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
+import { COMMENT_DAILY_LIMIT, COMMENT_HOURLY_LIMIT } from "./limits";
 
 export const CONTROL_KEY = "auto_comment_control";
 export type CommentControl = {
@@ -9,7 +10,7 @@ export type CommentControl = {
   cooldownUntil: string | null;
 };
 export const defaultControl: CommentControl = {
-  state: "stopped", dryRun: false, emergency: false, hourlyLimit: 50, dailyLimit: 200,
+  state: "stopped", dryRun: false, emergency: false, hourlyLimit: COMMENT_HOURLY_LIMIT, dailyLimit: COMMENT_DAILY_LIMIT,
   generation: "disabled", startedAt: "9999-12-31T23:59:59.999Z", cooldownUntil: null,
 };
 export function parseControl(value?: string | null): CommentControl {
@@ -18,8 +19,8 @@ export function parseControl(value?: string | null): CommentControl {
     if (!data || !["stopped", "running", "paused"].includes(data.state) || typeof data.dryRun !== "boolean"
       || typeof data.emergency !== "boolean" || typeof data.generation !== "string" || !Number.isFinite(Date.parse(data.startedAt))
       || Date.parse(data.startedAt) > Date.parse(defaultControl.startedAt) || Date.parse(data.startedAt) < Date.parse("0001-01-01T00:00:00.000Z")
-      || !Number.isInteger(data.hourlyLimit) || data.hourlyLimit < 1 || data.hourlyLimit > 50
-      || !Number.isInteger(data.dailyLimit) || data.dailyLimit < 1 || data.dailyLimit > 200) return { ...defaultControl };
+      || !Number.isInteger(data.hourlyLimit) || data.hourlyLimit < 1 || data.hourlyLimit > COMMENT_HOURLY_LIMIT
+      || !Number.isInteger(data.dailyLimit) || data.dailyLimit < 1 || data.dailyLimit > COMMENT_DAILY_LIMIT) return { ...defaultControl };
     return { ...defaultControl, ...data };
   } catch { return { ...defaultControl }; }
 }

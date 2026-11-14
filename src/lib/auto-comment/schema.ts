@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { COMMENT_DAILY_LIMIT, COMMENT_HOURLY_LIMIT } from "./limits";
 
 const minute = z.number().int().min(0).max(1440);
 export const autoCommentRuleSchema = z.object({
@@ -34,6 +35,6 @@ export const autoCommentRuleSchema = z.object({
   }, "กฎคอมเมนต์คำสำคัญต้องมีคำสำคัญอย่างน้อยหนึ่งคำก่อนเปิดใช้งาน");
 export const commentControlSchema = z.object({
   action: z.enum(["start", "pause", "stop", "emergency", "reset"]).optional(),
-  dryRun: z.literal(false).optional(), hourlyLimit: z.number().int().min(1).max(50).optional(),
-  dailyLimit: z.number().int().min(1).max(200).optional(), liveAcknowledged: z.boolean().optional(),
+  dryRun: z.literal(false).optional(), hourlyLimit: z.number().int().min(1).max(COMMENT_HOURLY_LIMIT).optional(),
+  dailyLimit: z.number().int().min(1).max(COMMENT_DAILY_LIMIT).optional(), liveAcknowledged: z.boolean().optional(),
 });
