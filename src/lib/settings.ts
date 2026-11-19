@@ -3,6 +3,7 @@ import { prisma } from "./prisma";
 import { parseProvinceList } from "./service-area";
 import { parseTimes } from "./reply-queue-core";
 import { decodeSetting, encodeSetting } from "./setting-secrets";
+import { forget, memo } from "./memo";
 
 export type AiProviderName = "auto" | "ollama" | "gemini" | "groq" | "rules";
 
@@ -79,6 +80,13 @@ function num(value: string | undefined, fallback: number, min: number, max: numb
   return Math.min(max, Math.max(min, Math.round(parsed)));
 }
 
+const SETTINGS_CACHE_KEY = "settings";
+export const SETTINGS_CACHE_MS = process.env.NODE_ENV === "test" ? 0 : 5_000;
+
+export function invalidateSettingsCache() {
+  forget(SETTINGS_CACHE_KEY);
+}
+
 export async function readSettingMap() {
   const rows = await prisma.setting.findMany();
   // Retired model keys are not needed, including unreadable keys from old hosts.
@@ -86,7 +94,7 @@ export async function readSettingMap() {
     .map((row) => [row.key, decodeSetting(row.key, row.value)]));
 }
 
-export async function getSettings(): Promise<AppSettings> {
+async function loadSettings(): Promise<AppSettings> {
   const map = await readSettingMap();
   const env = process.env;
   // Legacy fields remain readable for backup compatibility; AI is no longer a runtime capability.
@@ -152,6 +160,11 @@ export async function getSettings(): Promise<AppSettings> {
   };
 }
 
+/** Shared in-process cache; owner writes invalidate it immediately. */
+export function getSettings(): Promise<AppSettings> {
+  return memo(SETTINGS_CACHE_KEY, SETTINGS_CACHE_MS, loadSettings);
+}
+
 export async function upsertSettings(entries: Record<string, string>, auditActorId?: string) {
   if (auditActorId) {
     await prisma.$transaction(async tx => {
@@ -161,6 +174,7 @@ export async function upsertSettings(entries: Record<string, string>, auditActor
       }
       await appendSecurityAudit("config.changed", auditActorId, "success", tx);
     });
+    invalidateSettingsCache();
     return;
   }
   await prisma.$transaction(
@@ -174,6 +188,7 @@ export async function upsertSettings(entries: Record<string, string>, auditActor
       }));
     }),
   );
+  invalidateSettingsCache();
 }
 
 export function publicSettings(settings: AppSettings) {

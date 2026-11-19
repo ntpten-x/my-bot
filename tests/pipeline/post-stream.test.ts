@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { initialPostStreamCursor, POST_STREAM_OVERLAP_MS, postStreamWhere } from "@/lib/post-stream";
+import {
+  initialPostStreamCursor,
+  POST_STREAM_MAX_MS,
+  POST_STREAM_OVERLAP_MS,
+  POST_STREAM_SESSION_CHECK_MS,
+  postStreamWhere,
+} from "@/lib/post-stream";
+import { runtimeMetrics } from "@/lib/metrics";
 
 const mocks = vi.hoisted(() => ({ session: vi.fn(), find: vi.fn(), active: vi.fn() }));
 vi.mock("../../src/lib/auth", () => ({ getSession: mocks.session }));
@@ -23,6 +30,17 @@ it("requires the signed-in session before starting database work", async () => {
   mocks.session.mockResolvedValue(null);
   expect((await GET(new Request("http://localhost/api/v1/stream"))).status).toBe(401);
   expect(mocks.find).not.toHaveBeenCalled();
+});
+
+it("balances active SSE counters when a stream closes", async () => {
+  mocks.find.mockResolvedValue([]);
+  const before = runtimeMetrics().counters.sse_active;
+  const response = await GET(new Request("http://localhost/api/v1/stream"));
+  expect(runtimeMetrics().counters.sse_active).toBe(before + 1);
+  const reader = response.body!.getReader();
+  await reader.read();
+  await reader.cancel();
+  expect(runtimeMetrics().counters.sse_active).toBe(before);
 });
 
 it("drains 25 equal-timestamp posts across batches using the ID tie breaker", async () => {
@@ -88,17 +106,34 @@ it("closes a stream after session revocation without reading any more posts", as
   const reader = response.body!.getReader();
   await reader.read(); await reader.read();
   mocks.active.mockResolvedValue(null);
+  await vi.advanceTimersByTimeAsync(POST_STREAM_SESSION_CHECK_MS + 1);
+  let done = false;
+  for (let i = 0; i < 10 && !done; i += 1) done = (await reader.read()).done;
+  expect(done).toBe(true);
   const calls = mocks.find.mock.calls.length;
-  await vi.advanceTimersByTimeAsync(2501);
-  expect((await reader.read()).done).toBe(true);
+  await vi.advanceTimersByTimeAsync(2_501);
   expect(mocks.find).toHaveBeenCalledTimes(calls);
 });
+
+it("rechecks session revocation less often than the post cursor", async () => {
+  mocks.find.mockResolvedValue([]);
+  const response = await GET(new Request("http://localhost/api/v1/stream"));
+  const reader = response.body!.getReader();
+  await reader.read();
+  expect(mocks.active).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(POST_STREAM_SESSION_CHECK_MS - 1);
+  expect(mocks.active).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(mocks.active).toHaveBeenCalledTimes(2);
+  await reader.cancel();
+});
+
 it("bounds the lifetime of a valid stream so reconnect must authenticate again", async () => {
   mocks.find.mockResolvedValue([]);
   const response = await GET(new Request("http://localhost/api/v1/stream"));
   const reader = response.body!.getReader();
   await reader.read(); await reader.read();
-  vi.setSystemTime(Date.now() + 5 * 60_000);
+  vi.setSystemTime(Date.now() + POST_STREAM_MAX_MS);
   await vi.advanceTimersByTimeAsync(2501);
   expect((await reader.read()).done).toBe(true);
 });

@@ -104,19 +104,19 @@ async function valid(tx: Prisma.TransactionClient, job: AutoCommentJob, control:
 
 /** Only the leased worker observes posts and prepares durable browser jobs. */
 export async function scanBrowserComments(assertActive: () => Promise<void>, options: { deadlineMs?: number } = {}) {
-  if (process.env.MYBOT_PROCESS !== "worker") return;
-  const initial = await readCommentControl(); if (!mayRun(initial)) return;
+  if (process.env.MYBOT_PROCESS !== "worker") return 0;
+  const initial = await readCommentControl(); if (!mayRun(initial)) return 0;
   await migrateStaleBrowserDevicePins().catch(() => undefined);
   await resumeRulesPausedOnlyForUncertain().catch(() => undefined);
   await assertActive();
   const initialRules = await prisma.autoCommentRule.findMany(ruleQuery);
-  if (!initialRules.length) return;
+  if (!initialRules.length) return 0;
   // Cache only for this slice. Under the control lock, refresh the ordered
   // revision manifest for EVERY post, including live rotation counters. Admin
   // writes use the same lock and bump revision; claim/authorize still re-read.
   let cachedRules = initialRules;
   const sourceIds = [...new Set(initialRules.flatMap(rule => jsonList<string>(rule.sourceIdsJson)).filter(id => typeof id === "string" && id))];
-  if (!sourceIds.length) return;
+  if (!sourceIds.length) return 0;
   const oldestEligibleAt = new Date(Date.now() - Math.max(...initialRules.map(rule => rule.maxAgeHours)) * 3600000).toISOString();
   const rulesFingerprint = fingerprint(initialRules);
   // Anti-join repairs checkpoints after AI/owner/source updates even when createdAt stays fixed.
@@ -236,14 +236,16 @@ export async function scanBrowserComments(assertActive: () => Promise<void>, opt
       });
     } finally { recordTiming("comment_scan_transaction", performance.now() - transactionStarted); }
   }
+  return posts.length;
 }
 
 export async function prepareBrowserComments(assertActive: () => Promise<void>, options: { deadlineMs?: number } = {}) {
-  if (process.env.MYBOT_PROCESS !== "worker") return;
+  if (process.env.MYBOT_PROCESS !== "worker") return 0;
   await assertActive();
   const stale = await prisma.autoCommentJob.findMany({ where: { deliveryMode: "extension", status: { in: ["claimed", "sending"] }, claimUntil: { lt: new Date() } }, take: 50, select: { id: true } });
+  let processed = 0;
   for (const candidate of stale) {
-    if (Date.now() >= (options.deadlineMs ?? Infinity)) return;
+    if (Date.now() >= (options.deadlineMs ?? Infinity)) return processed;
     await assertActive();
     await prisma.$transaction(async tx => {
       const control = await lockCommentControl(tx);
@@ -257,6 +259,7 @@ export async function prepareBrowserComments(assertActive: () => Promise<void>, 
         await noteUncertainWithoutPausingRule(tx, job.ruleId);
       }
     }, { timeout: 20000, maxWait: 20000 });
+    processed += 1;
   }
   // One transaction per job keeps the global control lock short on remote Postgres.
   const jobs = await prisma.autoCommentJob.findMany({ where: { deliveryMode: "extension", status: "pending_ai", nextAttemptAt: { lte: new Date() }, rule: { enabled: true, pausedReason: "" } }, take: 50, orderBy: { nextAttemptAt: "asc" }, select: { id: true } });
@@ -281,7 +284,9 @@ export async function prepareBrowserComments(assertActive: () => Promise<void>, 
           ? "ข้อความสำเร็จรูปพร้อมแล้ว ให้อุปกรณ์รับงานทันที"
           : "พร้อมให้อุปกรณ์ที่ผูกไว้รับงาน");
     }, { timeout: 20000, maxWait: 20000 });
+    processed += 1;
   }
+  return processed;
 }
 
 /** Advisory wake only; claim/authorize remain the authority for permission to send. */

@@ -7,7 +7,7 @@ it('rejects HTTP-only readiness and validates fragmented WebSocket RFB banners w
     import {createHash} from 'node:crypto';
     import {viewerReady} from './scripts/lib/workstation.mjs';
     const server=http.createServer((q,s)=>s.end()); let mode='reject'; const sockets=new Set();
-    server.on('connection',s=>{sockets.add(s);s.on('close',()=>sockets.delete(s))});
+    server.on('connection',s=>{sockets.add(s);s.on('error',()=>{});s.on('close',()=>sockets.delete(s))});
     server.on('upgrade',(q,s)=>{
       if(mode==='reject'){s.end('HTTP/1.1 503 Unavailable\\r\\n\\r\\n');return}
       const accept=createHash('sha1').update(q.headers['sec-websocket-key']+'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');

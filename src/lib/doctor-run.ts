@@ -29,9 +29,9 @@ function envFlags() {
 
 async function portState(port: number): Promise<DoctorFacts["portState"]> {
   try {
-    const response = await fetch(`http://127.0.0.1:${port}/api/auth/status`, { signal: AbortSignal.timeout(1500) });
+    const response = await fetch(`http://127.0.0.1:${port}/api/v1/health`, { signal: AbortSignal.timeout(5000) });
     const data = await response.json().catch(() => null);
-    if (data && typeof data.needsSetup === "boolean") return "ours";
+    if (data?.ok === true && typeof data.version === "string") return "ours";
     return "busy";
   } catch {
     return "free";
@@ -42,6 +42,7 @@ export async function collectDoctorReport() {
   const env = envFlags();
   const nodeMajor = Number(process.versions.node.split(".")[0] || 0);
   const depsInstalled = existsSync("node_modules/next/package.json");
+  const port = Number(process.env.PORT || 8001);
   let dbOk = false;
   let extensionToken = false;
   let settings: Awaited<ReturnType<typeof getSettings>> | null = null;
@@ -54,10 +55,10 @@ export async function collectDoctorReport() {
   } catch {
     dbOk = false;
   }
-  const port = Number(process.env.PORT || 8001);
   const state = await portState(port);
   const facts: DoctorFacts = {
     nodeMajor,
+    port,
     depsInstalled,
     env,
     dbOk,

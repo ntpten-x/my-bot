@@ -8,6 +8,7 @@ import { StepUpPrompt } from "./security-controls";
 import { api } from "./api";
 import { cn } from "@/lib/utils";
 import { startVisibleRefresh } from "@/lib/visible-refresh";
+import { useLiveUpdates } from "./live-updates";
 
 const NAV = [
   { href: "/getting-started", label: "เริ่มใช้งาน", icon: Activity },
@@ -35,6 +36,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [unread, setUnread] = useState(0);
+  const { revision: liveRevision } = useLiveUpdates();
 
   useEffect(() => {
     let stop = false;
@@ -57,7 +59,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
       stopRefresh();
       controller.abort();
     };
-  }, [pathname]);
+  }, [pathname, liveRevision]);
 
   useEffect(() => {
     let sent = 0;

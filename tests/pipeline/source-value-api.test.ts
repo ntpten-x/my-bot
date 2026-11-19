@@ -17,6 +17,14 @@ it('bounds sources, scopes runs to current version and does not infer collection
  expect(body.sources[0].advice).toMatchObject({action:'unknown',suggestedIntervalMinutes:null});
  expect(body.sources[0].currentVersionRunAt).toBeNull();expect(response.headers.get('cache-control')).toBe('no-store');
 });
+it('summarizes bounded current-version run efficiency without changing source settings',async()=>{
+ mocks.heartbeat.mockResolvedValue(1);
+ mocks.runs.mockResolvedValue([{sourceId:'s',ok:true,hitLimit:true,_count:{_all:5},_sum:{found:10,fresh:1,inserted:1,stalls:15,durationMs:180000},_max:{createdAt:new Date()}}]);
+ const body=await (await GET(new Request('http://localhost/api?days=7'))).json();
+ expect(body.sources[0]).toMatchObject({runCount:5,hitLimitRuns:5,runFound:10,runFresh:1,runStalls:15,efficiency:{level:'warn',freshPerRun:0.2,hitLimitRate:1,avgSeconds:36}});
+ expect(mocks.sources).toHaveBeenCalledTimes(1);
+ expect(mocks.runs.mock.calls[0][0].where.extVersion).toBe(EXPECTED_EXTENSION_VERSION);
+});
 it('redacts database errors',async()=>{
  mocks.sources.mockRejectedValue(new Error('synthetic-database-secret'));
  const response=await GET(new Request('http://localhost/api'));

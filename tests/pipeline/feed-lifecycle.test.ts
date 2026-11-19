@@ -14,6 +14,7 @@ vi.mock("../../src/components/product-bar", () => ({
 import FeedPage from "../../src/app/(app)/feed/page";
 import { Shell } from "../../src/components/shell";
 import AccountsPage from "../../src/app/(app)/accounts/page";
+import { LiveUpdatesProvider } from "../../src/components/live-updates";
 
 let dom: JSDOM;
 let root: Root;
@@ -36,8 +37,8 @@ afterEach(async () => {
   dom.window.close(); vi.unstubAllGlobals();
 });
 
-it("keeps one live connection across sound initialization and filter changes", async () => {
-  await act(async () => root.render(React.createElement(FeedPage)));
+it("keeps one app-wide live connection across feed filter changes", async () => {
+  await act(async () => root.render(React.createElement(LiveUpdatesProvider, null, React.createElement(FeedPage))));
   expect(mocks.open).toHaveBeenCalledTimes(1);
   await act(async () => {
     const button = [...document.querySelectorAll("button")].find(item => item.textContent === "filter")!;
@@ -48,6 +49,21 @@ it("keeps one live connection across sound initialization and filter changes", a
   expect(mocks.request.mock.calls.some(([url]) => String(url).includes("productId=synthetic-product"))).toBe(true);
 });
 
+it("closes the live stream while hidden and reconnects when visible", async () => {
+  await act(async () => root.render(React.createElement(LiveUpdatesProvider, null, React.createElement(FeedPage))));
+  expect(mocks.open).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    Object.defineProperty(document, "hidden", { value: true, configurable: true });
+    document.dispatchEvent(new dom.window.Event("visibilitychange"));
+  });
+  expect(mocks.close).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    Object.defineProperty(document, "hidden", { value: false, configurable: true });
+    document.dispatchEvent(new dom.window.Event("visibilitychange"));
+  });
+  expect(mocks.open).toHaveBeenCalledTimes(2);
+});
+
 it("aborts obsolete feed requests on filter change and aborts the last request on unmount", async () => {
   const signals: AbortSignal[] = [];
   const finish: (() => void)[] = [];
@@ -56,7 +72,7 @@ it("aborts obsolete feed requests on filter change and aborts the last request o
     signals.push(init?.signal as AbortSignal);
     return new Promise(resolve => { finish.push(() => resolve({ posts: [], total: 0 })); });
   });
-  await act(async () => root.render(React.createElement(FeedPage)));
+  await act(async () => root.render(React.createElement(LiveUpdatesProvider, null, React.createElement(FeedPage))));
   await act(async () => {
     [...document.querySelectorAll("button")].find(item => item.textContent === "filter")!
       .dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));

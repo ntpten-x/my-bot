@@ -1,5 +1,5 @@
 export type SourceValueInput = {
-  enabled: boolean; intervalMinutes: number; totalPosts: number; buyerPosts: number; contactedPosts: number; wonPosts: number;
+  enabled: boolean; intervalMinutes: number; totalPosts: number; buyerPosts: number; unknownPosts: number; contactedPosts: number; wonPosts: number;
   dismissedPosts: number; truncatedPosts: number; processingPending: number; runCount: number; errorRuns: number;
   hasCurrentVersionHeartbeat: boolean; lastExtensionAt: Date | null;
 };
@@ -13,6 +13,7 @@ export function sourceValueAdvice(row: SourceValueInput, now = new Date()): Sour
   if (!row.hasCurrentVersionHeartbeat || !Number.isFinite(age) || age < 0 || age > Math.max(30, row.intervalMinutes * 3) * 60000) return result('unknown', 'ยังไม่มีหลักฐานการอ่านล่าสุดของรุ่นปัจจุบันเพียงพอ');
   if (row.runCount >= 3 && row.errorRuns / row.runCount >= .2) return result('repair', 'ตรวจข้อผิดพลาดการอ่านก่อนปรับความถี่');
   if (row.totalPosts >= 20 && row.truncatedPosts / row.totalPosts > .2) return result('repair', 'ข้อความยังไม่ครบเกิน 20% ของตัวอย่าง ควรตรวจการอ่านข้อความเต็ม');
+  if (row.totalPosts >= 20 && row.unknownPosts / row.totalPosts > .6) return result('repair', 'โพสต์ “ไม่ชัด” เกิน 60% ควรตรวจตัวอย่างและปรับคำสำคัญ/หมวดก่อนเพิ่มความถี่');
   if (row.processingPending > Math.max(5, row.totalPosts / 4)) return result('repair', 'มีงานประมวลผลค้างมาก ควรตรวจคิวก่อนเพิ่มงานอ่าน');
   if (row.totalPosts < 20 || row.runCount < 3) return result('unknown', 'ต้องมีอย่างน้อย 20 โพสต์ไม่ซ้ำและ 3 รอบอ่าน จึงเสนอปรับความถี่');
   if (row.contactedPosts + row.wonPosts >= 3) {

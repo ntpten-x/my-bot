@@ -5,7 +5,7 @@ import { aiCacheKey } from "./pipeline/classify";
 import { prepareLead } from "./pipeline/prepare";
 import { canonicalSourceUrl, normalizeUrl } from "./pipeline/normalize";
 import { touchExtension } from "./extension-status";
-import { collapseIdenticalTexts, enrichPosts } from "./smart/enrich";
+import { collapseIdenticalTexts, collapseTruncatedCapturesForPosts, enrichPosts } from "./smart/enrich";
 import { messageFor, shouldNotify, shouldNotifyExternal } from "./notify";
 import type { Prisma } from "@prisma/client";
 import { parseFbTime } from "./fb-time";
@@ -94,6 +94,13 @@ async function finalizeClaimedIngest(core: IngestCoreResult, guard: () => Promis
     );
     await guard();
     await assignProducts(core.createdIds);
+  }
+  const captureIds = [...new Set([...core.revisedIds, ...core.createdIds])];
+  if (captureIds.length) {
+    await collapseTruncatedCapturesForPosts(captureIds);
+    await guard();
+  }
+  if (core.createdIds.length) {
     await syncDuplicateLabels(core.createdIds);
   }
   const uniqueIds = core.createdIds.length

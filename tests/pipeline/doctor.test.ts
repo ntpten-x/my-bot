@@ -4,6 +4,7 @@ import { doctorExitCode, evaluateDoctor, hasModel, type DoctorFacts } from "../.
 function facts(partial: Partial<DoctorFacts> = {}): DoctorFacts {
   return {
     nodeMajor: 22,
+    port: 8002,
     depsInstalled: true,
     env: { databaseUrl: true, port: true, groq: false, gemini: false, discord: false },
     dbOk: true,
@@ -61,6 +62,7 @@ describe("doctor", () => {
     expect(status("port", rows)).toBe("WARN");
     expect(status("groq", rows)).toBeUndefined();
     expect(rows.find((row) => row.id === "port")?.hint).toContain("start:prod");
+    expect(rows.find((row) => row.id === "port")?.label).toContain("8002");
   });
 
   it("matches Ollama tags with and without :latest", () => {

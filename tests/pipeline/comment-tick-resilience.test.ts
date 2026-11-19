@@ -27,3 +27,10 @@ it("does not bypass a lost worker lease during recovery", async () => {
   expect(guard).toHaveBeenCalled();
   expect(mutate).not.toHaveBeenCalled();
 });
+
+it("reports scan and recovery work so the worker can use an idle cadence", async () => {
+  vi.stubEnv("MYBOT_PROCESS", "worker");
+  work.scan.mockResolvedValue(2);
+  work.prepare.mockResolvedValue(3);
+  await expect(autoCommentTick(async () => undefined)).resolves.toBe(5);
+});

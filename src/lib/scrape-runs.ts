@@ -255,15 +255,21 @@ export async function recordScrapeRun(input: ScrapeRunInput, now = new Date(), r
     ok: input.ok,
     incomplete,
   });
+  const lowYieldStall = input.ok && incomplete
+    && Math.max(0, cov.newCount ?? 0) === 0
+    && Math.max(0, cov.stalls ?? 0) >= 3;
   // Productive slices continue after 30 s; stalled feeds yield to others and retry after 60 s.
-  const continuing = input.ok && incomplete && ["cap", "limit", "screens", "yield"].includes(input.stoppedBy);
-  const recovering = input.ok && incomplete && ["loading", "stalled"].includes(input.stoppedBy);
-  const nextRunAt = nextRunAfter(now, continuing ? 0.5 : recovering ? 1 : interval, continuing || recovering ? 0 : settings.jitterMinutes, random);
+  const continuing = !lowYieldStall && input.ok && incomplete && ["cap", "limit", "screens", "yield"].includes(input.stoppedBy);
+  const recovering = !lowYieldStall && input.ok && incomplete && ["loading", "stalled"].includes(input.stoppedBy);
+  // A feed that repeatedly stalls without observing anything new should stop consuming the cycle.
+  const nextIntervalMinutes = lowYieldStall ? Math.max(base, source.currentIntervalMinutes || base) : continuing ? 0.5 : recovering ? 1 : interval;
+  const storedIntervalMinutes = lowYieldStall ? Math.max(interval, nextIntervalMinutes) : interval;
+  const nextRunAt = nextRunAfter(now, nextIntervalMinutes, continuing || recovering ? 0 : settings.jitterMinutes, random);
   const stop = input.ok || ["logged_out", "checkpoint"].includes(input.stoppedBy) ? input.stoppedBy : "error";
   await prisma.source.update({
     where: { id: source.id },
     data: {
-      currentIntervalMinutes: interval,
+      currentIntervalMinutes: storedIntervalMinutes,
       nextRunAt,
       lastRunAt: now,
       lastRunFound: Math.max(0, input.postsFound),
@@ -303,17 +309,17 @@ export async function recordScrapeRun(input: ScrapeRunInput, now = new Date(), r
       extVersion: String(cov.extVersion ?? "").slice(0, 20),
     },
   });
-  const flags = [cov.hitLimit && !cov.reachedKnownPost ? "⚠ ถึงขีดจำกัดก่อนเจอโพสต์เก่า" : "", cov.stalls ? `โหลดค้าง ${cov.stalls} ครั้ง` : "", cov.usedWindow ? "ใช้หน้าต่างแยก (รุ่นเก่า)" : "", cov.windowState ? `หน้าต่าง ${cov.windowState}` : "", cov.heldForeground ? "ค้างแท็บอ่านด้านหน้า" : "", cov.reloaded ? `รีโหลดซ้ำ (ค้าง ${cov.stallsFirst ?? 0} → ${cov.stallsRetry ?? 0})` : "", cov.throttled ? "Chrome หน่วงหน้าต่างพื้นหลัง" : "", cov.fullTried ? `อ่านข้อความเต็ม ${cov.fullOk ?? 0}/${cov.fullTried}` : ""].filter(Boolean).join(" · ");
+  const flags = [cov.hitLimit && !cov.reachedKnownPost ? "⚠ ถึงขีดจำกัดก่อนเจอโพสต์เก่า" : "", cov.stalls ? `โหลดค้าง ${cov.stalls} ครั้ง` : "", lowYieldStall ? "ค้างซ้ำโดยไม่มีโพสต์ใหม่ — ถอยไปรอบปกติ" : "", cov.usedWindow ? "ใช้หน้าต่างแยก (รุ่นเก่า)" : "", cov.windowState ? `หน้าต่าง ${cov.windowState}` : "", cov.heldForeground ? "ค้างแท็บอ่านด้านหน้า" : "", cov.reloaded ? `รีโหลดซ้ำ (ค้าง ${cov.stallsFirst ?? 0} → ${cov.stallsRetry ?? 0})` : "", cov.throttled ? "Chrome หน่วงหน้าต่างพื้นหลัง" : "", cov.fullTried ? `อ่านข้อความเต็ม ${cov.fullOk ?? 0}/${cov.fullTried}` : ""].filter(Boolean).join(" · ");
   const prefix = mode === "audit" ? `ตรวจความครบ: เจอโพสต์ที่ยังไม่มีในระบบ ${input.newPosts} โพสต์ · ` : `รอบอ่าน (${MODE_LABEL[mode]}): `;
   await prisma.fetchLog.create({
     data: {
       sourceId: source.id,
       status: input.ok ? "ok" : "error",
       message: input.ok
-        ? `${prefix}เห็น ${input.postsFound} ใหม่ ${input.newPosts} · เลื่อน ${input.scrolls} หน้าจอ · หยุดเพราะ${reason} · ${continuing ? "อ่านต่อใน ~30 วินาที" : recovering ? "นัดกู้ฟีดอีก ~1 นาที" : `รอบหน้าอีก ~${interval} นาที`}${flags ? ` · ${flags}` : ""}`
+        ? `${prefix}เห็น ${input.postsFound} ใหม่ ${input.newPosts} · เลื่อน ${input.scrolls} หน้าจอ · หยุดเพราะ${reason} · ${continuing ? "อ่านต่อใน ~30 วินาที" : recovering ? "นัดกู้ฟีดอีก ~1 นาที" : `รอบหน้าอีก ~${nextIntervalMinutes} นาที`}${flags ? ` · ${flags}` : ""}`
         : (input.message || "ดึงไม่สำเร็จ").slice(0, 500),
       postsFound: input.ok ? input.newPosts : 0,
     },
   });
-  return { sourceId: source.id, intervalMinutes: interval, nextRunAt };
+  return { sourceId: source.id, intervalMinutes: storedIntervalMinutes, nextRunAt };
 }

@@ -20,6 +20,7 @@
     "bot:install-worker": "node scripts/install-worker-service.mjs --install",
     "bot:uninstall-worker": "node scripts/install-worker-service.mjs --remove",
     "db:renormalize": "tsx scripts/renormalize-posts.ts",
+    "db:collapse-captures": "tsx scripts/collapse-captures.ts",
     "db:backfill-embeddings": "tsx scripts/backfill-embeddings.ts",
     "db:backfill-ai": "tsx scripts/backfill-ai.ts",
     "db:clean-samples": "tsx scripts/clean-samples.ts",

@@ -16,26 +16,28 @@ async function timed(phase: "comment_scan" | "comment_prepare", work: () => Prom
 }
 /** Official Page reads only. Group/Marketplace data continues to come from the existing reader. */
 export async function autoCommentTick(assertActive: () => Promise<void>, options: { gateway?: CommentGateway } = {}) {
-  if (running || process.env.MYBOT_PROCESS !== "worker") return;
+  if (running || process.env.MYBOT_PROCESS !== "worker") return 0;
   running = true;
   try {
     // Legacy simulations stay inert until the owner explicitly starts the live-only workflow.
-    if (!options.gateway && (await readCommentControl()).dryRun) return;
+    if (!options.gateway && (await readCommentControl()).dryRun) return 0;
     // Runtime uses browser delivery only. The injected legacy gateway is retained
     // for isolated regression tests of previously stored jobs; no runtime caller supplies it.
     if (!options.gateway) {
+      let scanned = 0;
+      let prepared = 0;
       try {
-        await timed("comment_scan", () => scanBrowserComments(assertActive, { deadlineMs: Date.now() + 5000 }));
+        await timed("comment_scan", async () => { scanned = await scanBrowserComments(assertActive, { deadlineMs: Date.now() + 5000 }); });
       } finally {
         // A bad scan must not starve durable preparation/expired-claim recovery.
         // Preparation independently checks the worker lease before touching jobs.
-        await timed("comment_prepare", () => prepareBrowserComments(assertActive, { deadlineMs: Date.now() + 5000 }));
+        await timed("comment_prepare", async () => { prepared = await prepareBrowserComments(assertActive, { deadlineMs: Date.now() + 5000 }); });
       }
-      return;
+      return scanned + prepared;
     }
-    await timed("comment_prepare", () => prepareBrowserComments(assertActive));
+    await timed("comment_prepare", async () => { await prepareBrowserComments(assertActive); });
     const control = await readCommentControl();
-    if (!mayRun(control)) return;
+    if (!mayRun(control)) return 0;
     const rules = await prisma.autoCommentRule.findMany({ where: { deliveryMode: "official", enabled: true, pausedReason: "", pageId: { not: "" }, pageTokenEnc: { not: null }, managerTokenEnc: { not: null }, OR: [{ lastPolledAt: null }, { lastPolledAt: { lt: new Date(Date.now() - 5 * 60_000) } }] }, take: 5 });
     for (const rule of rules) {
       await assertActive();
@@ -72,6 +74,7 @@ export async function autoCommentTick(assertActive: () => Promise<void>, options
     await scanBrowserComments(assertActive);
     await prepareBrowserComments(assertActive);
     await processAutoCommentQueue({ assertActive, gateway: options.gateway });
+    return rules.length;
   } finally {
     running = false;
     if (Date.now() - lastMetricsAt >= 60_000) {

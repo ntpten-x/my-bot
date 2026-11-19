@@ -157,30 +157,22 @@ export async function collapseIdenticalTexts(texts?: string[]) {
   return linked;
 }
 
-export async function collapseTruncatedCaptures(sourceId?: string) {
-  const select = { id: true, sourceId: true, text: true, externalUrl: true, extraUrlsJson: true } as const;
-  type Capture = { id: string; sourceId: string; text: string; externalUrl: string; extraUrlsJson: string };
+const captureSelect = { id: true, sourceId: true, text: true, externalUrl: true, extraUrlsJson: true } as const;
+type Capture = { id: string; sourceId: string; text: string; externalUrl: string; extraUrlsJson: string };
+
+async function collapseCaptureRows(rows: Capture[]) {
   const groups = new Map<string, Capture[]>();
-  let cursor: string | undefined;
-  for (;;) {
-    const posts = await prisma.post.findMany({
-      where: { duplicateOfId: null, ...(sourceId ? { sourceId } : {}) }, select,
-      orderBy: { id: "asc" }, take: 500,
-      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-    });
-    if (!posts.length) break;
-    for (const post of posts) {
-      const text = captureText(post.text);
-      if (text.length < PREFIX_DUP_MIN) continue;
-      const key = `${post.sourceId}:${text.slice(0, PREFIX_DUP_MIN)}`;
-      const list = groups.get(key) ?? [];
-      list.push(post);
-      groups.set(key, list);
-    }
-    cursor = posts[posts.length - 1].id;
+  for (const post of rows) {
+    const text = captureText(post.text);
+    if (text.length < PREFIX_DUP_MIN) continue;
+    const key = `${post.sourceId}:${text.slice(0, PREFIX_DUP_MIN)}`;
+    const list = groups.get(key) ?? [];
+    list.push(post);
+    groups.set(key, list);
   }
   let linked = 0;
   for (const list of groups.values()) {
+    if (list.length < 2) continue;
     const pending = new Set(list.map((post) => post.id));
     const ranked = [...list].sort(
       (left, right) => captureText(right.text).length - captureText(left.text).length || left.id.localeCompare(right.id),
@@ -210,6 +202,57 @@ export async function collapseTruncatedCaptures(sourceId?: string) {
     }
   }
   return linked;
+}
+
+/** Full repair for manual maintenance. Normal ingestion uses the bounded batch helper below. */
+export async function collapseTruncatedCaptures(sourceId?: string) {
+  const rows: Capture[] = [];
+  let cursor: string | undefined;
+  for (;;) {
+    const posts = await prisma.post.findMany({
+      where: { duplicateOfId: null, ...(sourceId ? { sourceId } : {}) }, select: captureSelect,
+      orderBy: { id: "asc" }, take: 500,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    });
+    if (!posts.length) break;
+    rows.push(...posts);
+    cursor = posts[posts.length - 1].id;
+  }
+  return collapseCaptureRows(rows);
+}
+
+/**
+ * Bounded capture comparison for new/revised posts. It searches only the same
+ * sources inside the capture-retention window instead of rescanning all Posts.
+ */
+export async function collapseTruncatedCapturesForPosts(
+  postIds: string[],
+  options: { windowHours?: number; candidateLimit?: number } = {},
+) {
+  const ids = [...new Set(postIds.filter(Boolean))];
+  if (!ids.length) return 0;
+  const roots = await prisma.post.findMany({
+    where: { id: { in: ids }, duplicateOfId: null },
+    select: { ...captureSelect, createdAt: true },
+  });
+  if (!roots.length) return 0;
+  const sourceIds = [...new Set(roots.map((post) => post.sourceId))];
+  const times = roots.map((post) => post.createdAt.getTime());
+  const windowMs = Math.max(1, options.windowHours ?? 24) * 3_600_000;
+  const candidateLimit = Math.max(roots.length, Math.min(5_000, options.candidateLimit ?? 2_000));
+  const candidates = await prisma.post.findMany({
+    where: {
+      duplicateOfId: null,
+      sourceId: { in: sourceIds },
+      createdAt: { gte: new Date(Math.min(...times) - windowMs), lte: new Date(Math.max(...times) + windowMs) },
+    },
+    select: captureSelect,
+    orderBy: { createdAt: "desc" },
+    take: candidateLimit,
+  });
+  const byId = new Map(candidates.map((post) => [post.id, post]));
+  for (const post of roots) byId.set(post.id, post);
+  return collapseCaptureRows([...byId.values()]);
 }
 
 // Compatibility for old callers; the public search uses exact keywords only.

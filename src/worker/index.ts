@@ -7,7 +7,7 @@ import { fetchWebBoardPosts } from "../lib/web-board";
 import { ingestPosts, processPendingIngest } from "../lib/ingest";
 import { maybeSendScheduledSummary } from "../lib/smart/daily";
 import { maybeBackupDatabase } from "../lib/backup";
-import { collapseIdenticalTexts, collapseTruncatedCaptures } from "../lib/smart/enrich";
+import { collapseIdenticalTexts } from "../lib/smart/enrich";
 import { repairStoredOverrides } from "../lib/pipeline/repair";
 import { fetchErrorReason } from "../lib/fetch-error";
 import { workerLog } from "../lib/log";
@@ -20,6 +20,7 @@ import { maybeRunRetention } from "../lib/retention";
 import { backfillProducts } from "../lib/products";
 import { assertProductionConfig } from "../lib/production-config";
 import { autoCommentTick } from "../lib/auto-comment/poll";
+import { adjustCounter, recordTiming, runtimeMetrics, type MetricName } from "../lib/metrics";
 
 process.env.MYBOT_PROCESS = "worker";
 assertProductionConfig();
@@ -62,56 +63,69 @@ async function isLeader() {
 
 async function startupJobs() {
   const linked = await collapseIdenticalTexts().catch(() => 0);
-  const trimmed = await collapseTruncatedCaptures().catch(() => 0);
   const repaired = await repairStoredOverrides().catch(() => 0);
   await pruneSentKeys().catch(() => undefined);
   await workerLog({
-    message: `บอทใช้กฎ ยุบข้อความซ้ำ ${linked} รายการ ยุบข้อความที่ถูกตัด ${trimmed} รายการ แก้หมวดด้วยกฎ ${repaired} รายการ`,
+    message: `บอทใช้กฎ ยุบข้อความซ้ำ ${linked} รายการ แก้หมวดด้วยกฎ ${repaired} รายการ`,
   }).catch(() => undefined);
 }
 
 // Notifications have an independent consumer; capture and comments never wait on a model.
 async function consume() {
-  if (consumerRunning || stopping) return;
+  if (consumerRunning || stopping) return false;
   consumerRunning = true;
   try {
-    if (!(await isLeader())) return;
+    if (!(await isLeader())) return false;
+    let processed = 0;
     for (;;) {
       if (stopping || !lease.active()) break;
       if (Date.now() - consumerProgressAt > 30_000) { await upsertSettings({ worker_consumer_progress: new Date().toISOString() }); consumerProgressAt = Date.now(); }
       await assertActive();
       const notified = await processNotificationQueue(10, assertActive);
+      processed += notified;
       if (!notified) break;
     }
+    return processed > 0;
   } catch (error) {
     await workerLog({ level: "error", message: "consumer ล้มเหลว จะตรวจใหม่ในรอบถัดไป", error: error instanceof Error ? error.message : String(error) });
+    return false;
   } finally { consumerRunning = false; }
 }
 
 async function consumePosts() {
-  if (postRunning || stopping) return;
+  if (postRunning || stopping) return false;
   postRunning = true;
   try {
-    if (!await isLeader()) return;
-    await processPendingIngest(40, assertActive);
+    if (!await isLeader()) return false;
+    const processed = await processPendingIngest(40, assertActive);
     if (Date.now() - postProgressAt > 30_000) {
       await upsertSettings({ worker_post_progress: new Date().toISOString() });
       postProgressAt = Date.now();
     }
+    return processed > 0;
   } catch (error) {
     await workerLog({ level: "error", message: "งานประมวลผลโพสต์ยังไม่ครบ จะรับต่อจากฐานข้อมูล", error: String(error).slice(0, 300) });
+    return false;
   } finally { postRunning = false; }
 }
 
 async function tick() {
   if (running || stopping) return;
   running = true;
+  const started = performance.now();
   try {
     if (!(await isLeader())) {
-      await upsertSettings({ worker_standby_tick: new Date().toISOString() }).catch(() => undefined);
+      await upsertSettings({
+        worker_standby_tick: new Date().toISOString(),
+        worker_perf: JSON.stringify(runtimeMetrics()),
+      }).catch(() => undefined);
       return;
     }
-    await upsertSettings({ worker_last_tick: new Date().toISOString(), worker_leader: INSTANCE_ID }).catch(() => undefined);
+    await upsertSettings({
+      worker_last_tick: new Date().toISOString(),
+      worker_leader: INSTANCE_ID,
+      worker_perf: JSON.stringify(runtimeMetrics()),
+    }).catch(() => undefined);
     const settings = await getSettings();
     const sources = await prisma.source.findMany({
       where: { enabled: true, type: { in: ["rss", "web_board"] } },
@@ -148,9 +162,6 @@ async function tick() {
     await assertActive();
     await backfillProducts().catch(() => undefined);
     await assertActive();
-    await assertActive();
-    await collapseTruncatedCaptures();
-    await assertActive();
     await processFollowUps().catch((error) => workerLog({ level: "error", message: "เตือนตามลีดไม่สำเร็จ", error: String(error).slice(0, 300) }));
     await assertActive();
     await maybeBuildScheduledReplyQueue().catch((error) => workerLog({ level: "error", message: "สร้างคิวตอบลีดไม่สำเร็จ", error: String(error).slice(0, 300) }));
@@ -160,8 +171,37 @@ async function tick() {
     const message = error instanceof Error ? error.message : String(error);
     await workerLog({ level: "error", message: "รอบ worker ล้มเหลว", error: message.slice(0, 500) });
   } finally {
+    recordTiming("worker_tick", performance.now() - started);
     running = false;
   }
+}
+
+const loopTimers = new Set<ReturnType<typeof setTimeout>>();
+
+function startWorkerLoop(name: MetricName, work: () => Promise<boolean>, activeMs: number, idleMs: number) {
+  const run = async () => {
+    if (stopping) return;
+    let active = false;
+    const started = performance.now();
+    try { active = await work(); }
+    catch { active = false; }
+    finally {
+      recordTiming(name, performance.now() - started);
+      adjustCounter(active ? "worker_active_polls" : "worker_idle_polls", 1);
+    }
+    if (stopping) return;
+    const timer = setTimeout(() => {
+      loopTimers.delete(timer);
+      void run();
+    }, active ? activeMs : idleMs);
+    loopTimers.add(timer);
+  };
+  void run();
+}
+
+function stopWorkerLoops() {
+  for (const timer of loopTimers) clearTimeout(timer);
+  loopTimers.clear();
 }
 
 console.log("[worker] MY-BOT worker เริ่มทำงาน — ตรวจ RSS และเว็บบอร์ดทุก 1 นาที");
@@ -169,25 +209,27 @@ void (async () => {
   lease.start();
   await upsertSettings({ worker_started_at: new Date().toISOString() }).catch(() => undefined);
   const task = cron.schedule("* * * * *", () => { void tick(); }, { timezone: "Asia/Bangkok" });
-  const timer = setInterval(() => { void consume(); }, 2000);
-  const postTimer = setInterval(() => { void consumePosts(); }, 2000);
-  const commentTimer = setInterval(() => {
-    void (async () => {
-      if (commentRunning || stopping) return;
-      commentRunning = true;
-      try { if (await isLeader()) await autoCommentTick(assertActive); }
-      finally { commentRunning = false; }
-    })()
-      .catch(() => workerLog({ level: "error", message: "Auto Comment ตรวจงานไม่สำเร็จ จะลองในรอบถัดไป" }));
-  }, 3000);
+  startWorkerLoop("worker_consumer", consume, 2_000, 10_000);
+  startWorkerLoop("worker_posts", consumePosts, 2_000, 10_000);
+  startWorkerLoop("worker_comments", async () => {
+    if (commentRunning || stopping) return false;
+    commentRunning = true;
+    try {
+      if (!(await isLeader())) return false;
+      return (await autoCommentTick(assertActive)) > 0;
+    } catch {
+      await workerLog({ level: "error", message: "Auto Comment ตรวจงานไม่สำเร็จ จะลองในรอบถัดไป" }).catch(() => undefined);
+      return false;
+    } finally {
+      commentRunning = false;
+    }
+  }, 3_000, 15_000);
   const shutdown = async (signal: string) => {
     if (stopping) return;
     stopping = true;
     console.log(`[worker] ได้รับ ${signal} — ปิดอย่างปลอดภัย`);
     task.stop();
-    clearInterval(timer);
-    clearInterval(postTimer);
-    clearInterval(commentTimer);
+    stopWorkerLoops();
     lease.stop();
     const deadline = Date.now() + 10_000;
     while ((running || consumerRunning || postRunning || commentRunning) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 200));
@@ -199,6 +241,4 @@ void (async () => {
   process.once("SIGINT", () => void shutdown("SIGINT"));
   process.once("SIGBREAK", () => void shutdown("SIGBREAK"));
   void tick();
-  void consume();
-  void consumePosts();
 })();

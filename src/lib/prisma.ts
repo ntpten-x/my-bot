@@ -1,5 +1,6 @@
 import "./load-env";
 import { PrismaClient } from "@prisma/client";
+import { recordTiming } from "./metrics";
 
 // Connection codes where the query never ran (safe to retry any operation), and codes where a
 // read can be retried (the connection dropped mid-flight).
@@ -36,18 +37,23 @@ function makeClient() {
   return base.$extends({
     query: {
       async $allOperations({ operation, args, query }) {
-        for (let attempt = 0; ; attempt += 1) {
-          try {
-            return await query(args);
-          } catch (error) {
-            const code = String((error as { code?: string; errorCode?: string }).code || (error as { errorCode?: string }).errorCode || "");
-            const transient = NOT_SENT.has(code) || READ_RETRY.has(code);
-            if (transient) Object.assign(dbErrorStats, { transient: dbErrorStats.transient + 1, lastAt: Date.now(), lastCode: code });
-            const retryable = NOT_SENT.has(code) || (READ_RETRY.has(code) && READS.has(operation));
-            if (!retryable || attempt >= 2) throw error;
-            dbErrorStats.retried += 1;
-            await sleep(400 * 3 ** attempt);
+        const started = performance.now();
+        try {
+          for (let attempt = 0; ; attempt += 1) {
+            try {
+              return await query(args);
+            } catch (error) {
+              const code = String((error as { code?: string; errorCode?: string }).code || (error as { errorCode?: string }).errorCode || "");
+              const transient = NOT_SENT.has(code) || READ_RETRY.has(code);
+              if (transient) Object.assign(dbErrorStats, { transient: dbErrorStats.transient + 1, lastAt: Date.now(), lastCode: code });
+              const retryable = NOT_SENT.has(code) || (READ_RETRY.has(code) && READS.has(operation));
+              if (!retryable || attempt >= 2) throw error;
+              dbErrorStats.retried += 1;
+              await sleep(400 * 3 ** attempt);
+            }
           }
+        } finally {
+          recordTiming("db_query", performance.now() - started);
         }
       },
     },

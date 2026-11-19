@@ -5,8 +5,8 @@ import { touchExtension } from "./extension-status";
 
 // Version this MY-BOT build expects from extension/manifest.json (tests keep the two in sync).
 export const EXPECTED_EXTENSION_VERSION = "1.11.35";
-/** Oldest patch still allowed for scrape/read work within the current minor line. */
-export const MINIMUM_EXTENSION_VERSION = "1.11.19";
+/** Old reader patches caused retry storms and tab contention; require the reviewed build. */
+export const MINIMUM_EXTENSION_VERSION = EXPECTED_EXTENSION_VERSION;
 
 function parseExtensionVersion(version: string | null | undefined) {
   const match = String(version || "").trim().match(/^(\d+)\.(\d+)\.(\d+)$/);

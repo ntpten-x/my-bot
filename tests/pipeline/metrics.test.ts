@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { classificationMetrics } from "../../src/lib/pipeline/evaluate";
-import { percentiles, recordTiming, requestMetrics } from "../../src/lib/metrics";
+import { adjustCounter, percentiles, recordTiming, requestMetrics, runtimeMetrics } from "../../src/lib/metrics";
 
 it("reports buyer false positives/negatives and leaves undefined metrics empty", () => {
   const metrics = classificationMetrics([
@@ -17,4 +17,15 @@ it("reports buyer false positives/negatives and leaves undefined metrics empty",
 it("bounds comment timing samples to the latest 200 measurements", () => {
   for (let i = 0; i < 250; i++) recordTiming("comment_scan_lock", i);
   expect(requestMetrics().comment_scan_lock).toEqual({ count: 200, p50: 149, p95: 239 });
+});
+
+it("reports bounded process timing and connection counters", () => {
+  const before = runtimeMetrics().counters.sse_active;
+  adjustCounter("sse_active", 2);
+  recordTiming("db_query", 125);
+  const snapshot = runtimeMetrics();
+  expect(snapshot.counters.sse_active).toBe(before + 2);
+  expect(snapshot.timings.db_query?.p95).toBe(125);
+  expect(snapshot.memoryRss).toBeGreaterThan(0);
+  adjustCounter("sse_active", -2);
 });

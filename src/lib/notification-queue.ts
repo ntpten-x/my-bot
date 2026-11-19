@@ -6,6 +6,8 @@ import { workerLog } from "./log";
 import { inServiceArea } from "./service-area";
 
 export const RULE_PREFIX = "กฎ: ";
+export const NOTIFICATION_STALE_RECOVERY_MS = 60_000;
+let lastStaleRecoveryAt = 0;
 
 // Reuse Notification for a small local outbox. Internal rows are hidden from the UI.
 export async function queueExternalNotification(postId: string, title: string, db: Pick<Prisma.TransactionClient, "notification"> = prisma) {
@@ -14,16 +16,21 @@ export async function queueExternalNotification(postId: string, title: string, d
 
 export async function processNotificationQueue(limit = 10, assertActive: () => Promise<void> = async () => undefined) {
   if (process.env.MYBOT_PROCESS !== "worker") return 0;
-  const settings = await getSettings();
-  await prisma.notification.updateMany({
-    where: { channel: "external_sending", createdAt: { lt: new Date(Date.now() - 5 * 60_000) } },
-    data: { channel: "external_pending" },
-  });
+  const now = Date.now();
+  if (now - lastStaleRecoveryAt >= NOTIFICATION_STALE_RECOVERY_MS) {
+    await prisma.notification.updateMany({
+      where: { channel: "external_sending", createdAt: { lt: new Date(now - 5 * 60_000) } },
+      data: { channel: "external_pending" },
+    });
+    lastStaleRecoveryAt = now;
+  }
   const jobs = await prisma.notification.findMany({
     where: { channel: "external_pending", createdAt: { lte: new Date() } },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }], take: limit,
     include: { post: { include: { category: true, subcategory: true, source: true } } },
   });
+  if (!jobs.length) return 0;
+  const settings = await getSettings();
   for (const job of jobs) {
     await assertActive();
     const claimed = await prisma.notification.updateMany({ where: { id: job.id, channel: "external_pending" }, data: { channel: "external_sending", createdAt: new Date() } });

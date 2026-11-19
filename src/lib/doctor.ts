@@ -9,6 +9,7 @@ export type DoctorCheck = {
 
 export type DoctorFacts = {
   nodeMajor: number;
+  port: number;
   depsInstalled: boolean;
   env: {
     databaseUrl: boolean;
@@ -75,11 +76,11 @@ export function evaluateDoctor(facts: DoctorFacts): DoctorCheck[] {
       : { id: "db", status: "FAIL", label: "ฐานข้อมูลยังไม่พร้อม", hint: "เช็กว่าเน็ตต่อได้และ DATABASE_URL/รหัสผ่าน Supabase ใน .env ถูกต้อง แล้วรัน npm run db:migrate และ npm run db:seed" },
   );
   if (facts.portState === "ours") {
-    checks.push({ id: "port", status: "PASS", label: "พอร์ต 8001 ตอบโดย MY-BOT", hint: "" });
+    checks.push({ id: "port", status: "PASS", label: `พอร์ต ${facts.port} ตอบโดย MY-BOT`, hint: "" });
   } else if (facts.portState === "free") {
-    checks.push({ id: "port", status: "WARN", label: "พอร์ต 8001 ว่าง", hint: "เริ่มแอปด้วย npm run dev หรือ npm run start:prod" });
+    checks.push({ id: "port", status: "WARN", label: `พอร์ต ${facts.port} ว่าง`, hint: "เริ่มแอปด้วย npm run dev หรือ npm run start:prod" });
   } else {
-    checks.push({ id: "port", status: "FAIL", label: "พอร์ต 8001 ถูกโปรแกรมอื่นใช้", hint: "ปิดโปรแกรมนั้น หรือเปลี่ยน PORT ใน .env และในส่วนขยาย" });
+    checks.push({ id: "port", status: "FAIL", label: `พอร์ต ${facts.port} ถูกโปรแกรมอื่นใช้`, hint: "ปิดโปรแกรมนั้น หรือเปลี่ยน PORT ใน .env และในส่วนขยาย" });
   }
   checks.push(
     facts.extensionToken

@@ -1,5 +1,4 @@
 "use client";
-import { startVisibleRefresh } from "@/lib/visible-refresh";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button, Input, Select } from "@/components/ui";
@@ -7,6 +6,7 @@ import { LeadCard } from "@/components/lead-card";
 import { ApiError, api } from "@/components/api";
 import { bangkokStart } from "@/lib/format";
 import { FollowedProducts, ProductTabs, useProductBar } from "@/components/product-bar";
+import { useLiveUpdates } from "@/components/live-updates";
 import type { CategoryRow, Lead } from "@/lib/lead";
 
 type Meta = {
@@ -119,21 +119,6 @@ function queryFrom(filters: Filters, page: number) {
   return params.toString();
 }
 
-function beep() {
-  const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-  if (!Ctx) return;
-  const ctx = new Ctx();
-  const osc = ctx.createOscillator();
-  const gain = ctx.createGain();
-  osc.frequency.value = 740;
-  osc.connect(gain);
-  gain.connect(ctx.destination);
-  gain.gain.setValueAtTime(0.04, ctx.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.28);
-  osc.start();
-  osc.stop(ctx.currentTime + 0.28);
-}
-
 export default function FeedPage() {
   const [filters, setFilters] = useState<Filters>(INITIAL);
   const [draftQ, setDraftQ] = useState("");
@@ -144,13 +129,13 @@ export default function FeedPage() {
   const [page, setPage] = useState(1);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
-  const [sound, setSound] = useState(true);
+  const { revision: liveRevision } = useLiveUpdates();
   const loadSequence = useRef(0);
   const loadsInFlight = useRef(0);
   const loadController = useRef<AbortController | null>(null);
-  const liveView = useRef({ page, filters, sound });
+  const liveView = useRef({ page, filters });
 
-  useEffect(() => { liveView.current = { page, filters, sound }; }, [page, filters, sound]);
+  useEffect(() => { liveView.current = { page, filters }; }, [page, filters]);
   useEffect(() => () => { loadSequence.current++; loadController.current?.abort(); }, []);
 
   const load = useCallback(async (nextPage: number, nextFilters: Filters) => {
@@ -177,9 +162,6 @@ export default function FeedPage() {
 
   useEffect(() => {
     api<Meta>("/api/meta").then(setMeta).catch(() => undefined);
-    api<{ settings: { notifySound: boolean } }>("/api/settings")
-      .then((data) => setSound(data.settings.notifySound))
-      .catch(() => undefined);
   }, []);
 
   const [ready, setReady] = useState(false);
@@ -211,30 +193,10 @@ export default function FeedPage() {
   }
 
   useEffect(() => {
-    if (!ready) return;
-    const stream = new EventSource("/api/v1/stream");
-    const reload = () => {
-      const view = liveView.current;
-      return loadsInFlight.current ? Promise.resolve() : load(view.page, view.filters);
-    };
-    const stopRepair = startVisibleRefresh(reload);
-    stream.onmessage = (event) => {
-      let data: { type: string; posts?: Lead[] };
-      try { data = JSON.parse(event.data); } catch { return; }
-      if (!data || typeof data.type !== "string") return;
-      if (data.type === "hello") { void reload(); return; } // Reconnect repairs gaps with the normal filtered query.
-      if (data.type !== "posts" || !Array.isArray(data.posts) || !data.posts.length) return;
-      const interesting = data.posts.filter((post) => !post.isAd && !post.forbiddenHit && !post.duplicateOfId);
-      if (liveView.current.sound && interesting.length) beep();
-      if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-        for (const post of interesting.slice(0, 2)) {
-          new Notification("MY-BOT พบลีดใหม่", { body: post.text.slice(0, 140) });
-        }
-      }
-      void reload();
-    };
-    return () => { stopRepair(); stream.close(); };
-  }, [ready, load]);
+    if (!ready || !liveRevision || loadsInFlight.current) return;
+    const view = liveView.current;
+    void load(view.page, view.filters);
+  }, [liveRevision, load, ready]);
 
   const parents = meta?.categories.filter((item) => !item.parentId) ?? [];
   const children = meta?.categories.filter((item) => item.parentId === filters.categoryId) ?? [];

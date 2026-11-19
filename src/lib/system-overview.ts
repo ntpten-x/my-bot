@@ -4,13 +4,14 @@ import { prisma } from "./prisma";
 import { getSettings, type AppSettings } from "./settings";
 import { bangkokStart } from "./format";
 import { APP_VERSION } from "./version";
-import { EXPECTED_EXTENSION_VERSION } from "./extension-heartbeat";
+import { EXPECTED_EXTENSION_VERSION, isCurrentExtensionVersion } from "./extension-heartbeat";
 import { EXTENSION_SOURCE_TYPES, PRIORITY_LABEL, maxIntervalFor, normalizePriority } from "./scrape-plan";
 import { STOP_REASON_LABEL, readerHealth } from "./scrape-runs";
 import { coverageBySource } from "./coverage-data";
 import type { Coverage } from "./coverage";
 import { parseWatchState } from "./watchdog";
 import { classificationStats } from "./classification-stats";
+import { runtimeMetrics, type RuntimeMetrics } from "./metrics";
 import {
   ageMs,
   bangkokLabel,
@@ -167,6 +168,7 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
     "watchdog_state",
     "watchdog_checked_at",
     "worker_leader",
+    "worker_perf",
   ];
   const [map, accounts, installs, facebookSources, postsToday, leadsToday, lastFbPost, fbErrors24h] =
     await Promise.all([
@@ -245,6 +247,14 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
   const enabledFb = facebookSources.filter((source) => source.enabled);
   const openTabs = activeInstalls.flatMap((row) => parseJson<{ title: string; url: string }[]>(row.tabsJson, []));
   const lastErrors = activeInstalls.filter((row) => row.lastError && (ageMs(row.lastErrorAt, now) ?? Infinity) < DAY_MS);
+  const liveVersionCounts = statusInstalls.reduce<Record<string, number>>((counts, row) => {
+    const version = row.version || "unknown";
+    counts[version] = (counts[version] || 0) + 1;
+    return counts;
+  }, {});
+  const liveVersions = Object.keys(liveVersionCounts).sort();
+  const mixedLiveVersions = liveVersions.length > 1;
+  const oldLiveInstalls = statusInstalls.filter((row) => !isCurrentExtensionVersion(row.version));
   const extChecks: Check[] = [
     {
       key: "ext-connected",
@@ -267,6 +277,18 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
         newest && versionLevel(newest.version, EXPECTED_EXTENSION_VERSION) === "ok"
           ? undefined
           : "เปิด chrome://extensions แล้วกดปุ่มรีโหลด (↻) ที่ MY-BOT Lead Radar",
+    },
+    {
+      key: "ext-mixed-versions",
+      label: "รุ่นส่วนขยายที่ออนไลน์พร้อมกัน",
+      level: !statusInstalls.length ? "off" : mixedLiveVersions ? "warn" : "ok",
+      value: !statusInstalls.length
+        ? "ยังไม่มี installation สด"
+        : liveVersions.map((version) => `v${version} ×${liveVersionCounts[version]}`).join(" · "),
+      detail: mixedLiveVersions ? `ควรเหลือเฉพาะ v${EXPECTED_EXTENSION_VERSION}` : `ตรงกับรุ่นที่ระบบต้องการ`,
+      hint: mixedLiveVersions
+        ? `ปิดหรืออัปเดต ${oldLiveInstalls.length} installation ที่ยังไม่ใช่ v${EXPECTED_EXTENSION_VERSION} — รุ่นเก่าจะไม่ได้รับงานอ่านแล้ว`
+        : undefined,
     },
     {
       key: "ext-token",
@@ -461,6 +483,13 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
     prisma.post.findFirst({ where: processingWhere, orderBy: { processingQueuedAt: "asc" }, select: { processingQueuedAt: true } }),
   ]);
   const processingAge = oldestProcessing ? Math.max(0, now - oldestProcessing.processingQueuedAt.getTime()) : 0;
+  const webPerf = runtimeMetrics();
+  const workerPerf = parseJson<RuntimeMetrics | null>(map.worker_perf, null);
+  const workerPerfAge = workerPerf ? ageMs(workerPerf.at, now) : null;
+  const workerDbP95 = workerPerf?.timings.db_query?.p95 ?? null;
+  const webDbP95 = webPerf.timings.db_query?.p95 ?? null;
+  const dbP95 = Math.max(workerDbP95 ?? 0, webDbP95 ?? 0);
+  const perfLevel: Level = !dbP95 ? "off" : dbP95 > 2_000 ? "bad" : dbP95 > 750 ? "warn" : "ok";
   const otherChecks: Check[] = [
     {
       key: "post-processing", label: "คิวประมวลผลโพสต์ด้วยกฎ",
@@ -476,6 +505,20 @@ export async function collectSystemOverview(options: { fresh?: boolean } = {}) {
       value: dbOk ? `เชื่อมต่อได้ · ${dbLatencyMs} ms` : "เชื่อมต่อไม่ได้",
       detail: supabaseLabel(process.env.DATABASE_URL),
       hint: dbOk ? undefined : "ตรวจอินเทอร์เน็ต และสถานะโปรเจกต์ใน Supabase (โปรเจกต์ฟรีอาจถูกพักถ้าไม่ได้ใช้นาน)",
+    },
+    {
+      key: "runtime-performance",
+      label: "ประสิทธิภาพ runtime",
+      level: perfLevel,
+      value: dbP95 ? `DB p95 ${dbP95} ms · SSE เปิด ${webPerf.counters.sse_active}` : "ยังไม่มีตัวอย่างเพียงพอ",
+      detail: [
+        workerDbP95 != null ? `worker DB p95 ${workerDbP95} ms` : null,
+        webDbP95 != null ? `web DB p95 ${webDbP95} ms` : null,
+        workerPerf ? `worker active/idle ${workerPerf.counters.worker_active_polls}/${workerPerf.counters.worker_idle_polls}` : null,
+        workerPerf ? `worker RSS ${formatBytes(workerPerf.memoryRss)}` : null,
+        workerPerfAge != null ? `snapshot ${thaiAgo(workerPerfAge)}` : null,
+      ].filter(Boolean).join(" · ") || undefined,
+      hint: perfLevel === "bad" || perfLevel === "warn" ? "ตรวจ DB latency, จำนวน query ต่อนาที และจำนวนแท็บ/SSE ที่เปิดค้าง" : undefined,
     },
     {
       key: "worker",

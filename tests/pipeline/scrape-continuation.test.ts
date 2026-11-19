@@ -25,6 +25,13 @@ it("spaces loading recovery at one minute instead of a productive 30-second cont
   expect(result!.nextRunAt.getTime()-now.getTime()).toBe(60_000);
 });
 
+it("backs off a repeatedly stalled source that observed nothing new", async () => {
+  const result = await recordScrapeRun({sourceUrl:source.url,ok:true,postsFound:3,newPosts:0,scrolls:20,stoppedBy:"limit",coverage:{hitLimit:true,stalls:3,newCount:0}},now,()=>0);
+  expect(result!.nextRunAt.getTime()-now.getTime()).toBe(10 * 60_000);
+  expect(result!.intervalMinutes).toBe(10);
+  expect(mocks.log.mock.calls[0][0].data.message).toContain("ถอยไปรอบปกติ");
+});
+
 it("keeps hints for sources beyond the first cycle and bounds concurrent hint queries", async () => {
   mocks.sources.mockResolvedValue(Array.from({length:25},(_,i)=>({...source,id:String(i),name:String(i),nextRunAt:null,lastRunFound:200,lastRunStop:i===0?"cap":"exhausted"})));
   let inFlight=0,maxInFlight=0;
