@@ -37,10 +37,10 @@ function Tab({ active, label, count, onClick }: { active: boolean; label: string
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={`shrink-0 rounded-full border px-3 py-1 text-sm ${active ? "border-clay bg-clay text-white" : "border-line bg-card hover:bg-paper"}`}
+      className={`shrink-0 rounded-full border px-3 py-1 text-sm ${active ? "border-clay bg-clay text-on-accent" : "border-line bg-card hover:bg-paper"}`}
     >
       {label}
-      {count !== undefined ? <span className={active ? "ml-1 text-white/80" : "ml-1 text-muted"}>{count}</span> : null}
+      {count !== undefined ? <span className={active ? "ml-1 text-on-accent/80" : "ml-1 text-muted"}>{count}</span> : null}
     </button>
   );
 }

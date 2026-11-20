@@ -52,7 +52,7 @@ export function ProductsEditor({ categories }: { categories: CategoryRow[] }) {
       <p className="mt-1 text-sm text-muted">
         ระบบจับชื่อเรียก (alias) ในโพสต์ก่อน แล้วให้ AI เลือกจากรายการนี้เท่านั้น ถ้าไม่ชัดใช้ค่าเริ่มต้นของกลุ่ม ไม่งั้นเป็น “ไม่ระบุ”
       </p>
-      {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
+      {error ? <p className="mt-2 text-sm text-danger">{error}</p> : null}
       <form onSubmit={add} className="mt-3 grid gap-2 md:grid-cols-[1fr_1fr_160px_2fr_auto]">
         <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="ชื่อ (ไทย) เช่น โรบล็อกซ์" required />
         <Input value={nameEn} onChange={(event) => setNameEn(event.target.value)} placeholder="ชื่ออังกฤษ" />

@@ -19,7 +19,7 @@ function CheckCard({ check }: { check: Check }) {
       </div>
       <p className={cn("mt-1 text-base font-semibold", style.text)}>{check.value}</p>
       {check.detail ? <p className="mt-1 break-words text-xs text-muted">{check.detail}</p> : null}
-      {check.hint ? <p className="mt-2 rounded-lg bg-white/70 px-2 py-1 text-xs">วิธีแก้: {check.hint}</p> : null}
+      {check.hint ? <p className="mt-2 rounded-lg bg-accent-soft px-2 py-1 text-xs text-fg">วิธีแก้: {check.hint}</p> : null}
     </div>
   );
 }
@@ -94,7 +94,7 @@ export default function OverviewPage() {
         </Button>
       </div>
       {pinged ? <p className="mt-2 text-xs text-muted">{pinged}</p> : null}
-      {error ? <p className="mt-4 text-sm text-red-700">{error}</p> : null}
+      {error ? <p className="mt-4 text-sm text-danger">{error}</p> : null}
       {!data && !error ? <p className="mt-6 text-sm text-muted">กำลังตรวจระบบ...</p> : null}
 
       {data ? (
@@ -126,11 +126,11 @@ export default function OverviewPage() {
                     {data.facebook.loggedIn === true ? (
                       <>
                         <a href="https://www.facebook.com/" target="_blank" rel="noopener noreferrer" onClick={openedFacebook}
-                          className="inline-flex items-center gap-1 rounded-lg border border-line bg-card px-3 py-1.5 text-sm hover:bg-stone-50">
+                          className="inline-flex items-center gap-1 rounded-lg border border-line bg-card px-3 py-1.5 text-sm hover:bg-accent-soft">
                           <ExternalLink className="h-4 w-4" /> เปิด Facebook
                         </a>
                         <a href="https://www.facebook.com/groups/feed/" target="_blank" rel="noopener noreferrer" onClick={openedFacebook}
-                          className="inline-flex items-center gap-1 rounded-lg border border-line bg-card px-3 py-1.5 text-sm hover:bg-stone-50">
+                          className="inline-flex items-center gap-1 rounded-lg border border-line bg-card px-3 py-1.5 text-sm hover:bg-accent-soft">
                           <ExternalLink className="h-4 w-4" /> เปิดกลุ่มที่ติดตาม
                         </a>
                         <a href="https://www.facebook.com/login" target="_blank" rel="noopener noreferrer" onClick={openedFacebook}
@@ -146,7 +146,7 @@ export default function OverviewPage() {
                     )}
                   </div>
                   {fbHint ? (
-                    <p className="mb-3 rounded-lg bg-sky-50 px-3 py-2 text-xs text-sky-900">ล็อกอินเสร็จแล้วกลับมาที่นี่ ระบบจะตรวจเองภายใน 1 นาที</p>
+                    <p className="mb-3 rounded-lg bg-accent-soft px-3 py-2 text-xs text-fg">ล็อกอินเสร็จแล้วกลับมาที่นี่ ระบบจะตรวจเองภายใน 1 นาที</p>
                   ) : null}
                   {data.facebook.accounts.length ? (
                     <table className="w-full min-w-[640px] text-left text-sm">
@@ -231,11 +231,11 @@ export default function OverviewPage() {
                         </ul>
                       ) : null}
                       {install.lastError ? (
-                        <p className="mt-1 text-xs text-red-800">
+                        <p className="mt-1 text-xs text-danger">
                           ข้อผิดพลาดล่าสุด ({install.lastErrorAt ? timeAgo(install.lastErrorAt) : "-"}): {install.lastError}
                         </p>
                       ) : null}
-                      {install.outboxSize ? <p className="mt-1 text-xs text-amber-800">โพสต์รอส่งใหม่ (เซิร์ฟเวอร์ติดต่อไม่ได้ตอนนั้น): {install.outboxSize} ชุด</p> : null}
+                      {install.outboxSize ? <p className="mt-1 text-xs text-warn">โพสต์รอส่งใหม่ (เซิร์ฟเวอร์ติดต่อไม่ได้ตอนนั้น): {install.outboxSize} ชุด</p> : null}
                       {install.errorLog?.length ? (
                         <details className="mt-1 text-xs">
                           <summary className="cursor-pointer text-muted">บันทึกข้อผิดพลาดของส่วนขยาย · 24 ชม. {install.errorCount24h} ครั้ง</summary>

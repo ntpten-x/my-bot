@@ -116,7 +116,7 @@ export default function MessagesPage() {
   const previewSrc = imagePreview || (!clearImage ? existingImageUrl : null);
   return <div className="space-y-6">
     <div className="flex flex-wrap items-start justify-between gap-3"><div><h1 className="text-2xl font-semibold">จัดการข้อความ</h1><p className="mt-1 max-w-2xl text-sm leading-6 text-muted">เตรียมข้อความคอมเมนต์แยกตามหมวดหมู่และประเภท แต่ละประเภทสร้างได้หลายชุด ตั้งชื่อให้เลือกใช้ได้ง่าย แนบรูปได้หนึ่งรูปต่อข้อความ</p></div><Link href="/groups" className="text-sm text-pine underline underline-offset-4">จัดการหมวดหมู่และประเภท</Link></div>
-    {error ? <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{error}</p> : null}
+    {error ? <p role="alert" className="rounded-lg bg-danger/10 p-3 text-sm text-danger">{error}</p> : null}
     {info ? <p role="status" className="rounded-lg bg-pine/10 p-3 text-sm text-pine">{info}</p> : null}
     <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
       <Card className="border-t-4 border-t-pine">
@@ -132,12 +132,12 @@ export default function MessagesPage() {
             <Label htmlFor="message-image">รูปประกอบ (ไม่บังคับ)</Label>
             <Input id="message-image" type="file" accept="image/jpeg,image/png,image/webp" disabled={busy || !imageStorageReady} onChange={event => pickImage(event.target.files?.[0] ?? null)} />
             <p className="mt-1 text-xs text-muted">JPEG / PNG / WebP ไม่เกิน {IMAGE_MAX_LABEL} · เมื่อกฎเลือกข้อความนี้ บอทจะส่งข้อความพร้อมรูป</p>
-            {!imageStorageReady ? <p role="alert" className="mt-2 text-xs text-red-800">ยังแนบรูปไม่ได้ — ตั้งค่า `SUPABASE_URL` และ `SUPABASE_SERVICE_ROLE_KEY` ใน `.env` (และบน Render) แล้วรีสตาร์ทแอป</p> : null}
+            {!imageStorageReady ? <p role="alert" className="mt-2 text-xs text-danger">ยังแนบรูปไม่ได้ — ตั้งค่า `SUPABASE_URL` และ `SUPABASE_SERVICE_ROLE_KEY` ใน `.env` (และบน Render) แล้วรีสตาร์ทแอป</p> : null}
             {previewSrc ? <div className="mt-3 flex flex-wrap items-end gap-3"><img src={previewSrc} alt="ตัวอย่างรูปข้อความ" decoding="async" width={96} height={96} className="h-24 w-24 rounded-md border border-line object-cover" /><Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => { pickImage(null); setClearImage(Boolean(editing && existingImageUrl)); }}>ลบรูป</Button></div> : null}
           </div>
           {body.trim() ? <div className="rounded-lg border border-line p-3"><p className="mb-2 text-xs text-muted">ตัวอย่างข้อความ</p><p className="whitespace-pre-wrap break-words text-sm">{body}</p></div> : null}
           <div className="flex flex-wrap gap-2"><Button variant="pine" type="submit" disabled={loading || busy || !categoryId || !name.trim() || !body.trim() || (!editing && messages.length >= limit)}>{busy ? "กำลังบันทึก..." : editing ? "บันทึกการแก้ไข" : "สร้างข้อความ"}</Button>{editing ? <Button variant="outline" type="button" disabled={busy} onClick={reset}>ยกเลิกแก้ไข</Button> : null}</div>
-          {messages.length >= limit ? <p className="text-sm text-red-800">ข้อความครบ {limit} ชุดแล้ว ลบข้อความที่ไม่ใช้ก่อนเพิ่มชุดใหม่</p> : null}
+          {messages.length >= limit ? <p className="text-sm text-danger">ข้อความครบ {limit} ชุดแล้ว ลบข้อความที่ไม่ใช้ก่อนเพิ่มชุดใหม่</p> : null}
         </form>
         <p className="mt-4 border-t border-line pt-3 text-xs leading-5 text-muted">การบันทึกเป็นการเตรียมข้อความไว้เลือกใช้ ยังไม่ส่งคอมเมนต์หรือเปิดระบบอัตโนมัติ</p>
       </Card>

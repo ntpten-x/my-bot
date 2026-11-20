@@ -42,7 +42,7 @@ export default function LearnPage() {
         ระบบจำจากปุ่มไม่สนใจ บันทึก ทักแล้ว และปิดการขาย แล้วเสนอคำเฝ้าดูหรือคำต้องห้ามจากโพสต์เหล่านั้น กดคำเพื่อเพิ่มได้ทันที ตอนนี้มีตัวอย่างที่สนใจ {counts.liked} และที่ไม่เอา {counts.disliked}
       </p>
       {info ? <p className="mt-3 text-sm text-pine">{info}</p> : null}
-      {error ? <p className="mt-3 text-sm text-red-700">{error}</p> : null}
+      {error ? <p className="mt-3 text-sm text-danger">{error}</p> : null}
       <div className="mt-5 grid gap-4 md:grid-cols-2">
         <Card>
           <h2 className="font-semibold">คำเฝ้าดูที่น่าเพิ่ม</h2>

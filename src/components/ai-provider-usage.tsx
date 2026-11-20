@@ -81,7 +81,7 @@ export function AiProviderUsage() {
         <h2 className="font-semibold">ผู้ให้บริการ AI (สลับอัตโนมัติ)</h2>
         <Link href="/settings/ai-providers" className="text-sm text-clay underline">จัดการ</Link>
       </div>
-      {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
+      {error ? <p className="mt-2 text-sm text-danger">{error}</p> : null}
       {providers && !providers.length ? <p className="mt-2 text-sm text-muted">ยังไม่มีผู้ให้บริการ ระบบใช้ค่าจาก .env และคีย์เวิร์ด</p> : null}
       {providers?.length ? (
         <div className="mt-3 overflow-x-auto">

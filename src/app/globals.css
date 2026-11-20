@@ -1,30 +1,90 @@
 @import "tailwindcss";
 
-@theme inline {
-  --font-sans: var(--font-ibm), "IBM Plex Sans Thai", sans-serif;
-  --color-paper: #f3ecdf;
-  --color-ink: #1c1612;
-  --color-clay: #c24e1d;
-  --color-clay-dark: #8d3412;
-  --color-pine: #1e6a45;
-  --color-line: #e3d5c3;
-  --color-card: #fffdf8;
-  --color-sidebar: #211913;
-  --color-muted: #6f6256;
-  --color-amber: #f0c36a;
+:root,
+html.light {
+  color-scheme: light;
+  --mybot-bg: #f7f9fc;
+  --mybot-fg: #0b1220;
+  --mybot-muted: #5b6b7c;
+  --mybot-card: #ffffff;
+  --mybot-line: #d7e0ea;
+  --mybot-sidebar: #0e1622;
+  --mybot-accent: #2f7fea;
+  --mybot-on-accent: #0b1220;
+  --mybot-accent-soft: #2f7fea18;
+  --mybot-warn: #b8860b;
+  --mybot-ok: #0f8a5f;
+  --mybot-danger: #c62828;
+  --mybot-selection: #2f7fea44;
 }
 
-* { box-sizing: border-box; }
+html.dark {
+  color-scheme: dark;
+  --mybot-bg: #0b0f14;
+  --mybot-fg: #f4f7fb;
+  --mybot-muted: #9aa6b2;
+  --mybot-card: #121821;
+  --mybot-line: #243041;
+  --mybot-sidebar: #070a0f;
+  --mybot-accent: #6eb6ff;
+  --mybot-on-accent: #0b0f14;
+  --mybot-accent-soft: #6eb6ff22;
+  --mybot-warn: #e6c35c;
+  --mybot-ok: #3ddc97;
+  --mybot-danger: #ff7b72;
+  --mybot-selection: #6eb6ff55;
+}
+
+@theme inline {
+  --font-sans: var(--font-geist), var(--font-ibm), "IBM Plex Sans Thai", ui-sans-serif, system-ui, sans-serif;
+
+  --color-bg: var(--mybot-bg);
+  --color-fg: var(--mybot-fg);
+  --color-muted: var(--mybot-muted);
+  --color-card: var(--mybot-card);
+  --color-line: var(--mybot-line);
+  --color-sidebar: var(--mybot-sidebar);
+  --color-accent: var(--mybot-accent);
+  --color-on-accent: var(--mybot-on-accent);
+  --color-accent-soft: var(--mybot-accent-soft);
+  --color-warn: var(--mybot-warn);
+  --color-ok: var(--mybot-ok);
+  --color-danger: var(--mybot-danger);
+
+  /* Compatibility aliases for existing class names across the app */
+  --color-paper: var(--mybot-bg);
+  --color-ink: var(--mybot-fg);
+  --color-clay: var(--mybot-accent);
+  --color-clay-dark: var(--mybot-accent);
+  --color-pine: var(--mybot-accent);
+  --color-amber: var(--mybot-warn);
+}
+
+* {
+  box-sizing: border-box;
+}
 
 body {
   margin: 0;
-  background-color: var(--color-paper);
-  background-image: radial-gradient(circle at 1px 1px, rgba(28, 22, 18, 0.045) 1px, transparent 0);
-  background-size: 22px 22px;
-  color: var(--color-ink);
+  background-color: var(--color-bg);
+  color: var(--color-fg);
   font-family: var(--font-sans);
 }
 
-a { color: inherit; }
+a {
+  color: inherit;
+}
 
-::selection { background: #f0c36a; }
+::selection {
+  background: var(--mybot-selection);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

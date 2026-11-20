@@ -26,7 +26,7 @@ export default function PipelinePage() {
     <div>
       <h1 className="text-2xl font-semibold">ไปป์ไลน์</h1>
       <p className="mt-1 text-sm text-muted">ติดตามลีดที่เก็บไว้ ตั้งแต่ทักจนปิดงาน พร้อมโน้ตส่วนตัว</p>
-      {error ? <p className="mt-4 text-sm text-red-700">{error}</p> : null}
+      {error ? <p className="mt-4 text-sm text-danger">{error}</p> : null}
       {loading ? <p className="mt-6 text-sm text-muted">กำลังโหลด...</p> : null}
       {!loading && !posts.length ? (
         <div className="mt-8 rounded-2xl border border-dashed border-line bg-card p-8 text-sm text-muted">

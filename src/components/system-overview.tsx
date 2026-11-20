@@ -12,10 +12,10 @@ import { startVisibleRefresh } from "@/lib/visible-refresh";
 export type { SystemOverview };
 
 export const LEVEL_STYLE: Record<Level, { dot: string; card: string; text: string; label: string }> = {
-  ok: { dot: "bg-emerald-500", card: "border-emerald-200 bg-emerald-50/70", text: "text-emerald-800", label: "ปกติ" },
-  warn: { dot: "bg-amber-400", card: "border-amber-200 bg-amber-50/80", text: "text-amber-900", label: "ควรดู" },
-  bad: { dot: "bg-red-500", card: "border-red-200 bg-red-50/80", text: "text-red-800", label: "มีปัญหา" },
-  off: { dot: "bg-stone-300", card: "border-line bg-card", text: "text-muted", label: "ไม่ได้ใช้" },
+  ok: { dot: "bg-ok", card: "border-ok/30 bg-ok/10", text: "text-ok", label: "ปกติ" },
+  warn: { dot: "bg-warn", card: "border-warn/30 bg-warn/10", text: "text-warn", label: "ควรดู" },
+  bad: { dot: "bg-danger", card: "border-danger/30 bg-danger/10", text: "text-danger", label: "มีปัญหา" },
+  off: { dot: "bg-muted", card: "border-line bg-card", text: "text-muted", label: "ไม่ได้ใช้" },
 };
 
 export function LevelDot({ level, className }: { level: Level; className?: string }) {
@@ -64,11 +64,11 @@ export function SystemOverviewWidget() {
           {data ? <LevelDot level={data.overall} /> : null}
           ภาพรวมระบบ
         </h2>
-        <Link href="/overview" className="text-sm text-clay hover:underline">
+        <Link href="/overview" className="text-sm text-accent hover:underline">
           ดูทั้งหมด →
         </Link>
       </div>
-      {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
+      {error ? <p className="mt-2 text-sm text-danger">{error}</p> : null}
       {!data && !error ? <p className="mt-2 text-sm text-muted">กำลังตรวจ...</p> : null}
       {data ? (
         <>
@@ -108,7 +108,7 @@ export function SystemOverviewWidget() {
               ))}
             </ul>
           ) : (
-            <p className="mt-2 text-sm text-emerald-800">ทุกอย่างทำงานปกติ</p>
+            <p className="mt-2 text-sm text-ok">ทุกอย่างทำงานปกติ</p>
           )}
         </>
       ) : null}

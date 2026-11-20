@@ -24,7 +24,7 @@ export default function ParserPage() {
       <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
         ส่วนขยายส่งตัวอย่างที่อ่านได้จากหน้ากลุ่มล่าสุดมาไว้ที่นี่ ถ้าเปิดกลุ่มแล้วยังว่าง แปลว่าตัวเลือกในหน้า Facebook เปลี่ยน หรือยังไม่ได้ใส่โทเคน
       </p>
-      {error ? <p className="mt-4 text-sm text-red-700">{error}</p> : null}
+      {error ? <p className="mt-4 text-sm text-danger">{error}</p> : null}
       {!error && !samples.length ? <p className="mt-6 text-sm text-muted">ยังไม่มีตัวอย่างจากการอ่านหน้ากลุ่ม</p> : null}
       <div className="mt-4 space-y-4">
         {samples.map((sample) => (

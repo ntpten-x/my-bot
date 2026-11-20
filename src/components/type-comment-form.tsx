@@ -123,7 +123,7 @@ export function TypeCommentForm({ rule, browser, onSaved, onRefresh }: { rule?: 
   }
   return <form aria-label="ตั้งกฎบอทคอมเมนต์" onSubmit={event => void save(event)} className="space-y-5 rounded-xl border border-line bg-card p-5">
     <div><h2 className="text-lg font-semibold">{rule ? "แก้ไขชุดคอมเมนต์ตามประเภท" : "สร้างชุดคอมเมนต์ตามประเภท"}</h2><p className="mt-1 text-xs leading-5 text-muted">ค่าเริ่มต้น: สุ่มข้อความ ทุกวันตลอด 24 ชั่วโมง โพสต์ไม่เกิน 6 ชั่วโมง พักกลุ่มละ 60 วินาที ปรับตามกติกากลุ่มได้</p></div>
-    {error ? <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{error}</p> : null}
+    {error ? <p role="alert" className="rounded-lg bg-danger/10 p-3 text-sm text-danger">{error}</p> : null}
     <fieldset disabled={busy || loading} className="space-y-5">
       <div><Label htmlFor="comment-type">ประเภทที่ต้องการคอมเมนต์</Label><Select id="comment-type" required value={productId} onChange={event => chooseType(event.target.value)}><option value="">เลือกประเภท เช่น Roblox</option>{options.categories.map(cat => <optgroup key={cat.id} label={cat.name}>{options.products.filter(row => row.categorySlug === cat.slug && (row.enabled || row.id === productId)).map(row => <option key={row.id} value={row.id}>{row.name}{!row.enabled ? " (ปิดใช้งาน)" : ""}</option>)}</optgroup>)}</Select><Link href="/groups" className="mt-1 inline-block text-xs text-pine underline">จัดการหมวดหมู่ ประเภท และกลุ่ม</Link></div>
       <div><Label htmlFor="rule-name">ชื่อชุดตั้งค่า</Label><Input id="rule-name" maxLength={80} value={name} onChange={event => setName(event.target.value)} placeholder={product ? `${category?.name} / ${product.name}` : "ตั้งอัตโนมัติจากประเภทได้"} /></div>

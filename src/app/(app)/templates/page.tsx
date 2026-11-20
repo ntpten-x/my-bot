@@ -84,7 +84,7 @@ export default function TemplatesPage() {
         สร้างข้อความเป็นชุดตามเกม/สินค้า (เช่น Roblox ข้อความ 1–9) และเลือกได้ว่าใช้กับกลุ่มไหน ระบบจะเลือกชุดที่ตรงที่สุดให้ก่อน
         (กลุ่ม+เกม › เกม › หมวด › ทั่วไป) แล้ววนข้อความที่ใช้น้อยที่สุดในชุดนั้น ไม่ซ้ำกันติดๆ คุณเปิดโพสต์แล้วกดส่งเอง ระบบไม่โพสต์แทน
       </p>
-      {error ? <p className="mt-4 text-sm text-red-700">{error}</p> : null}
+      {error ? <p className="mt-4 text-sm text-danger">{error}</p> : null}
       <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_1.2fr]">
         <Card>
           <h2 className="font-semibold">เพิ่มข้อความ ({templates.length}/{max})</h2>

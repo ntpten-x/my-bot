@@ -44,12 +44,12 @@ export default function GuidePage() {
           <h2 className="font-semibold">ตรวจระบบบนเครื่องนี้</h2>
           <Button type="button" onClick={run} disabled={busy}>{busy ? "กำลังตรวจ..." : "ตรวจอีกครั้ง"}</Button>
         </div>
-        {error ? <p className="mt-3 text-sm text-red-700">{error}</p> : null}
+        {error ? <p className="mt-3 text-sm text-danger">{error}</p> : null}
         {!checks && !error ? <p className="mt-3 text-sm text-muted">กดปุ่มเพื่อดูว่า Node, ฐานข้อมูล, Ollama, คีย์ และพอร์ต 8001 พร้อมหรือยัง</p> : null}
         <ul className="mt-4 space-y-2">
           {checks?.map((check) => (
             <li key={check.id} className="rounded-xl bg-paper px-3 py-2 text-sm">
-              <span className={`mr-2 inline-block rounded-full px-2 py-0.5 text-xs ${check.status === "PASS" ? "bg-pine/15 text-pine" : check.status === "WARN" ? "bg-amber/40" : "bg-red-100 text-red-800"}`}>
+              <span className={`mr-2 inline-block rounded-full px-2 py-0.5 text-xs ${check.status === "PASS" ? "bg-pine/15 text-pine" : check.status === "WARN" ? "bg-amber/40" : "bg-danger/10 text-danger"}`}>
                 {check.status}
               </span>
               <span className="font-medium">{check.label}</span>

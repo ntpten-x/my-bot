@@ -42,7 +42,7 @@ export default function SecurityPage() {
         <h1 className="text-2xl font-semibold">ความปลอดภัย</h1>
       </div>
       {weak && (
-        <Card className="border-amber-300 bg-amber-50">
+        <Card className="border-warn/30 bg-warn/10">
           <p className="font-semibold">รหัสผ่านปัจจุบันอ่อนเกินไป</p>
           <p className="text-sm">เว็บนี้เปิดบนอินเทอร์เน็ตได้ แนะนำให้เปลี่ยนเป็นรหัสที่ยาวอย่างน้อย 12 ตัว มีตัวอักษร ตัวเลข และตัวพิมพ์ใหญ่หรือสัญลักษณ์</p>
         </Card>

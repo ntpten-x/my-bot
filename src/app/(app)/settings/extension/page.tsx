@@ -60,10 +60,10 @@ export default function ExtensionPage() {
         <h1 className="text-2xl font-semibold">ส่วนขยาย Chrome</h1>
         <p className="mt-1 max-w-2xl text-sm text-muted">ติดตั้งแล้วเชื่อมต่อกับ MY-BOT ให้อัตโนมัติ ไม่ต้องกรอกที่อยู่เซิร์ฟเวอร์หรือรหัสจับคู่ การส่งคอมเมนต์ยังต้องเลือกอุปกรณ์ในกฎและกดเริ่มส่งจริงบนเว็บเอง</p>
       </div>
-      {error && <p className="text-sm text-red-700">{error}</p>}
+      {error && <p className="text-sm text-danger">{error}</p>}
       <p className="text-sm text-muted">อยากปิดหน้าดูบอทแล้วใช้ Chrome ส่วนตัวต่อ? <Link href="/settings/desktop" className="font-medium underline">ดูส่วนเสริม MY-BOT Desktop สำหรับ Windows</Link></p>
       {outdated && (
-        <Card className="border-amber-300 bg-amber-50">
+        <Card className="border-warn/30 bg-warn/10">
           <p className="font-semibold">มีอัปเดตส่วนขยาย</p>
           <p className="text-sm">เครื่องที่ส่งสัญญาณล่าสุดใช้ v{data!.installedVersion} แต่เซิร์ฟเวอร์มี v{data!.extensionVersion} ดาวน์โหลดใหม่ แตกไฟล์ทับโฟลเดอร์เดิม แล้วกด “โหลดซ้ำ” ที่ chrome://extensions</p>
         </Card>

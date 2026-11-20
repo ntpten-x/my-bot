@@ -64,7 +64,7 @@ export function FeedSampleAudit({ sources }: { sources: SourceOption[] }) {
       <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={expectedFullText} onChange={event=>setExpectedFullText(event.target.checked)} disabled={busy}/>ต้องการข้อความเต็มสำหรับทุกรายการที่ไม่ได้ระบุ true/false</label>
       <button type="submit" disabled={busy||!eligible.length} className="rounded border px-3 py-2 disabled:opacity-50">{busy?"กำลังตรวจ…":"ตรวจตัวอย่าง"}</button>
     </form>
-    {error&&<p role="alert" className="text-sm text-red-600">{error}</p>}
+    {error&&<p role="alert" className="text-sm text-danger">{error}</p>}
     {report&&<div className="space-y-3">
       <p className="text-sm">ตัวอย่างไม่ซ้ำ {report.counts.unique} · พบ {report.counts.found} · ไม่พบ {report.counts.missing} · ไม่ทราบ {report.counts.lookupUnknown} · ตัดทอน {report.counts.truncated} · URL ใช้ไม่ได้ {report.counts.invalid} · ลิงก์ซ้ำ {report.counts.duplicates}</p>
       <p className="text-sm">สัดส่วนที่พบในตัวอย่าง: {percent(report.sampleCoverage)} · พบและมีป้ายกำกับ {report.counts.labeledCaptured} · มีป้ายกำกับแต่ไม่พบ {report.counts.labeledMissing} · ไม่กำกับ/ขัดแย้ง {report.counts.unlabeled} (ขัดแย้ง {report.counts.labelConflicts})</p>
