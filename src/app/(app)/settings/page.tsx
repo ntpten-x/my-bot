@@ -282,7 +282,7 @@ export default function SettingsPage() {
           </div>
         </Card>
         {message ? <p className="text-sm text-pine">{message}</p> : null}
-        {error ? <p className="text-sm text-red-700">{error}</p> : null}
+        {error ? <p className="text-sm text-danger">{error}</p> : null}
         <Button type="submit">บันทึกการตั้งค่า</Button>
       </form>
       <Dialog open={confirmToken} onOpenChange={setConfirmToken} title="สร้างโทเคนใหม่">

@@ -135,7 +135,7 @@ export default function AutomationPage() {
         <br />กฎการเม้น: ติ๊ก “เข้าคิวตอบ” ในกฎ แล้วโพสต์ที่ตรงเงื่อนไขจะเข้าคิวตอบลีดพร้อมข้อความที่วนสลับ (ตามโควตา/ระยะห่าง/ไม่ซ้ำคนและกลุ่มเดิม)
         เมื่อมีกฎการเม้นอย่างน้อย 1 กฎ คิวจะรับเฉพาะโพสต์ที่ตรงกฎเท่านั้น
       </p>
-      {error ? <p className="mt-4 text-sm text-red-700">{error}</p> : null}
+      {error ? <p className="mt-4 text-sm text-danger">{error}</p> : null}
       {message ? <p className="mt-4 text-sm text-pine">{message}</p> : null}
 
       <div className="mt-5 grid gap-4 lg:grid-cols-2">
@@ -152,7 +152,7 @@ export default function AutomationPage() {
                       key={province}
                       type="button"
                       onClick={() => void saveArea({ provinces: on ? area.provinces.filter((item) => item !== province) : [...area.provinces, province] })}
-                      className={`rounded-full border px-2.5 py-0.5 text-xs ${on ? "border-pine bg-pine text-white" : "border-line bg-card"}`}
+                      className={`rounded-full border px-2.5 py-0.5 text-xs ${on ? "border-pine bg-pine text-on-accent" : "border-line bg-card"}`}
                     >
                       {province}
                     </button>

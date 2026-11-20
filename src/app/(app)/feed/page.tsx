@@ -296,7 +296,7 @@ export default function FeedPage() {
         <label className="flex items-center gap-2" title="แสดงเฉพาะโพสต์ที่ติดดาว Roblox/PUBG ฯลฯ"><input type="checkbox" checked={filters.followedOnly} onChange={(event) => update({ followedOnly: event.target.checked })} /> เฉพาะที่ติดตาม</label>
         <label className="flex items-center gap-2" title="ตั้งจังหวัดได้ที่หน้า กฎอัตโนมัติ"><input type="checkbox" checked={filters.area} onChange={(event) => update({ area: event.target.checked })} /> เฉพาะพื้นที่ให้บริการ</label>
       </div>
-      {error ? <p className="mt-4 text-sm text-red-700">{error}</p> : null}
+      {error ? <p className="mt-4 text-sm text-danger">{error}</p> : null}
       {loading ? <p className="mt-6 text-sm text-muted">กำลังโหลดฟีด...</p> : null}
       {!loading && !posts.length ? (
         <div className="mt-8 rounded-2xl border border-dashed border-line bg-card p-8 text-center">

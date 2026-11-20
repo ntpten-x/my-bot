@@ -167,7 +167,7 @@ export default function SourcesPage() {
           </div>
         </form>
         {info ? <p className="mt-3 text-sm text-pine">{info}</p> : null}
-        {error ? <p className="mt-3 text-sm text-red-700">{error}</p> : null}
+        {error ? <p className="mt-3 text-sm text-danger">{error}</p> : null}
       </Card>
       {loading ? <p className="mt-6 text-sm text-muted">กำลังโหลด...</p> : null}
       <div className="mt-4 space-y-3">
@@ -183,7 +183,7 @@ export default function SourcesPage() {
                   {source.coverage && source.enabled ? (
                     <span
                       title={source.coverage.reasons.join("\n") || "รอบล่าสุดเลื่อนจนเจอโพสต์ที่เก็บแล้ว"}
-                      className={`rounded-full px-2 py-0.5 text-xs font-medium ${source.coverage.level === "ok" ? "bg-emerald-100 text-emerald-800" : source.coverage.level === "warn" ? "bg-amber-100 text-amber-800" : source.coverage.level === "bad" ? "bg-red-100 text-red-800" : "bg-stone-100 text-stone-600"}`}
+                      className={`rounded-full px-2 py-0.5 text-xs font-medium ${source.coverage.level === "ok" ? "bg-ok/10 text-ok" : source.coverage.level === "warn" ? "bg-warn/10 text-warn" : source.coverage.level === "bad" ? "bg-danger/10 text-danger" : "bg-line/40 text-muted"}`}
                     >
                       ความครบ: {source.coverage.label}
                       {source.coverage.reachedKnownPct !== null ? ` · ${source.coverage.reachedKnownPct}% ถึงโพสต์เดิม` : ""}
@@ -210,7 +210,7 @@ export default function SourcesPage() {
                   </div>
                 ) : null}
                 {source.coverage && source.enabled && source.coverage.reasons.length ? (
-                  <ul className="mt-1 list-disc pl-5 text-sm text-amber-800">
+                  <ul className="mt-1 list-disc pl-5 text-sm text-warn">
                     {source.coverage.reasons.map((reason) => (
                       <li key={reason}>{reason}</li>
                     ))}
@@ -219,7 +219,7 @@ export default function SourcesPage() {
                 {bindings.get(source.id) ? (
                   <SourceBinding binding={bindings.get(source.id)!} categories={categories} products={products} onSave={(body) => void patch(source.id, body)} />
                 ) : null}
-                {source.lastError ? <p className="mt-1 text-sm text-red-700">สาเหตุที่ดึงไม่สำเร็จ: {source.lastError}</p> : null}
+                {source.lastError ? <p className="mt-1 text-sm text-danger">สาเหตุที่ดึงไม่สำเร็จ: {source.lastError}</p> : null}
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 {isExtensionSource(source.type) ? (
@@ -294,7 +294,7 @@ export default function SourcesPage() {
             {source.logs.length ? (
               <ul className="mt-3 space-y-1 text-xs text-muted">
                 {source.logs.map((log) => (
-                  <li key={log.id} className={log.status === "error" ? "text-red-700" : undefined}>
+                  <li key={log.id} className={log.status === "error" ? "text-danger" : undefined}>
                     {timeAgo(log.createdAt)} · {log.status === "error" ? "ผิดพลาด" : log.status} · {log.message || "ไม่ทราบสาเหตุ"}
                   </li>
                 ))}

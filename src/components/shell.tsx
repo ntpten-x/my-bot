@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Activity, Bell, BookOpen, Bookmark, Bug, LayoutDashboard, Lightbulb, LogOut, MessageSquareText, Radar, Rss, Settings, Sun, Tags, Users, Workflow } from "lucide-react";
 import { StepUpPrompt } from "./security-controls";
+import { ThemeToggle } from "./theme-toggle";
 import { api } from "./api";
 import { cn } from "@/lib/utils";
 import { startVisibleRefresh } from "@/lib/visible-refresh";
@@ -85,11 +86,11 @@ export function Shell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen md:grid md:grid-cols-[240px_1fr]">
       <StepUpPrompt />
-      <aside className="hidden bg-sidebar text-paper md:flex md:flex-col">
+      <aside className="hidden bg-sidebar text-white md:flex md:flex-col">
         <div className="px-5 py-6">
           <div className="text-xs tracking-[0.18em] text-amber">LEAD RADAR</div>
           <div className="mt-1 text-2xl font-semibold">MY-BOT</div>
-          <p className="mt-2 text-xs leading-5 text-paper/70">เรดาร์ลีดส่วนตัว ไม่มีบิล ไม่มีผู้ใช้คนที่สอง</p>
+          <p className="mt-2 text-xs leading-5 text-white/70">เรดาร์ลีดส่วนตัว ไม่มีบิล ไม่มีผู้ใช้คนที่สอง</p>
         </div>
         <nav className="flex flex-1 flex-col gap-1 px-3">
           {NAV.map((item) => {
@@ -101,7 +102,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 href={item.href}
                 className={cn(
                   "flex items-center justify-between rounded-xl px-3 py-2 text-sm",
-                  active ? "bg-white/10 text-white" : "text-paper/75 hover:bg-white/5",
+                  active ? "bg-white/10 text-white" : "text-white/75 hover:bg-white/5",
                 )}
               >
                 <span className="flex items-center gap-2">
@@ -109,13 +110,17 @@ export function Shell({ children }: { children: React.ReactNode }) {
                   {item.label}
                 </span>
                 {item.href === "/notifications" && unread > 0 ? (
-                  <span className="rounded-full bg-clay px-2 text-xs text-white">{unread}</span>
+                  <span className="rounded-full bg-accent px-2 text-xs font-semibold text-sidebar">{unread}</span>
                 ) : null}
               </Link>
             );
           })}
         </nav>
-        <button onClick={logout} className="m-3 flex items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-paper/70 hover:bg-white/5">
+        <div className="mx-3 mb-2 flex items-center justify-between gap-2 rounded-xl border border-white/10 px-3 py-2">
+          <span className="text-xs text-white/70">ธีม</span>
+          <ThemeToggle className="border-white/15 bg-white/5 text-white hover:bg-white/10" />
+        </div>
+        <button onClick={logout} className="m-3 flex items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-white/70 hover:bg-white/5">
           <LogOut size={16} /> ออกจากระบบ
         </button>
       </aside>
@@ -123,7 +128,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
         <header className="sticky top-0 z-20 border-b border-line bg-paper/90 backdrop-blur md:hidden">
           <div className="flex items-center justify-between px-4 py-3">
             <div className="font-semibold">MY-BOT</div>
-            <button onClick={logout} className="text-sm text-muted">ออก</button>
+            <div className="flex items-center gap-2">
+              <ThemeToggle />
+              <button onClick={logout} className="text-sm text-muted">ออก</button>
+            </div>
           </div>
           <nav className="flex gap-2 overflow-x-auto px-3 pb-3">
             {NAV.map((item) => (
@@ -132,7 +140,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 href={item.href}
                 className={cn(
                   "shrink-0 rounded-full border px-3 py-1 text-sm",
-                  pathname === item.href ? "border-clay bg-clay text-white" : "border-line bg-card",
+                  pathname === item.href ? "border-accent bg-accent text-on-accent" : "border-line bg-card text-fg",
                 )}
               >
                 {item.label}

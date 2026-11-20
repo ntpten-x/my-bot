@@ -8,8 +8,8 @@ export default function manifest(): MetadataRoute.Manifest {
     description: "ดูลีดใหม่จากกลุ่ม Facebook และเว็บบอร์ดแบบเรียลไทม์",
     start_url: "/feed",
     display: "standalone",
-    background_color: "#f3ecdf",
-    theme_color: "#1e6a45",
+    background_color: "#0B0F14",
+    theme_color: "#6EB6FF",
     lang: "th",
     icons: [
       { src: "/icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },

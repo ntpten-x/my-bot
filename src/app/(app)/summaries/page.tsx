@@ -46,7 +46,7 @@ export default function SummariesPage() {
         </Button>
       </div>
       {info ? <p className="mt-3 text-sm text-pine">{info}</p> : null}
-      {error ? <p className="mt-3 text-sm text-red-700">{error}</p> : null}
+      {error ? <p className="mt-3 text-sm text-danger">{error}</p> : null}
       <div className="mt-4 space-y-3">
         {rows.length ? rows.map((row) => (
           <Card key={row.id}>

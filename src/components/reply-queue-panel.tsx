@@ -268,7 +268,7 @@ export function ReplyQueuePanel() {
           แล้วกด “ส่งแล้ว” (ที่นี่หรือในกล่องบนโพสต์) ระบบจะเปิดรายการถัดไปให้เมื่อครบเวลาเว้นระยะ — ไม่กดส่ง ไม่ส่งข้อความ และไม่คอมเมนต์แทนคุณ
         </p>
       </div>
-      {error ? <p className="text-sm text-red-700">{error}</p> : null}
+      {error ? <p className="text-sm text-danger">{error}</p> : null}
       {note ? <p className="text-sm text-pine" role="status">{note}</p> : null}
 
       {form ? (

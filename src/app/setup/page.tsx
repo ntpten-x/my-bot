@@ -43,7 +43,7 @@ export default function SetupPage() {
 
   return (
     <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-4">
-      <p className="text-xs tracking-[0.18em] text-clay">ครั้งแรกบนเครื่องนี้</p>
+      <p className="text-xs tracking-[0.18em] text-accent">ครั้งแรกบนเครื่องนี้</p>
       <h1 className="mt-2 text-3xl font-semibold">ตั้งรหัสผ่านเจ้าของ</h1>
       <p className="mt-2 text-sm leading-6 text-muted">
         MY-BOT ไม่มีสมัครสมาชิกและไม่มีระบบเก็บเงิน รหัสนี้ใช้เปิดหน้าเว็บบนเครื่องคุณเท่านั้น อย่างน้อย 8 ตัว
@@ -64,7 +64,7 @@ export default function SetupPage() {
               <Input id="confirm" type="password" value={confirm} onChange={(event) => setConfirm(event.target.value)} />
             </div>
             <div><Label htmlFor="bootstrap-token">รหัสตั้งระบบครั้งแรก (BOOTSTRAP_TOKEN บนเซิร์ฟเวอร์; ต้องใช้ใน production รวมถึง local production)</Label><Input id="bootstrap-token" type="password" autoComplete="off" value={bootstrapToken} onChange={event => setBootstrapToken(event.target.value)} /></div>
-            {error ? <p className="text-sm text-red-700">{error}</p> : null}
+            {error ? <p className="text-sm text-danger">{error}</p> : null}
             <Button type="submit" disabled={busy} className="w-full">
               {busy ? "กำลังบันทึก..." : "เริ่มใช้ MY-BOT"}
             </Button>

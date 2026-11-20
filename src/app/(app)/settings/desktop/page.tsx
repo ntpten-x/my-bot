@@ -24,7 +24,7 @@ export default async function DesktopSettingsPage() {
         </div>
         <p className="text-sm">เลือกติดตั้งเมื่ออยากเก็บโพสต์โดยไม่ให้หน้าต่างบอทมาบังงาน ไม่จำเป็นสำหรับการใช้ส่วนขยายตามปกติ ครั้งแรกต้องดาวน์โหลดส่วนประกอบเพิ่มเติมและอาจต้องรีสตาร์ต Windows</p>
         {available ? <Button asChild variant="pine"><a href="/api/desktop-download">ดาวน์โหลดชุดติดตั้งรุ่นทดลอง .zip</a></Button>
-          : <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">เปิด MY-BOT ผ่านที่อยู่ production แบบ HTTPS เพื่อดาวน์โหลดชุดที่เชื่อมกับเซิร์ฟเวอร์นั้น</p>}
+          : <p className="rounded-lg bg-warn/10 p-3 text-sm text-warn">เปิด MY-BOT ผ่านที่อยู่ production แบบ HTTPS เพื่อดาวน์โหลดชุดที่เชื่อมกับเซิร์ฟเวอร์นั้น</p>}
         <p className="text-sm text-muted">รุ่นนี้ยังไม่ได้รับรองการติดตั้งบน Windows เครื่องใหม่ทุกแบบ ควรทดลองกับบัญชีของคุณก่อนใช้งานต่อเนื่อง ไม่ต้องใส่คีย์ API หรือข้อมูลฐานข้อมูลในเครื่อง</p>
       </Card>
       <section className="space-y-3" aria-labelledby="desktop-steps">
