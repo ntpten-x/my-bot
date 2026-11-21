@@ -22,7 +22,7 @@ export default function LoginPage() {
     fetch("/api/auth/status")
       .then((response) => response.json())
       .then((data) => {
-        if (data.authenticated) router.replace("/dashboard");
+        if (data.authenticated) router.replace("/feed");
         else if (data.needsSetup) router.replace("/setup");
         else setReady(true);
       })
@@ -38,7 +38,7 @@ export default function LoginPage() {
         method: "POST",
         body: JSON.stringify({ username, password, code }),
       });
-      router.replace(result.weakPassword || result.mfaSetupRequired ? "/settings/security" : "/dashboard");
+      router.replace(result.weakPassword || result.mfaSetupRequired ? "/settings/security" : "/feed");
       router.refresh();
     } catch (err) {
       const message = err instanceof ApiError ? err.message : "เข้าสู่ระบบไม่สำเร็จ";

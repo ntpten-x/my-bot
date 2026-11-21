@@ -19,7 +19,7 @@ export default function ResetPasswordPage() {
     fetch("/api/auth/status")
       .then((response) => response.json())
       .then((data) => {
-        if (data.authenticated) router.replace("/dashboard");
+        if (data.authenticated) router.replace("/feed");
         else if (data.needsSetup) router.replace("/setup");
         else setReady(true);
       })
@@ -45,7 +45,7 @@ export default function ResetPasswordPage() {
         setError(typeof data.error === "string" ? data.error : "รีเซ็ตรหัสผ่านไม่สำเร็จ");
         return;
       }
-      router.replace("/dashboard");
+      router.replace("/feed");
       router.refresh();
     } catch {
       setError("รีเซ็ตรหัสผ่านไม่สำเร็จ");

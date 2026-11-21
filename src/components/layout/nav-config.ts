@@ -16,6 +16,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/getting-started", label: "เริ่มใช้งาน", icon: Activity },
       { href: "/overview", label: "ภาพรวมระบบ", icon: Activity },
+      { href: "/feed", label: "ฟีดลีด", icon: Radar },
       { href: "/dashboard", label: "แดชบอร์ด", icon: LayoutDashboard },
     ],
   },
@@ -23,7 +24,6 @@ export const NAV_GROUPS: NavGroup[] = [
     id: "leads",
     label: "ลีด",
     items: [
-      { href: "/feed", label: "ฟีดลีด", icon: Radar },
       { href: "/pipeline", label: "ไปป์ไลน์", icon: Bookmark },
       { href: "/summaries", label: "สรุปรายวัน", icon: Sun },
       { href: "/notifications", label: "การแจ้งเตือน", icon: Bell },

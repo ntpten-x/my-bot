@@ -19,7 +19,7 @@ export default function SetupPage() {
     fetch("/api/auth/status")
       .then((response) => response.json())
       .then((data) => {
-        if (data.authenticated) router.replace("/dashboard");
+        if (data.authenticated) router.replace("/feed");
         else if (!data.needsSetup) router.replace("/login");
         else setReady(true);
       })
@@ -32,7 +32,7 @@ export default function SetupPage() {
     setError("");
     try {
       await api("/api/auth/setup", { method: "POST", body: JSON.stringify({ username, password, confirm, bootstrapToken }) });
-      router.replace("/dashboard");
+      router.replace("/feed");
       router.refresh();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "ตั้งรหัสผ่านไม่สำเร็จ");

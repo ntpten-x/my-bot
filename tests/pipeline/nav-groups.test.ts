@@ -40,6 +40,10 @@ it("NAV_GROUPS lists every previous shell href exactly once", () => {
     "/summaries",
     "/templates",
   ].sort());
+  const startHrefs = NAV_GROUPS.find((g) => g.id === "start")!.items.map((i) => i.href);
+  expect(startHrefs.filter((href) => href === "/feed")).toEqual(["/feed"]);
+  expect(startHrefs.indexOf("/overview") + 1).toBe(startHrefs.indexOf("/feed"));
+  expect(startHrefs.indexOf("/feed") + 1).toBe(startHrefs.indexOf("/dashboard"));
 });
 
 it("isNavItemActive matches exact path and settings prefix", () => {
@@ -51,15 +55,15 @@ it("isNavItemActive matches exact path and settings prefix", () => {
 });
 
 it("groupIdForPath finds the group containing the route", () => {
-  expect(groupIdForPath("/feed")).toBe("leads");
+  expect(groupIdForPath("/feed")).toBe("start");
   expect(groupIdForPath("/settings/desktop")).toBe("system");
   expect(groupIdForPath("/nope")).toBe(null);
 });
 
 it("resolveGroupOpen forces open for the active group", () => {
   const stored = readGroupOpenState(window.localStorage);
-  stored.leads = false;
-  expect(resolveGroupOpen("leads", "/feed", stored)).toBe(true);
+  stored.start = false;
+  expect(resolveGroupOpen("start", "/feed", stored)).toBe(true);
   expect(resolveGroupOpen("system", "/feed", stored)).toBe(stored.system);
 });
 
@@ -73,7 +77,7 @@ it("NavGroups expands the active group and toggles another group", async () => {
   vi.stubGlobal("React", React);
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   window.localStorage.setItem(NAV_GROUPS_STORAGE_KEY, JSON.stringify({
-    start: false, leads: false, messages: false, automation: false, sources: false, system: false,
+    start: false, leads: true, messages: false, automation: false, sources: false, system: false,
   }));
   const container = document.createElement("div");
   document.body.append(container);
@@ -114,13 +118,13 @@ it("does not toggle the active route group or hide its links", async () => {
     });
     const feed = [...container.querySelectorAll("a")].find((a) => a.getAttribute("href") === "/feed");
     expect(feed?.textContent).toContain("ฟีดลีด");
-    const leadsButton = [...container.querySelectorAll("button")].find((b) => b.textContent?.includes("ลีด"));
-    expect(leadsButton).toBeTruthy();
-    expect(leadsButton!.disabled).toBe(true);
-    expect(leadsButton!.getAttribute("aria-disabled")).toBe("true");
-    await act(async () => { leadsButton!.click(); });
-    const stored = JSON.parse(window.localStorage.getItem(NAV_GROUPS_STORAGE_KEY)!) as { leads: boolean };
-    expect(stored.leads).toBe(true);
+    const startButton = [...container.querySelectorAll("button")].find((b) => b.textContent?.includes("เริ่มต้น"));
+    expect(startButton).toBeTruthy();
+    expect(startButton!.disabled).toBe(true);
+    expect(startButton!.getAttribute("aria-disabled")).toBe("true");
+    await act(async () => { startButton!.click(); });
+    const stored = JSON.parse(window.localStorage.getItem(NAV_GROUPS_STORAGE_KEY)!) as { start: boolean };
+    expect(stored.start).toBe(false);
     expect([...container.querySelectorAll("a")].some((a) => a.getAttribute("href") === "/feed")).toBe(true);
   } finally {
     await act(async () => root.unmount());

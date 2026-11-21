@@ -6,8 +6,8 @@ export default function NotFound() {
       <p className="text-sm text-muted">MY-BOT</p>
       <h1 className="mt-2 text-3xl font-semibold text-fg">ไม่พบหน้านี้</h1>
       <p className="mt-3 text-muted">ลิงก์อาจเก่า หรือยังไม่ได้สร้างไว้</p>
-      <Link href="/dashboard" className="mt-6 text-fg underline">
-        กลับแดชบอร์ด
+      <Link href="/feed" className="mt-6 text-fg underline">
+        กลับหน้าแรก
       </Link>
     </main>
   );
