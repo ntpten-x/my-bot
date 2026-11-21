@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button, Card, Input, Label } from "@/components/ui";
+import { ThemeToggle } from "@/components/layout/theme-toggle";
 import { ApiError, api } from "@/components/api";
 
 export default function LoginPage() {
@@ -42,36 +43,47 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-4">
-      <p className="text-xs tracking-[0.18em] text-accent">MY-BOT</p>
-      <h1 className="mt-2 text-3xl font-semibold">เข้าสู่ระบบ</h1>
-      <p className="mt-2 text-sm leading-6 text-muted">เรดาร์ลีดเครื่องนี้มีเจ้าของคนเดียว ใส่ชื่อผู้ใช้และรหัสผ่านเดิม (บัญชีเดิมใช้ชื่อ admin)</p>
-      <Card className="mt-6">
-        {ready ? (
-          <form onSubmit={submit} className="space-y-4">
-            <div>
-              <Label htmlFor="username">ชื่อผู้ใช้</Label>
-              <Input id="username" autoComplete="username" required minLength={3} maxLength={64} pattern="[A-Za-z0-9_.-]+" value={username} onChange={event => setUsername(event.target.value)} autoFocus />
-            </div>
-            <div>
-              <Label htmlFor="password">รหัสผ่าน</Label>
-              <Input id="password" type="password" autoComplete="current-password" required maxLength={200} value={password} onChange={(event) => setPassword(event.target.value)} />
-            </div>
-            <div><Label htmlFor="otp">รหัส Authenticator หรือ recovery code (ถ้าเปิด MFA)</Label><Input id="otp" autoComplete="one-time-code" maxLength={64} value={code} onChange={event => setCode(event.target.value)} /></div>
-            {error ? <p role="alert" className="text-sm text-danger">{error}</p> : null}
-            <Button type="submit" disabled={busy} className="w-full">
-              {busy ? "กำลังตรวจ..." : "เข้าสู่ระบบ"}
-            </Button>
-            <p className="text-center text-sm text-muted">
-              <Link href="/reset-password" className="text-accent underline-offset-2 hover:underline">
-                ลืมรหัสผ่าน
-              </Link>
-            </p>
-          </form>
-        ) : (
-          <p className="text-sm text-muted">กำลังตรวจสถานะ...</p>
-        )}
-      </Card>
-    </main>
+    <div className="relative min-h-screen bg-bg text-fg">
+      <div className="absolute right-4 top-4 z-10 md:right-6 md:top-6">
+        <ThemeToggle />
+      </div>
+      <main className="mx-auto flex min-h-screen w-full max-w-md flex-col justify-center px-4 py-10">
+        <div className="text-center">
+          <h1 className="text-4xl font-semibold tracking-tight text-fg md:text-5xl">MY-BOT</h1>
+          <p className="mt-3 text-sm text-muted">เรดาร์ลีดส่วนตัวของเครื่องนี้</p>
+        </div>
+        <Card className="mt-8 border border-line bg-card p-5 shadow-none md:p-6">
+          {ready ? (
+            <form onSubmit={submit} className="space-y-4">
+              <div>
+                <Label htmlFor="username">ชื่อผู้ใช้</Label>
+                <Input id="username" autoComplete="username" required minLength={3} maxLength={64} pattern="[A-Za-z0-9_.-]+" value={username} onChange={event => setUsername(event.target.value)} autoFocus />
+                <p className="mt-1 text-xs text-muted">บัญชีเดิมใช้ชื่อ admin</p>
+              </div>
+              <div>
+                <Label htmlFor="password">รหัสผ่าน</Label>
+                <Input id="password" type="password" autoComplete="current-password" required maxLength={200} value={password} onChange={(event) => setPassword(event.target.value)} />
+              </div>
+              <div>
+                <Label htmlFor="otp">รหัส Authenticator (ถ้ามี)</Label>
+                <Input id="otp" autoComplete="one-time-code" maxLength={64} value={code} onChange={event => setCode(event.target.value)} />
+                <p className="mt-1 text-xs text-muted">เว้นว่างได้ถ้ายังไม่เปิด MFA</p>
+              </div>
+              {error ? <p role="alert" className="text-sm text-danger">{error}</p> : null}
+              <Button type="submit" disabled={busy} className="w-full">
+                {busy ? "กำลังเข้าสู่ระบบ…" : "เข้าสู่ระบบ"}
+              </Button>
+              <p className="text-center text-sm">
+                <Link href="/reset-password" className="text-accent underline-offset-2 hover:underline">
+                  ลืมรหัสผ่าน
+                </Link>
+              </p>
+            </form>
+          ) : (
+            <p className="text-sm text-muted">กำลังเตรียมหน้าเข้าสู่ระบบ…</p>
+          )}
+        </Card>
+      </main>
+    </div>
   );
 }
